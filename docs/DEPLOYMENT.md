@@ -206,7 +206,7 @@ npm run test:ui      # headless Chrome: form → assign → upload → review �
 
 - **Database:**
   - Sheets keeps version history (**File → Version history**).
-  - For a scheduled backup, add a weekly time-driven trigger that copies the spreadsheet into `00_System/backups`, or take a monthly copy by hand (**File → Make a copy**).
+  - The portal also copies the spreadsheet into `00_System/Backups` every night at about 2 AM and keeps the latest 30 copies (`dailyBackup`, installed by `setup()`). You can run it by hand from the editor at any time.
 - **Files:** every version is kept, and nothing is ever deleted by the portal. Trashed files can be restored for 30 days.
 - **Restore:**
   1. Restore the Sheet from version history, or point the `SPREADSHEET_ID` script property at a restored copy.

@@ -36,6 +36,7 @@ test/                    ← local tests only (never deployed)
   ui-harness.js, ui.test.js   headless-browser walkthrough + responsive checks
 docs/DEPLOYMENT.md       setup, deployment, onboarding, backup, troubleshooting
 docs/GITHUB_DEPLOY.md    GitHub as source of truth: auto test + deploy on push
+docs/CUSTOM_DOMAIN_AND_DATA.md   your own domain (Google Sites / redirect) + where data is saved, backups
 .github/workflows/       CI: tests on every PR, deploy to Apps Script on main
 ```
 

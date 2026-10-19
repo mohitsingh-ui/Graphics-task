@@ -85,6 +85,7 @@ function createEnv(opts = {}) {
       getUrl: () => 'https://drive.google.com/drive/folders/' + f.id,
       isTrashed: () => !!f.trashed,
       getSharingAccess: () => 'PRIVATE',
+      getFiles: () => iter(Object.values(state.files).filter(x => x.parent === f.id && !x.trashed).map(fileApi)),
       getFoldersByName: n => iter(Object.values(state.folders).filter(x => x.parent === f.id && x.name === n && !x.trashed).map(folderApi)),
       createFolder: n => folderApi(newFolder(n, f.id)),
       getEditors: () => f.editors.map(e => ({ getEmail: () => e })),
@@ -100,7 +101,8 @@ function createEnv(opts = {}) {
       getSize: () => f.bytes.length, getMimeType: () => f.mime, getUrl: () => 'https://drive.google.com/file/d/' + f.id,
       getBlob: () => ({ getBytes: () => signed(f.bytes), getContentType: () => f.mime }),
       makeCopy: (name, folder) => { const c = { id: nid('fi'), name, mime: f.mime, bytes: Buffer.from(f.bytes), parent: folder.getId() }; state.files[c.id] = c; return fileApi(c); },
-      moveTo: folder => { f.parent = folder.getId(); }
+      moveTo: folder => { f.parent = folder.getId(); },
+      setTrashed: v => { f.trashed = !!v; }
     };
   }
   const DriveApp = {
@@ -167,6 +169,7 @@ function createEnv(opts = {}) {
       const shifted = new Date(d.getTime() + 330 * 60000); // Asia/Kolkata
       if (fmt === 'yyyy-MM-dd') return shifted.toISOString().slice(0, 10);
       if (fmt === 'Z') return '+0530';
+      if (fmt === 'yyyy-MM-dd_HHmm') return shifted.toISOString().slice(0, 16).replace('T', '_').replace(':', '');
       throw new Error('fmt ' + fmt);
     }
   };
@@ -188,10 +191,10 @@ function createEnv(opts = {}) {
       getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/PUBLIC/exec' }),
       getProjectTriggers: () => state.triggers.map(t => ({ getHandlerFunction: () => t.fn, getUniqueId: () => t.id })),
       deleteTrigger: t => { state.triggers = state.triggers.filter(x => x.id !== t.getUniqueId()); },
-      newTrigger: fn => ({ timeBased: () => ({ everyHours: () => ({ create: () => { state.triggers.push({ fn, id: nid('trg') }); } }) }) })
+      newTrigger: fn => { const c = { create: () => { state.triggers.push({ fn, id: nid('trg') }); } }; const tb = { everyHours: () => c, everyDays: () => ({ atHour: () => c }) }; return { timeBased: () => tb }; }
     },
     HtmlService: {
-      XFrameOptionsMode: { DEFAULT: 'DEFAULT' },
+      XFrameOptionsMode: { DEFAULT: 'DEFAULT', ALLOWALL: 'ALLOWALL' },
       createHtmlOutputFromFile: name => ({ getContent: () => fs.readFileSync(path.join(SRC, name + '.html'), 'utf8') }),
       createHtmlOutput: html => ({ html, setTitle() { return this; }, addMetaTag() { return this; }, setXFrameOptionsMode() { return this; }, getContent() { return html; } }),
       createTemplateFromFile: name => {
@@ -202,7 +205,7 @@ function createEnv(opts = {}) {
             const fn = new vm.Script('(' + expr + ')');
             return String(fn.runInContext(Object.assign(ctx, { bootJson: t.bootJson })));
           });
-          return { html: src, file: name, setTitle(x) { this.title = x; return this; }, addMetaTag() { return this; }, setXFrameOptionsMode() { return this; }, getContent() { return src; } };
+          return { html: src, file: name, setTitle(x) { this.title = x; return this; }, addMetaTag() { return this; }, setXFrameOptionsMode(m) { this.xframe = m; return this; }, getContent() { return src; } };
         };
         return t;
       }

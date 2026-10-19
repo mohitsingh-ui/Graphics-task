@@ -151,7 +151,8 @@ VIEWS.settings = function (arg, el, token) {
         txt('allowedDomain', 'Company email domain', 'Team members must use this domain. Requesters too, if the box below is ticked.') + chk('requireRequesterDomain', 'Only accept requirements from company email addresses')) +
       sec('Portal links', txt('publicUrl', 'Public web app URL', 'The …/exec URL of the deployment with access “Anyone”. Used in review links and emails.', 'url') +
         txt('internalUrl', 'Internal web app URL', 'The …/exec URL of the deployment with access “Anyone within your domain”.', 'url') +
-        txt('brandGuidelinesUrl', 'Brand guidelines link', 'Shown on the request form and every task.', 'url')) +
+        txt('brandGuidelinesUrl', 'Brand guidelines link', 'Shown on the request form and every task.', 'url') +
+        chk('allowEmbedding', 'Allow the request form and dashboard to be embedded in a website (e.g. Google Sites on your own domain). Review links are never embeddable.')) +
       sec('Review links', '<div class="field"><label>Reviewer identity</label><select id="s_reviewerIdentity">' +
         [['required', 'Required — reviewer must give name and work email'], ['optional', 'Optional — reviewer may give name and email'], ['anonymous', 'Anonymous — don’t ask']].map(function (o) {
           return '<option value="' + o[0] + '"' + (s.reviewerIdentity === o[0] ? ' selected' : '') + '>' + h(o[1]) + '</option>';
@@ -175,7 +176,8 @@ VIEWS.settings = function (arg, el, token) {
       }).join('') +
       '<p class="faint small" style="margin:0">Folders should stay <b>Private</b>. Reviewers and designers never get Drive links — the portal shows files to them itself. If a folder is missing, the script owner should run <span class="mono">setup()</span> again.</p></div></div>' +
       '<div class="card"><div class="card-h"><h3>Database</h3></div><div class="card-b stack"><a href="' + h(d.databaseUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Open the Google Sheet</a>' +
-      '<p class="faint small" style="margin:0">Read-only for everyone but the script owner. Don’t edit rows by hand — use the portal.</p></div></div>' +
+      '<p class="faint small" style="margin:0">Read-only for everyone but the script owner. Don’t edit rows by hand — use the portal.</p>' +
+      '<p class="small" style="margin:0">Last automatic backup: <b>' + (d.lastBackupAt ? fmtDateTime(d.lastBackupAt) : 'not yet — runs nightly at about 2 AM') + '</b><br><span class="faint">30 nightly copies are kept in 00_System/Backups.</span></p></div></div>' +
       '<div class="card"><div class="card-h"><h3>Workflow statuses</h3></div><div class="card-b"><p class="faint small">Status names are fixed so reports and permissions stay consistent. Allowed manual moves:</p>' +
       '<div class="stack" style="gap:6px;margin-top:8px">' + d.statuses.map(function (st) {
         var to = Object.keys(d.transitions[st] || {});
@@ -187,7 +189,7 @@ VIEWS.settings = function (arg, el, token) {
       var patch = {};
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
-      ['requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
       try { JSON.parse(patch.creativeTypes); } catch (e) { return toast('Creative types isn’t valid JSON: ' + e.message, true); }
       var b = this; b.disabled = true;
       api('api_saveSettings', patch).then(function () {

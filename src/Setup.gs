@@ -98,13 +98,14 @@ function setup() {
   return { spreadsheetUrl: ss.getUrl(), rootFolderUrl: root.getUrl() };
 }
 
-/** (Re)creates the hourly maintenance trigger. */
+/** (Re)creates the hourly maintenance and nightly backup triggers. */
 function installTriggers() {
   guardOwner_();
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'hourlyMaintenance') ScriptApp.deleteTrigger(t);
+    if (['hourlyMaintenance', 'dailyBackup'].indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('hourlyMaintenance').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('dailyBackup').timeBased().everyDays(1).atHour(2).create();
 }
 
 /**

@@ -20,30 +20,31 @@ function doGet(e) {
   }
 
   if (page === 'review') {
-    return render_('Review', { token: TOKEN_RE.test(String(p.t || '')) ? String(p.t) : '' }, 'Review creative · ' + s.companyName);
+    // The review page is never embeddable, so its Approve button can't be clickjacked.
+    return render_('Review', { token: TOKEN_RE.test(String(p.t || '')) ? String(p.t) : '' }, 'Review creative · ' + s.companyName, false);
   }
 
   if (page === 'app' || page === '') {
     var email = activeEmail_();
     var member = email ? userByEmail_(email) : null;
     if (member && bool_(member.active)) {
-      return render_('App', { route: String(p.r || '').replace(/[^\w\-\/]/g, '').slice(0, 80) }, s.portalName);
+      return render_('App', { route: String(p.r || '').replace(/[^\w\-\/]/g, '').slice(0, 80) }, s.portalName, s.allowEmbedding);
     }
     if (page === 'app') {
       return render_('NoAccess', { email: email, publicUrl: s.publicUrl }, s.portalName);
     }
   }
-  return render_('Form', {}, 'Request a creative · ' + s.companyName);
+  return render_('Form', {}, 'Request a creative · ' + s.companyName, s.allowEmbedding);
 }
 
-function render_(file, boot, title) {
+function render_(file, boot, title, embeddable) {
   var t = HtmlService.createTemplateFromFile(file);
   // Boot data is JSON-encoded and "<" escaped so it can't break out of the script tag.
   t.bootJson = JSON.stringify(boot || {}).replace(/</g, '\\u003c').replace(/\u2028|\u2029/g, '');
   return t.evaluate()
     .setTitle(title)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+    .setXFrameOptionsMode(embeddable ? HtmlService.XFrameOptionsMode.ALLOWALL : HtmlService.XFrameOptionsMode.DEFAULT);
 }
 
 /** Used inside templates: <?!= include_('Styles') ?> */

@@ -101,6 +101,7 @@ var DEFAULT_SETTINGS = {
   portalName: APP_NAME,
   allowedDomain: '',            // filled at setup from the owner's email domain
   requireRequesterDomain: true, // requester email must belong to allowedDomain
+  allowEmbedding: false,        // let the form/app load inside Google Sites or another site
   publicUrl: '',                // Public deployment /exec URL
   internalUrl: '',              // Internal deployment /exec URL
   brandGuidelinesUrl: '',
@@ -168,7 +169,7 @@ var DEFAULT_SETTINGS = {
 /** Keys a leader may edit from the Settings page, and their types. */
 var EDITABLE_SETTINGS = {
   companyName: 'string', portalName: 'string', allowedDomain: 'string', requireRequesterDomain: 'boolean',
-  publicUrl: 'url', internalUrl: 'url', brandGuidelinesUrl: 'url', priorities: 'list',
+  allowEmbedding: 'boolean', publicUrl: 'url', internalUrl: 'url', brandGuidelinesUrl: 'url', priorities: 'list',
   reviewerIdentity: ['required', 'optional', 'anonymous'], allowReviewerDownload: 'boolean',
   tokenExpiryDays: 'number', emailNotifications: 'boolean', emailRequesterOnSubmit: 'boolean',
   sendReviewLinkToRequester: 'boolean', autoCompleteOnApproval: 'boolean', workloadThreshold: 'number',

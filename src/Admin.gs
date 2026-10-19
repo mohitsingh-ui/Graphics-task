@@ -114,6 +114,7 @@ function api_getSettings() {
       drive: driveHealth_(),
       databaseUrl: SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID')).getUrl(),
       mailQuotaRemaining: quota,
+      lastBackupAt: getSettingRaw_('lastBackupAt') || '',
       statuses: STATUS_ORDER,
       transitions: MANUAL_TRANSITIONS
     };
@@ -212,4 +213,33 @@ function hourlyMaintenance(e) {
       }
     });
   });
+}
+
+/* ---------- nightly backup ---------- */
+
+var BACKUP_KEEP = 30;
+
+function fromOwnTrigger_(e) {
+  return !!(e && e.triggerUid && ScriptApp.getProjectTriggers().some(function (t) { return t.getUniqueId() === e.triggerUid; }));
+}
+
+/**
+ * Runs nightly (~2 AM): copies the database spreadsheet into
+ * 00_System/Backups in Drive and keeps the latest 30 copies.
+ * Creative files are never deleted by the portal, so they need no copy.
+ * Can also be run by hand from the editor.
+ */
+function dailyBackup(e) {
+  if (!fromOwnTrigger_(e)) guardOwner_();
+  var id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  var folder = ensureFolder_('system', ['Backups']);
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd_HHmm');
+  var copy = DriveApp.getFileById(id).makeCopy('DB backup ' + stamp, folder);
+  var all = [];
+  var it = folder.getFiles();
+  while (it.hasNext()) { var f = it.next(); if (/^DB backup /.test(f.getName())) all.push(f); }
+  all.sort(function (a, b) { return a.getName() < b.getName() ? 1 : -1; });   // newest first (names sort by date)
+  all.slice(BACKUP_KEEP).forEach(function (f) { f.setTrashed(true); });       // to Trash, recoverable for 30 days
+  withLock_(function () { setSettingRaw_('lastBackupAt', nowIso_()); setSettingRaw_('lastBackupFileId', copy.getId()); });
+  return copy.getId();
 }

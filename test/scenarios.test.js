@@ -58,7 +58,7 @@ scenario('0. Setup created sheets, folders, leader, trigger; setup cannot be cal
   ['Users', 'Departments', 'Requirements', 'Tasks', 'TaskAssignments', 'TaskActivity', 'CreativeSubmissions', 'CreativeVersions',
     'ApprovalRequests', 'ApprovalDecisions', 'Notifications', 'Settings', 'ReviewTokens', 'ReferenceFiles'].forEach(n => assert.ok(ss.sheets[n], 'sheet ' + n));
   assert.ok(JSON.parse(state.props.FOLDER_IDS).submissions);
-  assert.strictEqual(state.triggers.length, 1);
+  assert.deepStrictEqual(state.triggers.map(t => t.fn).sort(), ['dailyBackup', 'hourlyMaintenance']);
   state.currentUser = A;
   assert.throws(() => env.ctx.setup(), /owner/);
   state.currentUser = '';
@@ -376,6 +376,32 @@ scenario('Maintenance trigger sends overdue + due-soon alerts once', () => {
   env.ctx.hourlyMaintenance({ triggerUid: trig.id });
   const n = ok(call(B, 'api_getNotifications')).items.filter(x => x.type === 'task_overdue' && x.title.includes(t.title));
   assert.strictEqual(n.length, 1);
+});
+
+scenario('Nightly backup copies the database to Drive and keeps the latest 30', () => {
+  const trig = state.triggers.find(t => t.fn === 'dailyBackup');
+  state.currentUser = A;                       // a designer can't trigger it by faking a trigger id
+  assert.throws(() => env.ctx.dailyBackup({ triggerUid: 'fake' }), /owner/);
+  state.currentUser = '';
+  for (let i = 0; i < 33; i++) { env.ctx.DB_CACHE_ = {}; env.ctx.dailyBackup({ triggerUid: trig.id }); }
+  const folderIds = JSON.parse(state.props.FOLDER_IDS);
+  const backups = Object.values(state.folders).find(f => f.name === 'Backups' && f.parent === folderIds.system);
+  const live = Object.values(state.files).filter(f => f.parent === backups.id && !f.trashed);
+  assert.strictEqual(live.length, 30);
+  const ss = Object.values(state.spreadsheets)[0];
+  assert.ok(live.every(f => f.mime === 'application/vnd.google-apps.spreadsheet'));
+  assert.ok(ok(call(LEADER, 'api_getSettings')).lastBackupAt);
+});
+
+scenario('Embedding: off by default; when on, form/app embeddable but review page never', () => {
+  state.currentUser = '';
+  env.ctx.DB_CACHE_ = {}; env.ctx.SETTINGS_MEMO_ = null;
+  assert.strictEqual(env.ctx.doGet({ parameter: {} }).xframe, 'DEFAULT');
+  ok(call(LEADER, 'api_saveSettings', { allowEmbedding: true }));
+  state.currentUser = ''; env.ctx.DB_CACHE_ = {}; env.ctx.SETTINGS_MEMO_ = null;
+  assert.strictEqual(env.ctx.doGet({ parameter: {} }).xframe, 'ALLOWALL');
+  assert.strictEqual(env.ctx.doGet({ parameter: { p: 'review', t: 'x'.repeat(43) } }).xframe, 'DEFAULT');
+  ok(call(LEADER, 'api_saveSettings', { allowEmbedding: false }));
 });
 
 scenario('Pages render: public form, review, app shell, no-access', () => {
