@@ -1,0 +1,247 @@
+<script>
+/* Common.js — shared by every page: API calls, escaping, formatting, UI helpers, uploads. */
+
+/** Call a server function. Resolves with data, rejects with {code, message}. */
+function api(name) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var runner = google.script.run
+      .withSuccessHandler(function (r) {
+        if (!r) return reject({ code: 'EMPTY', message: 'No response from server.' });
+        if (r.ok) resolve(r.data); else reject(r.error || { message: 'Request failed.' });
+      })
+      .withFailureHandler(function (e) {
+        reject({ code: 'NETWORK', message: (e && e.message) ? 'Connection problem: ' + e.message : 'Connection problem. Check your internet and try again.' });
+      });
+    runner[name].apply(runner, args);
+  });
+}
+
+/** HTML-escape. Every dynamic value goes through this before it touches innerHTML. */
+function h(v) {
+  return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $all(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function slug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+
+var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDate(v) {
+  if (!v) return '—';
+  var d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v + 'T00:00:00') : new Date(v);
+  if (isNaN(d)) return h(v);
+  return d.getDate() + ' ' + MONTHS[d.getMonth()] + (d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '');
+}
+function fmtDateTime(v) {
+  if (!v) return '—';
+  var d = new Date(v);
+  if (isNaN(d)) return h(v);
+  return fmtDate(v) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function ago(v) {
+  if (!v) return '';
+  var s = (Date.now() - new Date(v).getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  if (s < 86400 * 7) return Math.floor(s / 86400) + 'd ago';
+  return fmtDate(v);
+}
+function todayIso() {
+  var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function fileSize(n) { n = Number(n || 0); return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+function ext(name) { var m = /\.([a-z0-9]+)$/i.exec(name || ''); return m ? m[1].toUpperCase() : 'FILE'; }
+
+function statusBadge(s) { return '<span class="badge s-' + slug(s) + '">' + h(s) + '</span>'; }
+function priorityBadge(p) { return p ? '<span class="badge plain p-' + slug(p) + '">' + h(p) + '</span>' : ''; }
+function progressBar(p, ok) { p = Math.max(0, Math.min(100, Number(p) || 0)); return '<div class="prog' + (ok ? ' ok' : '') + '" title="' + p + '%"><i style="width:' + p + '%"></i></div>'; }
+
+/* ---------- icons (stroke, 24 grid) ---------- */
+var ICONS = {
+  home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
+  inbox: 'M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z',
+  tasks: 'M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2',
+  check: 'M20 6 9 17l-5-5',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  users: 'M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M22 19v-1a4 4 0 0 0-3-3.9M16 4.1a3 3 0 0 1 0 5.8',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0',
+  upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
+  download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4z',
+  plus: 'M12 5v14M5 12h14',
+  x: 'M18 6 6 18M6 6l12 12',
+  menu: 'M3 6h18M3 12h18M3 18h18',
+  link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
+  zoomIn: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3M11 8v6M8 11h6',
+  zoomOut: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3M8 11h6',
+  file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6',
+  alert: 'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
+  clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
+  compare: 'M12 3v18M5 7h4M5 12h4M5 17h4M15 7h4M15 12h4M15 17h4',
+  external: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3',
+  refresh: 'M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5',
+  board: 'M3 3h7v18H3zM14 3h7v10h-7z',
+  list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'
+};
+function icon(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (ICONS[name] || '') + '"/></svg>';
+}
+
+/* ---------- toast / modal / confirm ---------- */
+function toast(msg, bad) {
+  var wrap = $('.toasts') || (function () { var d = document.createElement('div'); d.className = 'toasts'; d.setAttribute('role', 'status'); document.body.appendChild(d); return d; })();
+  var t = document.createElement('div');
+  t.className = 'toast' + (bad ? ' bad' : '');
+  t.textContent = msg;
+  wrap.appendChild(t);
+  setTimeout(function () { t.remove(); }, bad ? 6500 : 3500);
+}
+function errMsg(e) { return (e && e.message) || 'Something went wrong.'; }
+
+/**
+ * Opens a modal. opts: {title, body(html), wide, actions:[{label, cls, onClick(close, modalEl) → may return Promise}]}
+ */
+function modal(opts) {
+  var back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = '<div class="modal' + (opts.wide ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + h(opts.title) + '">' +
+    '<div class="modal-h"><h2>' + h(opts.title) + '</h2><button class="btn ghost icon" data-x aria-label="Close">' + icon('x') + '</button></div>' +
+    '<div class="modal-b">' + (opts.body || '') + '</div>' +
+    (opts.actions && opts.actions.length ? '<div class="modal-f"></div>' : '') + '</div>';
+  document.body.appendChild(back);
+  var el = $('.modal', back);
+  function close() { back.remove(); document.removeEventListener('keydown', onKey); if (opts.onClose) opts.onClose(); }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  $('[data-x]', back).onclick = close;
+  back.addEventListener('mousedown', function (e) { if (e.target === back && !opts.sticky) close(); });
+  var foot = $('.modal-f', back);
+  (opts.actions || []).forEach(function (a) {
+    var b = document.createElement('button');
+    b.className = 'btn ' + (a.cls || '');
+    b.textContent = a.label;
+    b.onclick = function () {
+      if (!a.onClick) return close();
+      var r = a.onClick(close, el, b);
+      if (r && r.then) {
+        var txt = b.textContent; b.disabled = true; b.innerHTML = '<span class="spinner" style="width:14px;height:14px"></span> ' + h(txt);
+        r.then(function () { b.disabled = false; b.textContent = txt; }, function () { b.disabled = false; b.textContent = txt; });
+      }
+    };
+    foot.appendChild(b);
+  });
+  // Focus the first editable field, unless the user already clicked into one.
+  var first = $('input:not([readonly]):not([type=hidden]), select, textarea', el);
+  if (first) setTimeout(function () { if (!el.contains(document.activeElement)) first.focus(); }, 30);
+  return { el: el, close: close };
+}
+
+function confirmBox(title, message, okLabel, danger) {
+  return new Promise(function (resolve) {
+    modal({ title: title, body: '<p>' + h(message) + '</p>', onClose: function () { resolve(false); },
+      actions: [{ label: 'Cancel', cls: '' }, { label: okLabel || 'Confirm', cls: danger ? 'danger solid' : 'primary', onClick: function (close) { resolve(true); close(); } }] });
+  });
+}
+
+function fieldErrors(root, message) {
+  var box = $('[data-form-error]', root);
+  if (box) { box.textContent = message || ''; box.classList.toggle('hidden', !message); }
+}
+
+/* ---------- file helpers ---------- */
+function downloadBase64(name, mime, b64) {
+  var bin = atob(b64), len = bin.length, arr = new Uint8Array(len);
+  for (var i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+  var url = URL.createObjectURL(new Blob([arr], { type: mime || 'application/octet-stream' }));
+  var a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
+}
+function downloadText(name, text, mime) {
+  var url = URL.createObjectURL(new Blob([text], { type: mime || 'text/csv;charset=utf-8' }));
+  var a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
+}
+
+function readChunk(file, start, end) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { var s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = function () { reject({ message: 'Could not read the file from your device.' }); };
+    r.readAsDataURL(file.slice(start, end));
+  });
+}
+
+/**
+ * Upload a File through the server into Drive in chunks.
+ * ctx is passed to api_startUpload (kind, ticket/taskId, metadata).
+ * onProgress(fraction 0..1). Resolves with the final server result.
+ */
+function uploadFile(file, ctx, onProgress) {
+  var c = Object.assign({}, ctx, { fileName: file.name, size: file.size, mimeType: file.type });
+  return api('api_startUpload', c).then(function (start) {
+    var chunk = start.chunkBytes, offset = 0;
+    function next() {
+      var end = Math.min(offset + chunk, file.size);
+      return readChunk(file, offset, end).then(function (b64) { return sendWithRetry(b64, 0); }).then(function (res) {
+        offset = end;
+        if (onProgress) onProgress(offset / file.size);
+        if (res.done) return res;
+        return next();
+      });
+    }
+    function sendWithRetry(b64, attempt) {
+      return api('api_uploadChunk', start.uploadId, offset, b64).catch(function (e) {
+        if (e.code === 'NETWORK' && attempt < 2) return new Promise(function (r) { setTimeout(r, 1500 * (attempt + 1)); }).then(function () { return sendWithRetry(b64, attempt + 1); });
+        throw e;
+      });
+    }
+    if (onProgress) onProgress(0.01);
+    return next();
+  });
+}
+
+/* ---------- lightbox with zoom ---------- */
+function lightbox(src, title, extraBtns) {
+  var lb = document.createElement('div');
+  lb.className = 'lightbox';
+  lb.innerHTML = '<div class="lb-bar"><div class="ellipsis">' + h(title || '') + '</div><div class="row">' +
+    '<button class="btn sm" data-z="-">' + icon('zoomOut') + '</button><span data-zl style="min-width:44px;text-align:center;font-size:12px">Fit</span>' +
+    '<button class="btn sm" data-z="+">' + icon('zoomIn') + '</button><button class="btn sm" data-z="fit">Fit</button><button class="btn sm" data-z="1">100%</button>' +
+    (extraBtns || '') + '<button class="btn sm" data-close aria-label="Close">' + icon('x') + '</button></div></div>' +
+    '<div class="lb-stage"><img alt=""></div>';
+  document.body.appendChild(lb);
+  var img = $('img', lb), stage = $('.lb-stage', lb), label = $('[data-zl]', lb), z = 0;
+  img.src = src;
+  function fit() {
+    var nw = img.naturalWidth || 1, nh = img.naturalHeight || 1;
+    z = Math.min(1, (stage.clientWidth - 20) / nw, (stage.clientHeight - 20) / nh);
+    apply();
+  }
+  function apply() { img.style.width = (img.naturalWidth * z) + 'px'; label.textContent = Math.round(z * 100) + '%'; }
+  img.onload = fit;
+  $all('[data-z]', lb).forEach(function (b) {
+    b.onclick = function () {
+      var v = b.getAttribute('data-z');
+      if (v === '+') z = Math.min(8, z * 1.25); else if (v === '-') z = Math.max(0.05, z / 1.25); else if (v === '1') z = 1; else return fit();
+      apply();
+    };
+  });
+  function close() { lb.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  $('[data-close]', lb).onclick = close;
+  return lb;
+}
+
+/** Image element for a preview response from the server. */
+function previewHtml(p, alt) {
+  if (!p) return '<div class="empty">No preview</div>';
+  if (p.dataUrl) return '<img src="' + h(p.dataUrl) + '" alt="' + h(alt || 'Creative preview') + '">';
+  return '<div class="empty">' + icon('file') + '<b>' + h(p.message || 'No preview available') + '</b></div>';
+}
+</script>

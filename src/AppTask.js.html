@@ -1,0 +1,478 @@
+<script>
+/* AppTask.js — task detail page and its actions (assign, edit, status, progress, upload, submit, compare). */
+
+var TASK = null;
+
+VIEWS.task = function (taskId, el, token) {
+  setCrumb(taskId);
+  api('api_getTask', taskId).then(function (d) {
+    if (stale(token)) return;
+    TASK = d;
+    drawTask(el);
+  }).catch(function (e) {
+    if (stale(token)) return;
+    if (e.code === 'NOT_FOUND') {
+      el.innerHTML = '<div class="card" style="max-width:520px;margin:40px auto"><div class="card-b">' + emptyState('Task not found', 'It may not exist, or it isn’t assigned to you.', 'alert') +
+        '<div style="text-align:center"><button class="btn" onclick="go(\'overview\')">Back to dashboard</button></div></div></div>';
+    } else viewError(el, e);
+  });
+};
+
+function reloadTask() { return api('api_getTask', TASK.task.taskId).then(function (d) { TASK = d; drawTask($('#view')); }); }
+
+function drawTask(el) {
+  var d = TASK, t = d.task, r = d.requirement, p = d.permissions, leader = APP.role === 'leader';
+  var drafts = [];
+  d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.status === 'Draft') drafts.push(v); }); });
+  var approved = d.deliverables.filter(function (x) { return x.status === 'Approved'; }).length;
+  setCrumb(t.taskId + ' · ' + t.title);
+
+  var actions = '';
+  if (p.canUpload) actions += '<button class="btn primary" id="aUpload">' + icon('upload') + ' Upload creative</button>';
+  if (p.canUpload && drafts.length) actions += '<button class="btn ok" id="aSubmit">' + icon('send') + ' Submit for approval (' + drafts.length + ')</button>';
+  if (p.canAssign) actions += '<button class="btn' + (t.assigneeEmail ? '' : ' primary') + '" id="aAssign">' + icon('users') + ' ' + (t.assigneeEmail ? 'Reassign' : 'Assign designer') + '</button>';
+  if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
+  if (p.canResume) actions += '<button class="btn" id="aResume">Resume task</button>';
+  if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
+
+  var changes = [];
+  d.deliverables.forEach(function (dv) {
+    if (dv.status !== 'Changes Requested') return;
+    var v = dv.versions.filter(function (x) { return x.decisions.some(function (y) { return y.decision === 'changes'; }); })[0];
+    var dec = v && v.decisions.filter(function (y) { return y.decision === 'changes'; }).pop();
+    if (dec) changes.push({ title: dv.title, v: v.versionNo, comment: dec.comment, at: dec.decidedAt });
+  });
+
+  el.innerHTML =
+    '<div class="page-h"><div class="grow"><div class="row wrap" style="margin-bottom:6px"><span class="mono faint">' + h(t.taskId) + '</span>' + statusBadge(t.status) + priorityBadge(t.priority) +
+    (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
+    '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.deliverablesRequired) + ' creative(s) approved' + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
+    '<div class="actionbar">' + actions + '</div></div>' +
+
+    (changes.length ? '<div class="alert bad" style="margin-bottom:16px"><b>Changes requested</b>' + changes.map(function (c) {
+      return '<div style="margin-top:6px"><b>' + h(c.title) + ' · V' + h(c.v) + '</b> <span class="small">(' + fmtDate(c.at) + ')</span><div class="pre">' + h(c.comment) + '</div></div>';
+    }).join('') + '<div class="small" style="margin-top:8px">Upload a new version of each creative, then submit it for approval again.</div></div>' : '') +
+    (t.status === 'On Hold' ? '<div class="alert warn" style="margin-bottom:16px">This task is on hold.</div>' : '') +
+    (t.status === 'Cancelled' ? '<div class="alert warn" style="margin-bottom:16px">This task was cancelled.</div>' : '') +
+
+    '<div class="detail"><div class="stack">' +
+    briefCard(d) + deliverablesCard(d) + activityTimeline(d) +
+    '</div><div class="stack">' + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
+
+  wireGo(el);
+  loadThumbs(el);
+  if ($('#aUpload')) $('#aUpload').onclick = uploadModal;
+  if ($('#aSubmit')) $('#aSubmit').onclick = function () { submitModal(drafts); };
+  if ($('#aAssign')) $('#aAssign').onclick = assignModal;
+  if ($('#aEdit')) $('#aEdit').onclick = editModal;
+  if ($('#aResume')) $('#aResume').onclick = function () { run(api('api_resumeTask', t.taskId), 'Task resumed'); };
+  if ($('#aStatus')) $('#aStatus').onclick = statusModal;
+  $all('[data-progress]', el).forEach(function (b) { b.onclick = function () { setProgress(Number(b.getAttribute('data-progress'))); }; });
+  if ($('#cmtBtn')) $('#cmtBtn').onclick = addComment;
+  if ($('#notesSave')) $('#notesSave').onclick = function () { run(api('api_updateTask', t.taskId, { internalNotes: $('#notes').value }), 'Notes saved'); };
+  if ($('#splitBtn')) $('#splitBtn').onclick = splitModal;
+  if ($('#refUpload')) $('#refUpload').onclick = function () { pickFiles(true, function (files) { uploadRefs(files); }); };
+  $all('[data-cmp]', el).forEach(function (b) { b.onclick = function () { compareModal(b.getAttribute('data-cmp')); }; });
+  $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved', reloadTask); }; });
+  $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes', reloadTask); }; });
+  $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
+  $all('[data-revoke]', el).forEach(function (b) {
+    b.onclick = function () {
+      confirmBox('Revoke review links?', 'Anyone holding a link for this version will no longer be able to open it or approve it.', 'Revoke', true).then(function (y) {
+        if (y) run(api('api_revokeReviewLinks', b.getAttribute('data-revoke')), 'Links revoked');
+      });
+    };
+  });
+  $all('[data-revise]', el).forEach(function (b) { b.onclick = function () { uploadModal(b.getAttribute('data-revise')); }; });
+}
+
+/** Run an action promise, toast, reload the task. */
+function run(promise, msg) {
+  return promise.then(function () { toast(msg); loadNotifications(); return reloadTask(); }).catch(function (e) { toast(errMsg(e), true); });
+}
+
+function briefCard(d) {
+  var t = d.task, r = d.requirement;
+  var block = function (label, val, pre) { return val ? '<div class="brief-block"><div class="section-title">' + h(label) + '</div><div class="' + (pre ? 'pre' : '') + '">' + h(val) + '</div></div>' : ''; };
+  var specs = [['Creative type', t.creativeType], ['Dimensions', t.dimensions], ['Output formats', t.formats], ['Platform / placement', r.platform], ['Product', t.product], ['Campaign', t.campaign]]
+    .concat(r.typeFields.map(function (f) { return [f.label, f.value]; })).filter(function (x) { return x[1]; });
+  return '<div class="card"><div class="card-h"><h3>Creative brief</h3><span class="faint small">' + h(r.requirementId) + '</span></div><div class="card-b">' +
+    block('Why it’s needed', t.purpose, true) +
+    block('Brief', t.brief, true) +
+    (specs.length ? '<div class="brief-block"><div class="section-title">Specs</div><dl class="kv">' + specs.map(function (s) { return '<dt>' + h(s[0]) + '</dt><dd>' + h(s[1]) + '</dd>'; }).join('') + '</dl></div>' : '') +
+    (t.copyText ? '<div class="brief-block"><div class="section-title">Copy that must appear</div><div class="pre" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px">' + h(t.copyText) + '</div></div>' : '') +
+    block('Instructions from the team leader / requester', t.instructions, true) +
+    (t.referenceUrls.length ? '<div class="brief-block"><div class="section-title">Reference links</div>' + t.referenceUrls.map(function (u) {
+      return '<div class="ellipsis"><a href="' + h(u) + '" target="_blank" rel="noopener noreferrer">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h(u) + '</a></div>';
+    }).join('') + '</div>' : '') +
+    '<div class="brief-block"><div class="row between"><div class="section-title" style="margin:0">Reference files</div>' + (APP.role === 'leader' ? '<button class="btn ghost sm" id="refUpload">' + icon('plus') + ' Add</button>' : '') + '</div>' +
+    (d.attachments.length ? '<div class="ref-grid" style="margin-top:8px">' + d.attachments.map(function (a) {
+      return '<div title="' + h(a.fileName) + '"><div class="thumb" data-kind="attachment" data-thumb="' + h(a.attachmentId) + '" data-name="' + h(a.fileName) + '">' + ext(a.fileName) + '</div>' +
+        '<div class="small ellipsis" style="width:84px">' + h(a.fileName) + '</div></div>';
+    }).join('') + '</div>' : '<p class="faint small" style="margin-top:6px">No files attached.</p>') + '</div>' +
+    (d.brandGuidelinesUrl ? '<div class="brief-block"><a href="' + h(d.brandGuidelinesUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Brand guidelines</a></div>' : '') +
+    '</div></div>';
+}
+
+function deliverablesCard(d) {
+  var leader = APP.role === 'leader', p = d.permissions;
+  var body = d.deliverables.length ? d.deliverables.map(function (dv) {
+    return '<div class="deliv"><div class="deliv-h"><div class="grow"><b>' + h(dv.title) + '</b> <span class="faint small">' + h(dv.deliverableId) + (dv.deliverableType ? ' · ' + h(dv.deliverableType) : '') + '</span>' +
+      (dv.purpose ? '<div class="small muted">' + h(dv.purpose) + '</div>' : '') + '</div>' + statusBadge(dv.status) +
+      (p.canUpload ? '<button class="btn sm" data-revise="' + h(dv.deliverableId) + '">' + icon('upload') + ' New version</button>' : '') +
+      (leader && dv.versions.length > 1 ? '<button class="btn sm ghost" data-cmp="' + h(dv.deliverableId) + '">' + icon('compare') + ' Compare</button>' : '') + '</div>' +
+      dv.versions.map(function (v) {
+        var isFinal = dv.approvedVersionId === v.versionId;
+        return '<div class="ver"><div class="thumb" data-thumb="' + h(v.versionId) + '" data-name="' + h(dv.title + ' V' + v.versionNo) + '">' + ext(v.fileName) + '</div>' +
+          '<div class="grow"><div class="row wrap"><b>V' + h(v.versionNo) + '</b>' + statusBadge(v.status) + (isFinal ? '<span class="badge s-approved plain">★ Final approved</span>' : '') + '</div>' +
+          '<div class="faint small">' + h(v.uploadedByName || v.uploadedBy) + ' · uploaded ' + fmtDateTime(v.uploadedAt) + ' · ' + fileSize(v.sizeBytes) + (v.submittedAt ? ' · sent ' + fmtDateTime(v.submittedAt) : '') + '</div>' +
+          (v.note ? '<div class="small pre muted" style="margin-top:4px">“' + h(v.note) + '”</div>' : '') +
+          v.decisions.map(function (x) {
+            return '<div class="feedback ' + (x.decision === 'approved' ? 'approved' : 'changes') + '"><b>' + (x.decision === 'approved' ? 'Approved' : 'Changes requested') + '</b>' +
+              (leader ? ' by ' + h(x.reviewerName || 'anonymous reviewer') + (x.reviewerEmail ? ' (' + h(x.reviewerEmail) + ')' : '') + (x.channel === 'portal' ? ' in portal' : ' via review link') : '') +
+              ' · ' + fmtDateTime(x.decidedAt) + (x.comment ? '<div class="pre">' + h(x.comment) + '</div>' : '') + '</div>';
+          }).join('') +
+          (leader && v.request && v.request.status === 'Open' ? '<div class="row wrap" style="margin-top:8px"><span class="faint small">' + v.request.activeLinks + ' active review link(s)</span>' +
+            '<button class="btn sm" data-link="' + h(v.versionId) + '">' + icon('link') + ' New link</button><button class="btn sm ghost" data-revoke="' + h(v.versionId) + '">Revoke links</button>' +
+            '<button class="btn sm danger" data-chg="' + h(v.versionId) + '">Request changes</button><button class="btn sm ok" data-ok="' + h(v.versionId) + '">Approve</button></div>' : '') +
+          '</div></div>';
+      }).join('') + '</div>';
+  }).join('') : emptyState('No creatives uploaded yet.', p.canUpload ? 'Use “Upload creative” to add your first version.' : '', 'image');
+  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><span class="faint small">' + d.deliverables.length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div><div class="card-b">' + body + '</div></div>';
+}
+
+function activityTimeline(d) {
+  return '<div class="card"><div class="card-h"><h3>Activity</h3></div><div class="card-b">' +
+    '<div class="row" style="align-items:flex-start;margin-bottom:16px"><textarea id="cmt" rows="2" placeholder="Add a progress note or comment…" maxlength="2000" style="min-height:44px"></textarea>' +
+    '<div class="stack" style="gap:6px"><button class="btn" id="cmtBtn">Post</button>' + (APP.role === 'leader' ? '<label class="check small" title="Only team leaders will see it"><input type="checkbox" id="cmtPriv"> Private</label>' : '') + '</div></div>' +
+    (d.activity.length ? '<ul class="timeline">' + d.activity.map(function (a) {
+      return '<li><div>' + (a.action === 'comment' ? '<b>' + h(a.actor) + '</b>' : h(a.actor) + ' ' + activityText(a)) + '</div>' +
+        (a.note && ['status', 'assignment', 'created'].indexOf(a.action) === -1 ? '<div class="t-note">' + h(a.note) + '</div>' : '') +
+        '<div class="t-meta">' + fmtDateTime(a.createdAt) + '</div></li>';
+    }).join('') + '</ul>' : emptyState('No activity yet.')) + '</div></div>';
+}
+
+function sideCard(d) {
+  var t = d.task, r = d.requirement, leader = APP.role === 'leader';
+  return '<div class="card"><div class="card-h"><h3>Details</h3></div><div class="card-b"><dl class="kv">' +
+    '<dt>Requested by</dt><dd>' + h(r.requesterName) + '<div class="faint small">' + h(r.department) + '</div><div class="small"><a href="mailto:' + h(r.email) + '">' + h(r.email) + '</a>' + (r.phone ? ' · ' + h(r.phone) : '') + '</div></dd>' +
+    '<dt>Submitted</dt><dd>' + fmtDateTime(r.submittedAt) + '</dd>' +
+    '<dt>Wanted by</dt><dd>' + fmtDate(r.preferredDate) + ' <span class="faint small">(' + h(r.priorityRequested) + ')</span></dd>' +
+    (leader ? '<dt>Designer</dt><dd>' + (t.assigneeName ? h(t.assigneeName) + '<div class="faint small">' + h(t.assigneeEmail) + '</div>' : '<span class="faint">Not assigned</span>') + '</dd>' +
+      (t.assignedBy ? '<dt>Assigned by</dt><dd>' + h(t.assignedBy) + '<div class="faint small">' + fmtDateTime(t.assignedAt) + '</div></dd>' : '') : '') +
+    '<dt>Start date</dt><dd>' + fmtDate(t.startDate) + '</dd>' +
+    '<dt>Due date</dt><dd>' + dueLabel(t) + '</dd>' +
+    '<dt>Progress</dt><dd><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="small">' + h(t.progress) + '%</span></div></dd>' +
+    '<dt>Created</dt><dd>' + fmtDateTime(t.createdAt) + '</dd><dt>Last updated</dt><dd>' + fmtDateTime(t.updatedAt) + '</dd>' +
+    (t.completedAt ? '<dt>Completed</dt><dd>' + fmtDateTime(t.completedAt) + '</dd>' : '') +
+    '</dl></div></div>';
+}
+
+function progressCard(t) {
+  return '<div class="card"><div class="card-h"><h3>Update progress</h3></div><div class="card-b stack">' +
+    '<div class="prog-steps">' + APP.boot.progressSteps.map(function (s) {
+      return '<button class="btn sm' + (Number(t.progress) === s ? ' on' : '') + '" data-progress="' + s + '">' + s + '%</button>';
+    }).join('') + '</div><textarea id="progNote" rows="2" maxlength="1000" placeholder="Optional note, e.g. “first draft done, working on copy”"></textarea>' +
+    '<p class="faint small" style="margin:0">100% doesn’t complete the task — it completes when every creative is approved.</p></div></div>';
+}
+
+function leaderSide(d) {
+  var t = d.task;
+  return '<div class="card"><div class="card-h"><h3>Internal notes</h3><span class="faint small">Leaders only</span></div><div class="card-b stack">' +
+    '<textarea id="notes" rows="4" maxlength="8000">' + h(t.internalNotes || '') + '</textarea><div><button class="btn sm" id="notesSave">Save notes</button></div></div></div>' +
+    '<div class="card"><div class="card-h"><h3>Assignment history</h3></div><div class="card-b">' +
+    (d.assignments.length ? '<ul class="timeline">' + d.assignments.map(function (a) {
+      return '<li><b>' + h(a.assigneeName) + '</b>' + (a.previousAssignee ? ' <span class="faint">(from ' + h(a.previousAssignee) + ')</span>' : '') +
+        '<div class="t-meta">by ' + h(a.assignedBy) + ' · ' + fmtDateTime(a.assignedAt) + ' · due ' + fmtDate(a.dueDate) + ' · ' + h(a.priority) + '</div>' + (a.note ? '<div class="t-note">' + h(a.note) + '</div>' : '') + '</li>';
+    }).join('') + '</ul>' : '<p class="faint small">Not assigned yet.</p>') + '</div></div>' +
+    '<div class="card"><div class="card-h"><h3>Same requirement</h3><button class="btn ghost sm" id="splitBtn">' + icon('plus') + ' Add task</button></div><div class="card-b tight">' +
+    (d.siblingTasks.length ? d.siblingTasks.map(function (s) {
+      return '<div class="list-item" data-go="task/' + h(s.taskId) + '"><div class="li-main"><div class="li-title">' + h(s.title) + '</div><div class="li-sub">' + h(s.taskId) + '</div></div>' + statusBadge(s.status) + '</div>';
+    }).join('') : '<p class="faint small" style="padding:8px 16px">Split a big requirement into separate tasks for different designers.</p>') + '</div></div>';
+}
+
+/* ---------- actions ---------- */
+
+function setProgress(p) {
+  var note = $('#progNote') ? $('#progNote').value.trim() : '';
+  run(api('api_updateProgress', TASK.task.taskId, p, note), 'Progress updated to ' + p + '%');
+}
+
+function addComment() {
+  var v = $('#cmt').value.trim();
+  if (!v) return;
+  var b = $('#cmtBtn'); b.disabled = true;
+  run(api('api_addComment', TASK.task.taskId, v, $('#cmtPriv') ? $('#cmtPriv').checked : false), 'Comment posted').then(function () { b.disabled = false; });
+}
+
+function assignModal() {
+  var t = TASK.task;
+  var team = TASK.team.slice().sort(function (a, b) { return (a.role === 'designer' ? 0 : 1) - (b.role === 'designer' ? 0 : 1) || a.activeTasks - b.activeTasks; });
+  var thr = APP.boot.workloadThreshold;
+  modal({
+    title: t.assigneeEmail ? 'Reassign task' : 'Assign to a designer',
+    body: '<div class="field"><label class="req">Designer</label><select id="asg">' + '<option value="">Choose…</option>' + team.map(function (u) {
+      return '<option value="' + h(u.email) + '"' + (u.email === t.assigneeEmail ? ' selected' : '') + '>' + h(u.name) + (u.role === 'leader' ? ' (leader)' : '') + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
+    }).join('') + '</select></div>' +
+      '<div class="grid-2"><div class="field"><label>Start date</label><input type="date" id="asd" value="' + h(t.startDate || todayIso()) + '"></div>' +
+      '<div class="field"><label class="req">Due date</label><input type="date" id="add" value="' + h(t.dueDate) + '"></div></div>' +
+      '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
+      '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value };
+        if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
+        return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+function editModal() {
+  var t = TASK.task;
+  var f = function (id, label, val, type, attrs) {
+    return '<div class="field"><label>' + h(label) + '</label>' + (type === 'textarea' ? '<textarea id="e_' + id + '" rows="3" ' + (attrs || '') + '>' + h(val || '') + '</textarea>' :
+      '<input type="' + (type || 'text') + '" id="e_' + id + '" value="' + h(val || '') + '" ' + (attrs || '') + '>') + '</div>';
+  };
+  modal({
+    title: 'Edit task details', wide: true,
+    body: f('title', 'Title', t.title) +
+      '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
+      '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
+      '<div class="grid-3">' + f('campaign', 'Campaign', t.campaign) + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
+      f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
+      f('instructions', 'Instructions', t.instructions, 'textarea') + f('referenceUrls', 'Reference links (one per line)', t.referenceUrls.join('\n'), 'textarea') +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: 'Save', cls: 'primary', onClick: function (close, m) {
+        var patch = {};
+        ['title', 'dueDate', 'deliverablesRequired', 'priority', 'campaign', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
+          patch[k] = $('#e_' + k, m).value;
+        });
+        return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+function statusModal() {
+  var t = TASK.task, p = TASK.permissions;
+  var opts = p.transitions.slice();
+  var canForce = p.canOverrideComplete && opts.indexOf('Completed') === -1;
+  modal({
+    title: 'Change status',
+    body: '<p class="muted">Current status: ' + statusBadge(t.status) + '</p>' +
+      '<div class="field"><label class="req">Move to</label><select id="sto"><option value="">Choose…</option>' + opts.map(function (s) { return '<option>' + h(s) + '</option>'; }).join('') +
+      (canForce ? '<option value="__force">Completed (override — not all creatives approved)</option>' : '') + '</select></div>' +
+      '<div class="field"><label id="streasonL">Reason</label><textarea id="streason" rows="2" maxlength="1000"></textarea><span class="hint">Recorded in the task history. Required for an override.</span></div>' +
+      '<p class="faint small">Approval statuses (Submitted, Changes Requested, Approved) are set automatically by the review workflow.</p><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: 'Update status', cls: 'primary', onClick: function (close, m) {
+        var to = $('#sto', m).value, reason = $('#streason', m).value.trim();
+        if (!to) return fieldErrors(m, 'Choose a status.');
+        var force = to === '__force';
+        if (force && !reason) return fieldErrors(m, 'Add a reason for completing without full approval.');
+        return api('api_setTaskStatus', t.taskId, force ? 'Completed' : to, { override: force, reason: reason })
+          .then(function () { close(); toast('Status updated'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+function splitModal() {
+  var t = TASK.task;
+  modal({
+    title: 'Add another task for ' + t.requirementId,
+    body: '<p class="muted">Creates a new task from the same requirement, ready to assign.</p>' +
+      '<div class="field"><label class="req">Title</label><input type="text" id="sp_t" maxlength="150" value="' + h(t.title) + ' (part 2)"></div>' +
+      '<div class="grid-2"><div class="field"><label class="req">Creatives required</label><input type="number" id="sp_q" min="1" max="50" value="1"></div>' +
+      '<div class="field"><label>Dimensions</label><input type="text" id="sp_d" value="' + h(t.dimensions) + '"></div></div>' +
+      '<div class="field"><label>Brief (leave empty to copy the original)</label><textarea id="sp_b" rows="3"></textarea></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: 'Create task', cls: 'primary', onClick: function (close, m) {
+        return api('api_createTaskFromRequirement', t.requirementId, { title: $('#sp_t', m).value, deliverablesRequired: $('#sp_q', m).value, dimensions: $('#sp_d', m).value, brief: $('#sp_b', m).value })
+          .then(function (r) { close(); toast('Task ' + r.taskId + ' created'); go('task/' + r.taskId); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+/* ---------- uploads ---------- */
+
+function pickFiles(multiple, cb) {
+  var i = document.createElement('input'); i.type = 'file'; i.multiple = !!multiple;
+  i.onchange = function () { cb(Array.prototype.slice.call(i.files)); };
+  i.click();
+}
+
+function checkFile(f) {
+  var e = ext(f.name).toLowerCase();
+  if (APP.boot.extensions.indexOf(e) === -1) return f.name + ': .' + e + ' files aren’t allowed.';
+  if (f.size > APP.boot.maxUploadMB * 1048576) return f.name + ' is larger than ' + APP.boot.maxUploadMB + ' MB.';
+  if (!f.size) return f.name + ' is empty.';
+  return '';
+}
+
+function uploadRefs(files) {
+  var bad = files.map(checkFile).filter(Boolean);
+  if (bad.length) return toast(bad[0], true);
+  toast('Uploading ' + files.length + ' file(s)…');
+  var chain = Promise.resolve();
+  files.forEach(function (f) { chain = chain.then(function () { return uploadFile(f, { kind: 'taskref', taskId: TASK.task.taskId }); }); });
+  run(chain, 'Reference files added');
+}
+
+/** Upload modal. If deliverableId is given, it uploads a new version of that creative. */
+function uploadModal(deliverableId) {
+  var t = TASK.task;
+  var dels = TASK.deliverables;
+  var files = [];
+  var pre = typeof deliverableId === 'string' ? deliverableId : '';
+  if (!pre) { var needs = dels.filter(function (x) { return x.status === 'Changes Requested'; })[0]; if (needs) pre = needs.deliverableId; }
+  var m = modal({
+    title: 'Upload creative', wide: false, sticky: true,
+    body:
+      '<div class="grid-2"><div class="field"><label>Task</label><input type="text" readonly value="' + h(t.taskId) + '"></div>' +
+      '<div class="field"><label>This upload is</label><select id="u_target"><option value="">A new creative</option>' + dels.map(function (x) {
+        return '<option value="' + h(x.deliverableId) + '"' + (x.deliverableId === pre ? ' selected' : '') + '>New version of: ' + h(x.title) + ' (now V' + h(x.latestVersionNo) + ')</option>';
+      }).join('') + '</select></div></div>' +
+      '<div id="u_new" class="stack">' +
+      '<div class="field"><label class="req">Creative title</label><input type="text" id="u_title" maxlength="150" placeholder="e.g. Homepage banner — desktop"></div>' +
+      '<div class="field"><label class="req">What the creative is for</label><input type="text" id="u_purpose" maxlength="500" value="' + h(t.purpose ? t.purpose.slice(0, 500) : '') + '"></div>' +
+      '<div class="field"><label>Deliverable type</label><input type="text" id="u_type" maxlength="100" value="' + h(t.creativeType) + '"></div></div>' +
+      '<div class="field"><label>Version</label><input type="text" id="u_ver" readonly></div>' +
+      '<div class="field"><label class="req">File(s)</label><div class="drop" id="u_drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files</b> or click to choose</div>' +
+      '<div class="faint small">Max ' + h(APP.boot.maxUploadMB) + ' MB · ' + h(APP.boot.extensions.join(', ')) + '</div></div><div id="u_files" class="stack" style="gap:6px;margin-top:8px"></div>' +
+      '<span class="hint" id="u_multi">Several files = several creatives, numbered automatically.</span></div>' +
+      '<div class="field"><label>Submission note</label><textarea id="u_note" rows="2" maxlength="1000" placeholder="Optional — what changed, anything the reviewer should know"></textarea></div>' +
+      '<label class="check"><input type="checkbox" id="u_submit" checked> Send for approval right after upload</label>' +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Upload', cls: 'primary', onClick: function (close, el, btn) { return doUpload(close, el, btn); } }]
+  });
+  var el = m.el;
+  function sync() {
+    var target = $('#u_target', el).value;
+    $('#u_new', el).classList.toggle('hidden', !!target);
+    $('#u_multi', el).classList.toggle('hidden', !!target);
+    var d = dels.filter(function (x) { return x.deliverableId === target; })[0];
+    $('#u_ver', el).value = d ? 'V' + (Number(d.latestVersionNo) + 1) + ' (automatic)' : 'V1 (automatic)';
+    if (target && files.length > 1) { files = files.slice(0, 1); drawFiles(); }
+  }
+  function drawFiles() {
+    $('#u_files', el).innerHTML = files.map(function (x, i) {
+      return '<div class="file-row"><span class="thumb" style="width:32px;height:32px">' + ext(x.file.name) + '</span><span class="grow ellipsis">' + h(x.file.name) + ' <span class="faint">· ' + fileSize(x.file.size) + '</span></span>' +
+        (x.state === 'ready' ? '<button class="btn ghost sm" data-rm="' + i + '">Remove</button>' : x.state === 'done' ? '<span class="badge s-approved">Done</span>' : x.state === 'error' ? '<span class="badge s-changes-requested" title="' + h(x.error) + '">Failed</span>' : progressBar(x.progress * 100)) + '</div>';
+    }).join('');
+    $all('[data-rm]', el).forEach(function (b) { b.onclick = function () { files.splice(Number(b.getAttribute('data-rm')), 1); drawFiles(); }; });
+  }
+  function add(list) {
+    var single = !!$('#u_target', el).value;
+    list.forEach(function (f) {
+      var err = checkFile(f); if (err) return toast(err, true);
+      if (single) files = [];
+      files.push({ file: f, state: 'ready', progress: 0 });
+    });
+    drawFiles();
+  }
+  var drop = $('#u_drop', el);
+  drop.onclick = function () { pickFiles(!$('#u_target', el).value, add); };
+  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { add(Array.prototype.slice.call(e.dataTransfer.files)); });
+  $('#u_target', el).onchange = sync;
+  sync();
+
+  function doUpload(close, el, btn) {
+    fieldErrors(el, '');
+    var target = $('#u_target', el).value;
+    var title = $('#u_title', el).value.trim(), purpose = $('#u_purpose', el).value.trim();
+    var pending = files.filter(function (x) { return x.state !== 'done'; });
+    if (!pending.length) return fieldErrors(el, files.length ? 'Everything is uploaded.' : 'Choose a file to upload.');
+    if (!target && (!title || !purpose)) return fieldErrors(el, 'Add a creative title and what it’s for.');
+    var note = $('#u_note', el).value.trim(), andSubmit = $('#u_submit', el).checked;
+    var created = [];
+    var chain = Promise.resolve();
+    pending.forEach(function (x, i) {
+      chain = chain.then(function () {
+        x.state = 'uploading'; drawFiles();
+        var ctx = { kind: 'version', taskId: t.taskId, deliverableId: target, note: note,
+          title: target ? '' : (files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title), purpose: purpose, deliverableType: $('#u_type', el).value.trim() };
+        return uploadFile(x.file, ctx, function (p) { x.progress = p; drawFiles(); })
+          .then(function (res) { x.state = 'done'; created.push(res.versionId); drawFiles(); }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); throw e; });
+      });
+    });
+    return chain.then(function () {
+      if (andSubmit && created.length) return api('api_submitForApproval', t.taskId, created).then(function (r) { return r; });
+    }).then(function (r) {
+      close();
+      toast(andSubmit ? 'Uploaded and sent for approval' : 'Uploaded — submit it when you’re ready');
+      if (r && r.links && r.links.length) showLinks(r.links);
+      loadNotifications();
+      reloadTask();
+    }).catch(function (e) {
+      fieldErrors(el, errMsg(e) + (created.length ? ' (' + created.length + ' file(s) were uploaded and kept.)' : ''));
+      if (created.length) reloadTask();
+    });
+  }
+}
+
+function submitModal(drafts) {
+  var t = TASK.task;
+  var names = {};
+  TASK.deliverables.forEach(function (d) { d.versions.forEach(function (v) { names[v.versionId] = d.title + ' · V' + v.versionNo; }); });
+  modal({
+    title: 'Submit for approval',
+    body: '<p class="muted">These creatives will get a secure review link. The team leader' + (APP.role === 'leader' ? '' : ' and the requester') + ' will be notified.</p>' +
+      drafts.map(function (v) { return '<label class="check"><input type="checkbox" checked value="' + h(v.versionId) + '"> ' + h(names[v.versionId]) + '</label>'; }).join('') +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: 'Submit', cls: 'ok', onClick: function (close, m) {
+        var ids = $all('input[type=checkbox]:checked', m).map(function (c) { return c.value; });
+        if (!ids.length) return fieldErrors(m, 'Pick at least one creative.');
+        return api('api_submitForApproval', t.taskId, ids).then(function (r) {
+          close(); toast('Sent for approval'); if (r.links && r.links.length) showLinks(r.links); loadNotifications(); reloadTask();
+        }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+function showLinks(links) {
+  modal({
+    title: 'Review links ready',
+    body: '<p class="muted">They were also emailed to you' + '. Share each link with whoever approves it.</p>' + links.map(function (l, i) {
+      return '<div class="field"><label>' + h(l.deliverable) + ' · V' + h(l.versionNo) + '</label><div class="row"><input type="text" readonly value="' + h(l.url) + '"><button class="btn" data-cp="' + i + '">Copy</button></div></div>';
+    }).join(''),
+    actions: [{ label: 'Done', cls: 'primary' }]
+  });
+  $all('[data-cp]').forEach(function (b) { b.onclick = function () { copyText(links[Number(b.getAttribute('data-cp'))].url); }; });
+}
+
+/* ---------- compare versions ---------- */
+
+function compareModal(deliverableId) {
+  var d = TASK.deliverables.filter(function (x) { return x.deliverableId === deliverableId; })[0];
+  if (!d) return;
+  var vs = d.versions;
+  var opts = function (sel) { return vs.map(function (v) { return '<option value="' + h(v.versionId) + '"' + (v.versionId === sel ? ' selected' : '') + '>V' + h(v.versionNo) + ' · ' + h(v.status) + '</option>'; }).join(''); };
+  var m = modal({
+    title: 'Compare versions · ' + d.title, wide: true,
+    body: '<div class="cmp"><div class="stack" style="gap:8px"><select id="cmpA">' + opts(vs[1].versionId) + '</select><div class="preview-box" id="pvA"></div><div id="mA" class="small faint"></div></div>' +
+      '<div class="stack" style="gap:8px"><select id="cmpB">' + opts(vs[0].versionId) + '</select><div class="preview-box" id="pvB"></div><div id="mB" class="small faint"></div></div></div>',
+    actions: [{ label: 'Close' }]
+  });
+  function load(side) {
+    var id = $('#cmp' + side, m.el).value;
+    var v = vs.filter(function (x) { return x.versionId === id; })[0];
+    $('#pv' + side, m.el).innerHTML = '<span class="spinner"></span>';
+    $('#m' + side, m.el).textContent = 'Uploaded by ' + (v.uploadedByName || v.uploadedBy) + ' · ' + fmtDateTime(v.uploadedAt) + ' · ' + fileSize(v.sizeBytes);
+    api('api_getAsset', 'version', id, 'preview').then(function (p) { $('#pv' + side, m.el).innerHTML = previewHtml(p); })
+      .catch(function (e) { $('#pv' + side, m.el).innerHTML = '<div class="empty">' + h(errMsg(e)) + '</div>'; });
+  }
+  $('#cmpA', m.el).onchange = function () { load('A'); };
+  $('#cmpB', m.el).onchange = function () { load('B'); };
+  load('A'); load('B');
+}
+</script>

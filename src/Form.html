@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<?!= include_('Styles') ?>
+<style>
+  .pub-head { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .pub-head .in { max-width: 820px; margin: 0 auto; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+  main { max-width: 820px; margin: 0 auto; padding: 28px 20px 80px; }
+  .intro h1 { font-size: 26px; margin-bottom: 6px; }
+  .form-sec { margin-top: 18px; }
+  .form-sec .card-b { display: flex; flex-direction: column; gap: 16px; }
+  .sec-h { display: flex; gap: 12px; align-items: baseline; }
+  .sec-n { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 600; display: grid; place-items: center; flex: none; }
+  .type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .type-opt { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 10px 12px; cursor: pointer; font-size: 13px; background: var(--surface); text-align: left; font-family: var(--font); color: var(--text); }
+  .type-opt.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 500; }
+  .dyn { border-left: 3px solid var(--accent-soft); padding-left: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .submit-bar { margin-top: 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .hp { position: absolute; left: -5000px; }
+  .done { text-align: center; padding: 48px 24px; }
+  .done .tick { width: 56px; height: 56px; border-radius: 50%; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; margin: 0 auto 14px; }
+  .done .tick svg { width: 28px; height: 28px; }
+  .ref-id { display: inline-block; font-size: 22px; font-weight: 600; letter-spacing: .02em; padding: 8px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<header class="pub-head"><div class="in">
+  <div class="brand"><div class="mark" id="brandMark">G</div><span id="brandName">Graphics team</span></div>
+  <span class="faint small">No login needed</span>
+</div></header>
+
+<main id="main">
+  <div class="loading-page"><span class="spinner"></span> Loading form…</div>
+</main>
+
+<?!= include_('Common.js') ?>
+<script>
+var CFG = null, TYPE = null, FILES = [];
+
+api('api_getFormConfig').then(function (cfg) {
+  CFG = cfg;
+  $('#brandName').textContent = cfg.companyName + ' · Graphics team';
+  $('#brandMark').textContent = (cfg.companyName || 'G').charAt(0);
+  renderForm();
+}).catch(function (e) {
+  $('#main').innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
+});
+
+function opt(list, ph) {
+  return '<option value="">' + h(ph || 'Select…') + '</option>' + list.map(function (x) { return '<option>' + h(x) + '</option>'; }).join('');
+}
+
+function renderForm() {
+  var minDate = todayIso();
+  $('#main').innerHTML =
+    '<div class="intro"><h1>Request a creative</h1>' +
+    '<p class="muted">Tell us what you need and we’ll take it from here. You’ll get an email with your reference ID, and a review link when the creative is ready.</p></div>' +
+    '<form id="f" novalidate autocomplete="on">' +
+    '<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">' +
+
+    sec(1, 'About you',
+      '<div class="grid-2">' +
+      fld('requesterName', 'Your name', '<input type="text" name="requesterName" maxlength="100" autocomplete="name">', true) +
+      fld('department', 'Department or team', '<select name="department">' + opt(CFG.departments) + '</select>', true) + '</div>' +
+      '<div class="grid-2">' +
+      fld('email', 'Work email', '<input type="email" name="email" maxlength="254" autocomplete="email" placeholder="' + (CFG.allowedDomain ? 'you@' + h(CFG.allowedDomain) : '') + '">', true,
+        CFG.allowedDomain ? 'Use your @' + h(CFG.allowedDomain) + ' email.' : '') +
+      fld('phone', 'Contact number', '<input type="tel" name="phone" maxlength="20" autocomplete="tel">', false, 'Optional') + '</div>') +
+
+    sec(2, 'What do you need?',
+      fld('title', 'Requirement title', '<input type="text" name="title" maxlength="150" placeholder="e.g. Diwali sale homepage banner">', true) +
+      '<div class="field"><span class="label req">Type of creative</span><div class="type-grid" id="types">' +
+      CFG.creativeTypes.map(function (t) { return '<button type="button" class="type-opt" data-type="' + h(t.id) + '">' + h(t.label) + '</button>'; }).join('') +
+      '</div><span class="err hidden" id="typeErr">Please choose a type.</span></div>' +
+      '<div id="dyn" class="dyn hidden"></div>' +
+      '<div class="grid-2">' +
+      fld('quantity', 'Number of creatives', '<input type="number" name="quantity" min="1" max="50" value="1">', true) +
+      fld('dimensions', 'Dimensions or aspect ratio', '<input type="text" name="dimensions" maxlength="200" placeholder="e.g. 1600 × 1200 px, or 4:5">', false) + '</div>' +
+      '<div class="grid-2">' +
+      fld('platform', 'Platform or placement', '<input type="text" name="platform" maxlength="150" placeholder="e.g. Website homepage, Instagram feed">', false) +
+      fld('campaign', 'Campaign or project', '<input type="text" name="campaign" maxlength="150" placeholder="e.g. Diwali Sale 2026">', false) + '</div>' +
+      fld('product', 'Product or brand', '<input type="text" name="product" maxlength="150" placeholder="e.g. A2 Desi Ghee 1L">', false)) +
+
+    sec(3, 'The brief',
+      fld('purpose', 'What is this creative for?', '<textarea name="purpose" maxlength="1000" rows="2" placeholder="Where will it be used, and what should it achieve?"></textarea>', true) +
+      fld('brief', 'Detailed brief', '<textarea name="brief" maxlength="8000" rows="5" placeholder="Describe the idea, the mood, what must stand out, anything to avoid."></textarea>', true) +
+      fld('copyText', 'Copy or text that must appear', '<textarea name="copyText" maxlength="8000" rows="3" placeholder="Paste the exact headline, offer, prices, disclaimers…"></textarea>', false) +
+      fld('referenceUrls', 'Reference links', '<textarea name="referenceUrls" rows="2" placeholder="One link per line (Drive, Instagram, Pinterest, competitor pages…)"></textarea>', false) +
+      '<div class="field"><span class="label">Reference images, brand guidelines & documents</span>' +
+      '<div class="drop" id="drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files here</b> or click to browse</div>' +
+      '<div class="faint small">Up to ' + CFG.maxFiles + ' files, ' + CFG.maxFileMB + ' MB each · ' + h(CFG.extensions.join(', ')) + '</div></div>' +
+      '<input type="file" id="fileIn" multiple class="hidden"><div id="fileList" class="stack" style="gap:6px;margin-top:8px"></div>' +
+      (CFG.brandGuidelinesUrl ? '<span class="hint">Our brand guidelines are <a href="' + h(CFG.brandGuidelinesUrl) + '" target="_blank" rel="noopener">here</a> — no need to attach them.</span>' : '') + '</div>') +
+
+    sec(4, 'Timing',
+      '<div class="grid-2">' +
+      fld('preferredDate', 'Preferred delivery date', '<input type="date" name="preferredDate" min="' + minDate + '">', true) +
+      fld('priorityRequested', 'Priority', '<select name="priorityRequested">' + opt(CFG.priorities) + '</select>', true) + '</div>' +
+      fld('instructions', 'Anything else?', '<textarea name="instructions" maxlength="8000" rows="2"></textarea>', false)) +
+
+    '<div class="alert bad hidden" data-form-error style="margin-top:16px"></div>' +
+    '<div class="submit-bar"><span class="faint small">Fields marked * are required.</span>' +
+    '<button type="submit" class="btn primary lg" id="submitBtn">' + icon('send') + ' Submit requirement</button></div>' +
+    '</form>';
+
+  $all('.type-opt').forEach(function (b) { b.onclick = function () { pickType(b.getAttribute('data-type')); }; });
+  var drop = $('#drop'), inp = $('#fileIn');
+  drop.onclick = function () { inp.click(); };
+  drop.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } };
+  inp.onchange = function () { addFiles(inp.files); inp.value = ''; };
+  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { addFiles(e.dataTransfer.files); });
+  $('#f').onsubmit = submit;
+}
+
+function sec(n, title, inner) {
+  return '<section class="card form-sec"><div class="card-h"><div class="sec-h"><span class="sec-n">' + n + '</span><h2>' + h(title) + '</h2></div></div><div class="card-b">' + inner + '</div></section>';
+}
+function fld(name, label, control, required, hint) {
+  var id = 'fld_' + name;
+  control = control.replace(/name="/, 'id="' + id + '" name="');
+  return '<div class="field" data-f="' + name + '"><label for="' + id + '" class="' + (required ? 'req' : '') + '">' + h(label) + '</label>' + control +
+    (hint ? '<span class="hint">' + hint + '</span>' : '') + '<span class="err hidden"></span></div>';
+}
+
+function pickType(id) {
+  TYPE = CFG.creativeTypes.filter(function (t) { return t.id === id; })[0];
+  $all('.type-opt').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-type') === id); });
+  $('#typeErr').classList.add('hidden');
+  var dyn = $('#dyn');
+  var fields = (TYPE && TYPE.fields) || [];
+  dyn.classList.toggle('hidden', !fields.length);
+  dyn.innerHTML = fields.length ? '<div class="section-title">' + h(TYPE.label) + ' details</div>' + fields.map(function (f) {
+    var c;
+    if (f.type === 'select') c = '<select name="tf_' + h(f.key) + '">' + opt(f.options || []) + '</select>';
+    else if (f.type === 'textarea') c = '<textarea name="tf_' + h(f.key) + '" rows="2" maxlength="8000"></textarea>';
+    else if (f.type === 'number') c = '<input type="number" min="0" name="tf_' + h(f.key) + '">';
+    else c = '<input type="text" maxlength="300" name="tf_' + h(f.key) + '">';
+    return fld('tf_' + f.key, f.label, c, f.required);
+  }).join('') : '';
+}
+
+function addFiles(list) {
+  Array.prototype.forEach.call(list, function (f) {
+    if (FILES.length >= CFG.maxFiles) return toast('You can attach up to ' + CFG.maxFiles + ' files.', true);
+    var e = ext(f.name).toLowerCase();
+    if (CFG.extensions.indexOf(e) === -1) return toast(f.name + ': file type not allowed.', true);
+    if (f.size > CFG.maxFileMB * 1048576) return toast(f.name + ' is larger than ' + CFG.maxFileMB + ' MB.', true);
+    if (!f.size) return toast(f.name + ' is empty.', true);
+    FILES.push({ file: f, progress: 0, state: 'ready' });
+  });
+  renderFiles();
+}
+
+function renderFiles() {
+  $('#fileList').innerHTML = FILES.map(function (x, i) {
+    return '<div class="file-row"><span class="thumb" style="width:32px;height:32px">' + ext(x.file.name) + '</span>' +
+      '<span class="grow ellipsis">' + h(x.file.name) + ' <span class="faint">· ' + fileSize(x.file.size) + '</span></span>' +
+      (x.state === 'ready' ? '<button type="button" class="btn ghost sm" data-rm="' + i + '">Remove</button>' :
+        x.state === 'done' ? '<span class="badge s-approved">Uploaded</span>' :
+        x.state === 'error' ? '<span class="badge s-changes-requested">Failed</span>' : progressBar(x.progress * 100)) + '</div>';
+  }).join('');
+  $all('[data-rm]').forEach(function (b) { b.onclick = function () { FILES.splice(Number(b.getAttribute('data-rm')), 1); renderFiles(); }; });
+}
+
+function collect() {
+  var f = $('#f'), data = {}, tf = {};
+  $all('input[name], select[name], textarea[name]', f).forEach(function (el) {
+    if (el.name.indexOf('tf_') === 0) tf[el.name.slice(3)] = el.value.trim();
+    else data[el.name] = el.value.trim();
+  });
+  data.creativeType = TYPE ? TYPE.id : '';
+  data.typeFields = tf;
+  return data;
+}
+
+function validate(d) {
+  var ok = true;
+  $all('.field').forEach(function (x) { x.classList.remove('invalid'); var e = $('.err', x); if (e) e.classList.add('hidden'); });
+  function bad(name, msg) {
+    ok = false;
+    var x = $('[data-f="' + name + '"]');
+    if (!x) return;
+    x.classList.add('invalid');
+    var e = $('.err', x); e.textContent = msg; e.classList.remove('hidden');
+  }
+  ['requesterName', 'department', 'email', 'title', 'purpose', 'brief', 'preferredDate', 'priorityRequested'].forEach(function (k) { if (!d[k]) bad(k, 'This is required.'); });
+  if (d.email && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(d.email)) bad('email', 'Enter a valid email.');
+  if (d.email && CFG.allowedDomain && d.email.toLowerCase().split('@')[1] !== CFG.allowedDomain.toLowerCase()) bad('email', 'Use your @' + CFG.allowedDomain + ' email.');
+  if (!TYPE) { ok = false; $('#typeErr').classList.remove('hidden'); }
+  else (TYPE.fields || []).forEach(function (f) { if (f.required && !d.typeFields[f.key]) bad('tf_' + f.key, 'This is required.'); });
+  var q = Number(d.quantity);
+  if (!q || q < 1 || q > 50 || Math.floor(q) !== q) bad('quantity', 'Between 1 and 50.');
+  if (d.preferredDate && d.preferredDate < todayIso()) bad('preferredDate', 'Pick today or a later date.');
+  return ok;
+}
+
+function submit(e) {
+  e.preventDefault();
+  fieldErrors(document, '');
+  var d = collect();
+  if (!validate(d)) {
+    var first = $('.field.invalid, #typeErr:not(.hidden)');
+    if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  var btn = $('#submitBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:15px;height:15px;border-color:rgba(255,255,255,.4);border-top-color:#fff"></span> Submitting…';
+  var result;
+  api('api_submitRequirement', d).then(function (r) {
+    result = r;
+    // Upload attachments one by one; a failed file doesn't lose the requirement.
+    var chain = Promise.resolve();
+    FILES.forEach(function (x) {
+      chain = chain.then(function () {
+        x.state = 'uploading'; renderFiles();
+        btn.innerHTML = '<span class="spinner" style="width:15px;height:15px"></span> Uploading files…';
+        return uploadFile(x.file, { kind: 'reference', ticket: r.uploadTicket }, function (p) { x.progress = p; renderFiles(); })
+          .then(function () { x.state = 'done'; renderFiles(); }, function (err) { x.state = 'error'; x.error = errMsg(err); renderFiles(); });
+      });
+    });
+    return chain.then(function () { return api('api_finalizeRequirement', r.uploadTicket); });
+  }).then(function () {
+    showDone(result.requirementId, FILES.filter(function (x) { return x.state === 'error'; }));
+  }).catch(function (err) {
+    if (result) return showDone(result.requirementId, FILES.filter(function (x) { return x.state !== 'done'; }));
+    btn.disabled = false; btn.innerHTML = icon('send') + ' Submit requirement';
+    fieldErrors(document, errMsg(err));
+    $('[data-form-error]').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+function showDone(id, failed) {
+  window.scrollTo(0, 0);
+  $('#main').innerHTML = '<div class="card done"><div class="tick">' + icon('check') + '</div>' +
+    '<h1>Request received</h1><p class="muted">The graphics team leader has it in their queue.</p>' +
+    '<div class="ref-id">' + h(id) + '</div>' +
+    '<p class="muted">Keep this reference ID. We’ve also emailed it to you.<br>When the creative is ready, you’ll get a link to review and approve it.</p>' +
+    (failed.length ? '<div class="alert warn" style="text-align:left;margin-top:16px">These files didn’t upload: ' + failed.map(function (x) { return h(x.file.name); }).join(', ') +
+      '. Your request is saved — please email them to the graphics team with your reference ID.</div>' : '') +
+    '<div style="margin-top:20px"><button class="btn" id="again">Submit another request</button></div></div>';
+  $('#again').onclick = function () { FILES = []; TYPE = null; renderForm(); window.scrollTo(0, 0); };
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<script>
+/* AppCore.js — app bootstrap, role-based navigation, routing, notifications. */
+
+var APP = { boot: null, route: 'overview', role: null, viewToken: 0 };
+
+var NAV = {
+  leader: [
+    { r: 'overview', label: 'Overview', icon: 'home' },
+    { r: 'requirements', label: 'Requirements', icon: 'inbox' },
+    { r: 'tasks', label: 'Tasks', icon: 'tasks' },
+    { r: 'approvals', label: 'Creative Approvals', icon: 'check' },
+    { r: 'reports', label: 'Reports', icon: 'chart' },
+    { r: 'team', label: 'Team Management', icon: 'users' },
+    { r: 'settings', label: 'Settings', icon: 'settings' }
+  ],
+  designer: [
+    { r: 'overview', label: 'My Dashboard', icon: 'home' },
+    { r: 'tasks', label: 'My Tasks', icon: 'tasks' }
+  ]
+};
+
+var VIEWS = {}; // filled by AppViews / AppTask / AppAdmin: VIEWS[name] = function (arg, el, token)
+
+function startApp(initialRoute) {
+  $('#menuBtn').innerHTML = icon('menu');
+  $('#refreshBtn').innerHTML = icon('refresh');
+  $('#bellBtn').innerHTML = icon('bell');
+  $('#menuBtn').onclick = function () { $('#side').classList.add('open'); $('#scrim').classList.add('open'); };
+  $('#scrim').onclick = closeMenu;
+  $('#refreshBtn').onclick = function () { render(APP.route); loadNotifications(); };
+  $('#bellBtn').onclick = toggleNotifications;
+  document.addEventListener('click', function (e) {
+    var pop = $('#notifPop');
+    if (!pop.classList.contains('hidden') && !pop.contains(e.target) && !$('#bellBtn').contains(e.target)) pop.classList.add('hidden');
+  });
+  try {
+    google.script.history.setChangeHandler(function (e) { if (e.state && e.state.r) render(e.state.r); });
+  } catch (err) { /* history API unavailable in some previews */ }
+
+  api('api_bootstrap').then(function (b) {
+    APP.boot = b; APP.role = b.user.role;
+    $('#brandName').textContent = b.companyName || 'Graphics';
+    $('#brandSub').textContent = APP.role === 'leader' ? 'Team leader' : 'Designer';
+    $('#brandMark').textContent = (b.companyName || 'G').charAt(0);
+    $('#me').innerHTML = '<b>' + h(b.user.name) + '</b><span class="faint">' + h(b.user.email) + '</span>';
+    buildNav();
+    go(initialRoute || 'overview', true);
+    loadNotifications();
+    setInterval(loadNotifications, 90000);
+  }).catch(function (e) {
+    $('#view').innerHTML = '<div class="card" style="max-width:520px;margin:40px auto"><div class="card-b"><h2>Can’t open the portal</h2><p class="muted" style="margin-top:6px">' + h(errMsg(e)) + '</p></div></div>';
+  });
+}
+
+function closeMenu() { $('#side').classList.remove('open'); $('#scrim').classList.remove('open'); }
+
+function buildNav() {
+  $('#nav').innerHTML = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) {
+    return '<a href="#" data-r="' + n.r + '">' + icon(n.icon) + '<span>' + h(n.label) + '</span><span class="cnt hidden" data-cnt="' + n.r + '"></span></a>';
+  }).join('');
+  $all('#nav a').forEach(function (a) { a.onclick = function (e) { e.preventDefault(); go(a.getAttribute('data-r')); }; });
+}
+
+function navCount(route, n) {
+  var el = $('[data-cnt="' + route + '"]');
+  if (!el) return;
+  el.textContent = n; el.classList.toggle('hidden', !n);
+}
+
+/** Navigate to an in-app route like "task/GFX-2026-0001". */
+function go(route, replace) {
+  route = String(route || 'overview').replace(/^#/, '');
+  try {
+    if (replace) google.script.history.replace({ r: route }, { p: 'app', r: route });
+    else google.script.history.push({ r: route }, { p: 'app', r: route });
+  } catch (e) { /* ignore */ }
+  render(route);
+}
+
+function render(route) {
+  APP.route = route;
+  closeMenu();
+  var parts = route.split('/');
+  var name = parts[0], arg = parts.slice(1).join('/');
+  var allowed = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) { return n.r; }).concat(['task']);
+  if (allowed.indexOf(name) === -1 || !VIEWS[name]) name = 'overview';
+  $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === (name === 'task' ? 'tasks' : name)); });
+  var token = ++APP.viewToken;
+  var el = $('#view');
+  el.innerHTML = '<div class="loading-page"><span class="spinner"></span> Loading…</div>';
+  window.scrollTo(0, 0);
+  VIEWS[name](arg, el, token);
+}
+
+/** True if the user navigated away while a request was in flight. */
+function stale(token) { return token !== APP.viewToken; }
+
+function setCrumb(text) { $('#crumb').textContent = text; }
+
+function viewError(el, e) {
+  el.innerHTML = '<div class="card" style="max-width:560px;margin:30px auto"><div class="card-b"><h2>Couldn’t load this page</h2><p class="muted" style="margin-top:6px">' + h(errMsg(e)) +
+    '</p><div class="row" style="margin-top:12px"><button class="btn" onclick="render(APP.route)">Try again</button><button class="btn ghost" onclick="go(\'overview\')">Back to overview</button></div></div></div>';
+}
+
+/* ---------- notifications ---------- */
+
+function loadNotifications() {
+  return api('api_getNotifications').then(function (n) {
+    APP.notifs = n;
+    var b = $('#bellBtn');
+    var d = $('.dotc', b);
+    if (n.unread) { if (!d) { d = document.createElement('span'); d.className = 'dotc'; b.appendChild(d); } d.textContent = n.unread > 9 ? '9+' : n.unread; }
+    else if (d) d.remove();
+    if (!$('#notifPop').classList.contains('hidden')) renderNotifications();
+  }).catch(function () { /* silent */ });
+}
+
+function toggleNotifications() {
+  var pop = $('#notifPop');
+  pop.classList.toggle('hidden');
+  if (!pop.classList.contains('hidden')) renderNotifications();
+}
+
+function renderNotifications() {
+  var n = APP.notifs || { items: [], unread: 0 };
+  var pop = $('#notifPop');
+  pop.innerHTML = '<div class="card-h"><h3>Notifications</h3>' + (n.unread ? '<button class="btn ghost sm" id="readAll">Mark all read</button>' : '') + '</div>' +
+    (n.items.length ? n.items.map(function (x) {
+      return '<div class="notif' + (x.readAt ? '' : ' unread') + '" data-id="' + h(x.notificationId) + '" data-route="' + h(x.route) + '">' +
+        '<div style="font-weight:500">' + h(x.title) + '</div><div class="muted small pre" style="max-height:3.2em;overflow:hidden">' + h(x.body) + '</div>' +
+        '<div class="faint small">' + ago(x.createdAt) + '</div></div>';
+    }).join('') : '<div class="empty">' + icon('bell') + '<b>You’re all caught up</b></div>');
+  if ($('#readAll')) $('#readAll').onclick = function () { api('api_markNotificationsRead', 'all').then(loadNotifications); };
+  $all('.notif', pop).forEach(function (el) {
+    el.onclick = function () {
+      api('api_markNotificationsRead', [el.getAttribute('data-id')]).then(loadNotifications);
+      pop.classList.add('hidden');
+      if (el.getAttribute('data-route')) go(el.getAttribute('data-route'));
+    };
+  });
+}
+
+/* ---------- shared bits ---------- */
+
+function kpiCard(label, value, route, opts) {
+  opts = opts || {};
+  var tag = route ? 'button' : 'div';
+  return '<' + tag + ' class="kpi' + (opts.alert && value ? ' alert' : '') + '"' + (route ? ' data-go="' + h(route) + '"' : ' style="cursor:default"') + '>' +
+    '<div class="k-label"><span class="dot" style="background:' + (opts.color || 'var(--line-strong)') + '"></span>' + h(label) + '</div>' +
+    '<div class="k-val">' + h(value === null || value === undefined ? '—' : value) + '</div>' + (opts.sub ? '<div class="faint small">' + h(opts.sub) + '</div>' : '') + '</' + tag + '>';
+}
+
+/** Wire every [data-go] inside el to navigation. */
+function wireGo(el) {
+  $all('[data-go]', el).forEach(function (x) {
+    x.addEventListener('click', function (e) { if (e.target.closest('a[href^="http"]')) return; e.preventDefault(); go(x.getAttribute('data-go')); });
+  });
+}
+
+function dueLabel(t) {
+  if (!t.dueDate) return '<span class="faint">No date</span>';
+  if (t.overdue) return '<span class="overdue-flag">' + icon('alert').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + fmtDate(t.dueDate) + '</span>';
+  if (t.dueDate === todayIso()) return '<span style="color:var(--warn);font-weight:500">Today</span>';
+  return fmtDate(t.dueDate);
+}
+
+function emptyState(title, sub, ic) {
+  return '<div class="empty">' + icon(ic || 'inbox') + '<b>' + h(title) + '</b>' + (sub ? '<span>' + h(sub) + '</span>' : '') + '</div>';
+}
+</script>

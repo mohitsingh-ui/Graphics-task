@@ -1,0 +1,404 @@
+/**
+ * Acceptance scenarios from the brief (section 17), run against the real
+ * server code with in-memory Google service doubles.  Run: node test/scenarios.test.js
+ */
+const assert = require('assert');
+const crypto = require('crypto');
+const { createEnv } = require('./gas-mock');
+
+const OWNER = 'owner@rosierfoods.com';
+const LEADER = 'owner@rosierfoods.com';
+const A = 'asha@rosierfoods.com';
+const B = 'bilal@rosierfoods.com';
+const REQUESTER = 'meera@rosierfoods.com';
+
+let passed = 0;
+const results = [];
+function scenario(name, fn) {
+  try { fn(); passed++; results.push('  ✓ ' + name); }
+  catch (e) { results.push('  ✗ ' + name + '\n      ' + (e.stack || e).toString().split('\n').slice(0, 4).join('\n      ')); process.exitCode = 1; }
+}
+
+const env = createEnv();
+const { call, state } = env;
+
+function ok(r) { if (!r || !r.ok) throw new Error('API error: ' + JSON.stringify(r && r.error)); return r.data; }
+function err(r, code) { assert.strictEqual(r.ok, false, 'expected an error, got ' + JSON.stringify(r).slice(0, 200)); if (code) assert.strictEqual(r.error.code, code, JSON.stringify(r.error)); return r.error; }
+
+/** Upload bytes the way the browser does: start + 4 MB base64 chunks. */
+function upload(user, ctx, name, bytes) {
+  const start = ok(call(user, 'api_startUpload', Object.assign({}, ctx, { fileName: name, size: bytes.length })));
+  let off = 0, res;
+  while (off < bytes.length) {
+    const piece = bytes.subarray(off, Math.min(off + start.chunkBytes, bytes.length));
+    res = ok(call(user, 'api_uploadChunk', start.uploadId, off, piece.toString('base64')));
+    off += piece.length;
+  }
+  return res;
+}
+function png(size) { const b = crypto.randomBytes(size); b[0] = 0x89; b[1] = 0x50; b[2] = 0x4E; b[3] = 0x47; return b; }
+function tokenFrom(url) { return /t=([A-Za-z0-9_-]+)/.exec(url)[1]; }
+function reviewTokensFromMail(subjectPart) {
+  const m = state.mail.filter(x => x.subject.includes(subjectPart)).pop();
+  return (m.body.match(/t=([A-Za-z0-9_-]{40,60})/g) || []).map(x => x.slice(2));
+}
+const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+
+/* ---------- setup ---------- */
+state.currentUser = OWNER;
+env.ctx.setup();
+ok(call(LEADER, 'api_saveUser', { email: A, name: 'Asha Designer', role: 'designer' }));
+ok(call(LEADER, 'api_saveUser', { email: B, name: 'Bilal Designer', role: 'designer' }));
+ok(call(LEADER, 'api_saveSettings', { publicUrl: 'https://script.google.com/macros/s/PUB/exec', internalUrl: 'https://script.google.com/macros/s/INT/exec' }));
+
+let req1, task1;
+
+scenario('0. Setup created sheets, folders, leader, trigger; setup cannot be called by others', () => {
+  const ss = Object.values(state.spreadsheets)[0];
+  ['Users', 'Departments', 'Requirements', 'Tasks', 'TaskAssignments', 'TaskActivity', 'CreativeSubmissions', 'CreativeVersions',
+    'ApprovalRequests', 'ApprovalDecisions', 'Notifications', 'Settings', 'ReviewTokens', 'ReferenceFiles'].forEach(n => assert.ok(ss.sheets[n], 'sheet ' + n));
+  assert.ok(JSON.parse(state.props.FOLDER_IDS).submissions);
+  assert.strictEqual(state.triggers.length, 1);
+  state.currentUser = A;
+  assert.throws(() => env.ctx.setup(), /owner/);
+  state.currentUser = '';
+  assert.throws(() => env.ctx.setup(), /owner/);
+  assert.throws(() => env.ctx.hourlyMaintenance({ triggerUid: 'fake' }), /owner/);
+});
+
+scenario('1. New requirement without login → saved, ID created, in leader queue', () => {
+  const cfg = ok(call('', 'api_getFormConfig'));
+  assert.ok(cfg.creativeTypes.find(t => t.id === 'website_banner'));
+  const sub = ok(call('', 'api_submitRequirement', {
+    requesterName: 'Meera', department: 'Marketing', email: REQUESTER, title: 'Diwali homepage banner',
+    creativeType: 'website_banner', typeFields: { width: 1600, height: 1200, variants: 'Desktop + Mobile', cta: 'Shop now', placement: 'Homepage hero' },
+    purpose: 'Website homepage sale promotion', brief: 'Warm festive banner with ghee jar', campaign: 'Diwali Sale', quantity: 5,
+    referenceUrls: 'https://example.com/ref1\nhttps://example.com/ref2', preferredDate: future(10), priorityRequested: 'High',
+    copyText: '=HYPERLINK("evil")'   // formula injection attempt must be stored as text
+  }));
+  assert.match(sub.requirementId, /^REQ-\d{4}-0001$/);
+  // reference attachment through the public ticket
+  const att = upload('', { kind: 'reference', ticket: sub.uploadTicket }, 'moodboard.png', png(5000));
+  assert.ok(att.attachmentId);
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  req1 = sub.requirementId;
+  const dash = ok(call(LEADER, 'api_leaderDashboard'));
+  task1 = dash.incoming.find(t => t.requirementId === req1);
+  assert.ok(task1, 'task in incoming queue');
+  assert.strictEqual(task1.status, 'New Requirement');
+  assert.strictEqual(task1.dimensions, '1600 × 1200 px');
+  assert.strictEqual(dash.kpis.newRequirements, 1);
+  const detail = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.strictEqual(detail.task.copyText, '=HYPERLINK("evil")');
+  assert.strictEqual(detail.attachments.length, 1);
+  assert.ok(state.mail.some(m => m.to === REQUESTER && /got your request/.test(m.subject)), 'requester confirmation');
+  const n = ok(call(LEADER, 'api_getNotifications'));
+  assert.ok(n.items.some(x => x.type === 'requirement_new'));
+});
+
+scenario('1b. Public form validation: domain, required fields, honeypot, past dates', () => {
+  const base = { requesterName: 'X', department: 'Sales', email: 'x@gmail.com', title: 'T', creativeType: 'other', purpose: 'p', brief: 'b', preferredDate: future(3), priorityRequested: 'Low' };
+  assert.match(err(call('', 'api_submitRequirement', base), 'VALIDATION').message, /rosierfoods\.com/);
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', title: '' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', website: 'spam' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', preferredDate: '2020-01-01' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', creativeType: 'website_banner', typeFields: {} })), 'VALIDATION');
+});
+
+scenario('2. Leader assigns to Designer A → appears on A’s dashboard', () => {
+  err(call(A, 'api_assignTask', task1.taskId, { assigneeEmail: A, dueDate: future(5), priority: 'High' }), 'FORBIDDEN');
+  ok(call(LEADER, 'api_assignTask', task1.taskId, { assigneeEmail: A, dueDate: future(5), priority: 'High', instructions: 'Use the gold palette' }));
+  const d = ok(call(A, 'api_designerDashboard'));
+  const t = d.tasks.find(x => x.taskId === task1.taskId);
+  assert.ok(t);
+  assert.strictEqual(t.status, 'Assigned');
+  assert.strictEqual(t.instructions, 'Use the gold palette');
+  assert.strictEqual(t.internalNotes, undefined, 'designer must not get internal notes');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(x => x.type === 'task_assigned'));
+});
+
+let taskB;
+scenario('3. Privacy: Designer A cannot reach Designer B’s task by id; non-members are refused', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'R', department: 'Sales', email: 'r@rosierfoods.com', title: 'Sales deck cover',
+    creativeType: 'presentation', purpose: 'Pitch', brief: 'Cover slide', preferredDate: future(4), priorityRequested: 'Medium' }));
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  taskB = ok(call(LEADER, 'api_listTasks', {})).find(t => t.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_updateTask', taskB, { internalNotes: 'Bilal is slow on decks' }));
+  ok(call(LEADER, 'api_assignTask', taskB, { assigneeEmail: B, dueDate: future(4), priority: 'Medium' }));
+  err(call(A, 'api_getTask', taskB), 'NOT_FOUND');
+  err(call(A, 'api_updateProgress', taskB, 50, ''), 'NOT_FOUND');
+  err(call(A, 'api_startUpload', { kind: 'version', taskId: taskB, title: 'x', purpose: 'y', fileName: 'a.png', size: 10 }), 'NOT_FOUND');
+  assert.ok(!ok(call(A, 'api_listTasks', {})).some(t => t.taskId === taskB));
+  assert.ok(!ok(call(A, 'api_designerDashboard')).tasks.some(t => t.taskId === taskB));
+  err(call(A, 'api_leaderDashboard'), 'FORBIDDEN');
+  err(call(A, 'api_getReports', {}), 'FORBIDDEN');
+  err(call(A, 'api_getSettings'), 'FORBIDDEN');
+  err(call(A, 'api_listTeam'), 'FORBIDDEN');
+  err(call(A, 'api_listApprovals', 'open'), 'FORBIDDEN');
+  err(call('', 'api_getTask', task1.taskId), 'NOT_SIGNED_IN');
+  err(call('stranger@rosierfoods.com', 'api_bootstrap'), 'NO_ACCESS');
+  // A designer’s activity view must not reveal internal notes or other emails
+  const act = ok(call(B, 'api_getTask', taskB)).activity;
+  assert.ok(!JSON.stringify(act).includes('slow on decks'));
+});
+
+let ver1, deliv1;
+scenario('4. Designer A uploads V1 → stored in Drive, linked to task, review request created', () => {
+  ok(call(A, 'api_updateProgress', task1.taskId, 50, 'First draft'));
+  assert.strictEqual(ok(call(A, 'api_getTask', task1.taskId)).task.status, 'In Progress');
+  const bytes = png(9 * 1024 * 1024 + 123); // 3 chunks
+  const r = upload(A, { kind: 'version', taskId: task1.taskId, title: 'Homepage banner — desktop', purpose: 'Website homepage sale promotion', deliverableType: 'Website banner', note: 'v1' }, 'banner.png', bytes);
+  ver1 = r.versionId; deliv1 = r.deliverableId;
+  assert.strictEqual(r.versionNo, 1);
+  const v = env.state.files[Object.keys(env.state.files).find(id => env.state.files[id].name.includes('_V1_banner.png'))];
+  assert.ok(v, 'file in Drive');
+  assert.ok(Buffer.compare(v.bytes, bytes) === 0, 'bytes intact');
+  const folders = JSON.parse(state.props.FOLDER_IDS);
+  const yearFolder = Object.values(state.folders).find(f => f.parent === folders.submissions);
+  assert.strictEqual(state.folders[v.parent].name, task1.taskId);
+  assert.strictEqual(state.folders[v.parent].parent, yearFolder.id);
+  const sub = ok(call(A, 'api_submitForApproval', task1.taskId, [ver1]));
+  assert.strictEqual(sub.submitted, 1);
+  assert.deepStrictEqual(sub.links, [], 'designers do not receive review links');
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.strictEqual(t.task.status, 'Submitted for Approval');
+  assert.strictEqual(t.deliverables[0].versions[0].request.status, 'Open');
+  assert.strictEqual(t.deliverables[0].versions[0].uploadedBy, A, 'leader sees uploader');
+  assert.ok(reviewTokensFromMail('Ready for approval').length === 1, 'leader emailed review link');
+  assert.ok(reviewTokensFromMail('Please review').length === 1, 'requester emailed review link');
+  // wrong magic bytes are rejected
+  err(call(A, 'api_uploadChunk', ok(call(A, 'api_startUpload', { kind: 'version', taskId: task1.taskId, title: 'fake', purpose: 'p', fileName: 'fake.png', size: 4 })).uploadId, 0, Buffer.from('abcd').toString('base64')), 'VALIDATION');
+  err(call(A, 'api_startUpload', { kind: 'version', taskId: task1.taskId, title: 'x', purpose: 'p', fileName: 'run.exe', size: 4 }), 'VALIDATION');
+});
+
+let token1;
+scenario('5. Anonymous review: valid link works without login and leaks nothing internal', () => {
+  token1 = reviewTokensFromMail('Please review')[0];
+  const r = ok(call('', 'api_getReview', token1));
+  assert.strictEqual(r.state, 'open');
+  assert.strictEqual(r.creative.title, 'Homepage banner — desktop');
+  assert.strictEqual(r.creative.purpose, 'Website homepage sale promotion');
+  assert.strictEqual(r.creative.dimensions, '1600 × 1200 px');
+  assert.strictEqual(r.creative.campaign, 'Diwali Sale');
+  assert.strictEqual(r.creative.version, 'V1');
+  assert.strictEqual(r.creative.status, 'Awaiting Approval');
+  assert.strictEqual(r.preview.kind, 'thumbnail', 'large image falls back to Drive thumbnail');
+  const blob = JSON.stringify(Object.assign({}, r, { preview: null }));
+  [A, 'Asha', 'asha', 'internal', 'gold palette', task1.taskId, 'drive.google.com', 'USR-', 'VER-', 'fileId', 'v1"'].forEach(s =>
+    assert.ok(!blob.includes(s), 'review payload leaked: ' + s));
+  const orig = call('', 'api_getReviewOriginal', token1, 'download');
+  assert.strictEqual(orig.ok, true);
+  assert.match(orig.data.fileName, /^Homepage_banner__desktop_V1\.png$|^Homepage_banner_desktop_V1\.png$/);
+  assert.ok(!orig.data.fileName.includes(task1.taskId));
+  assert.strictEqual(ok(call('', 'api_getReview', 'x'.repeat(43))).state, 'invalid');
+  assert.strictEqual(ok(call('', 'api_getReview', '../../etc')).state, 'invalid');
+});
+
+scenario('5b. Designer cannot approve own work through the public link', () => {
+  const e = err(call('', 'api_submitReview', token1, { decision: 'approved', reviewerName: 'Asha', reviewerEmail: A }), 'FORBIDDEN');
+  assert.match(e.message, /own work/);
+  err(call('', 'api_submitReview', token1, { decision: 'approved' }), 'VALIDATION'); // identity required by default
+});
+
+scenario('7. Revision: reviewer requests changes → designer sees feedback, uploads V2, resubmits', () => {
+  err(call('', 'api_submitReview', token1, { decision: 'changes', comment: '', reviewerName: 'Meera', reviewerEmail: REQUESTER }), 'VALIDATION');
+  ok(call('', 'api_submitReview', token1, { decision: 'changes', comment: 'Make the jar bigger and add the offer price', reviewerName: 'Meera', reviewerEmail: REQUESTER }));
+  // duplicate decision is refused
+  err(call('', 'api_submitReview', token1, { decision: 'approved', reviewerName: 'Meera', reviewerEmail: REQUESTER }), 'ALREADY_DECIDED');
+  assert.strictEqual(ok(call('', 'api_getReview', token1)).state, 'decided');
+  const t = ok(call(A, 'api_getTask', task1.taskId));
+  assert.strictEqual(t.task.status, 'Changes Requested');
+  const dec = t.deliverables[0].versions[0].decisions[0];
+  assert.strictEqual(dec.comment, 'Make the jar bigger and add the offer price');
+  assert.strictEqual(dec.reviewerEmail, undefined, 'designer does not see reviewer identity');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(x => x.type === 'changes_requested'));
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(x => x.type === 'changes_requested'));
+  const dd = ok(call(A, 'api_designerDashboard'));
+  assert.strictEqual(dd.kpis.changesRequested, 1);
+  const r2 = upload(A, { kind: 'version', taskId: task1.taskId, deliverableId: deliv1, note: 'Bigger jar, price added' }, 'banner-v2.png', png(20000));
+  assert.strictEqual(r2.versionNo, 2);
+  ok(call(A, 'api_submitForApproval', task1.taskId, [r2.versionId]));
+  assert.strictEqual(ok(call(A, 'api_getTask', task1.taskId)).task.status, 'Resubmitted for Approval');
+});
+
+scenario('8. Version history: V1 kept after V2; leader sees both with uploader', () => {
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  const vs = t.deliverables[0].versions;
+  assert.deepStrictEqual(vs.map(v => v.versionNo), ['2', '1']);
+  assert.strictEqual(vs[1].status, 'Changes Requested');
+  assert.ok(vs.every(v => v.uploadedBy === A));
+  const p1 = ok(call(LEADER, 'api_getAsset', 'version', vs[1].versionId, 'preview'));
+  const p2 = ok(call(LEADER, 'api_getAsset', 'version', vs[0].versionId, 'preview'));
+  assert.ok(p1.dataUrl && p2.dataUrl);
+  err(call(B, 'api_getAsset', 'version', vs[0].versionId, 'preview'), 'NOT_FOUND');
+});
+
+scenario('6 + 9. Approval recorded & notified; 1 of 5 approved does not complete the task', () => {
+  const tok = reviewTokensFromMail('Please review')[0];
+  const before = ok(call('', 'api_getReview', tok));
+  assert.strictEqual(before.creative.version, 'V2');
+  assert.strictEqual(before.history.length, 1, 'shows earlier feedback');
+  ok(call('', 'api_submitReview', tok, { decision: 'approved', reviewerName: 'Meera', reviewerEmail: REQUESTER }));
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.strictEqual(t.deliverables[0].status, 'Approved');
+  assert.strictEqual(t.deliverables[0].approvedVersionId, t.deliverables[0].versions[0].versionId);
+  assert.notStrictEqual(t.task.status, 'Completed', 'needs 5 approved');
+  assert.strictEqual(t.task.status, 'In Progress');
+  const dec = t.deliverables[0].versions[0].decisions[0];
+  assert.strictEqual(dec.reviewerEmail, REQUESTER);
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(x => x.type === 'creative_approved'));
+  const folders = JSON.parse(state.props.FOLDER_IDS);
+  assert.ok(Object.values(state.files).some(f => f.name.startsWith('APPROVED_') && state.folders[state.folders[f.parent].parent].parent === folders.approved), 'approved copy saved');
+  // 100% progress must not complete
+  ok(call(A, 'api_updateProgress', task1.taskId, 100, 'All done from my side'));
+  assert.notStrictEqual(ok(call(A, 'api_getTask', task1.taskId)).task.status, 'Completed');
+  err(call(A, 'api_setTaskStatus', task1.taskId, 'Completed', {}), 'FORBIDDEN');
+  err(call(LEADER, 'api_setTaskStatus', task1.taskId, 'Completed', {}), 'VALIDATION');
+  // remaining four creatives
+  const ids = [];
+  for (let i = 2; i <= 5; i++) ids.push(upload(A, { kind: 'version', taskId: task1.taskId, title: 'Banner ' + i, purpose: 'Homepage', note: '' }, 'b' + i + '.jpg', Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF]), crypto.randomBytes(2000)])).versionId);
+  ok(call(A, 'api_submitForApproval', task1.taskId, []));
+  const toks = reviewTokensFromMail('Please review');
+  assert.strictEqual(toks.length, 4);
+  toks.slice(0, 3).forEach(k => ok(call('', 'api_submitReview', k, { decision: 'approved', reviewerName: 'Meera', reviewerEmail: REQUESTER })));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', task1.taskId)).task.status, 'Submitted for Approval');
+  ok(call(LEADER, 'api_leaderDecision', ids[3], 'approved', 'Looks good'));
+  const done = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.strictEqual(done.task.status, 'Completed');
+  assert.ok(done.task.completedAt);
+  assert.ok(state.mail.some(m => m.to === REQUESTER && /ready/.test(m.subject)));
+});
+
+scenario('Approval after change: a new version of an approved creative needs fresh approval', () => {
+  ok(call(LEADER, 'api_setTaskStatus', task1.taskId, 'In Progress', { reason: 'Client wants one tweak' }));
+  const r = upload(A, { kind: 'version', taskId: task1.taskId, deliverableId: deliv1, note: 'tweak' }, 'banner-v3.png', png(3000));
+  assert.strictEqual(r.versionNo, 3);
+  ok(call(A, 'api_submitForApproval', task1.taskId, [r.versionId]));
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  const d = t.deliverables.find(x => x.deliverableId === deliv1);
+  assert.strictEqual(d.status, 'Awaiting Approval');
+  assert.strictEqual(d.versions.find(v => v.versionNo === '2').status, 'Approved', 'old approval stays on record');
+  assert.notStrictEqual(t.task.status, 'Completed');
+});
+
+scenario('10. Expired, revoked and superseded links cannot approve', () => {
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  const v3 = t.deliverables.find(x => x.deliverableId === deliv1).versions[0];
+  const extra = tokenFrom(ok(call(LEADER, 'api_createReviewLink', v3.versionId)).url);
+  ok(call(LEADER, 'api_revokeReviewLinks', v3.versionId));
+  assert.strictEqual(ok(call('', 'api_getReview', extra)).state, 'revoked');
+  err(call('', 'api_submitReview', extra, { decision: 'approved', reviewerName: 'M', reviewerEmail: REQUESTER }), 'LINK_CLOSED');
+  // expiry
+  const fresh = tokenFrom(ok(call(LEADER, 'api_createReviewLink', v3.versionId)).url);
+  const ss = Object.values(state.spreadsheets)[0].sheets.ReviewTokens;
+  const header = ss.data[0];
+  const row = ss.data[ss.data.length - 1];
+  row[header.indexOf('expiresAt')] = new Date(Date.now() - 1000).toISOString();
+  assert.strictEqual(ok(call('', 'api_getReview', fresh)).state, 'expired');
+  err(call('', 'api_submitReview', fresh, { decision: 'approved', reviewerName: 'M', reviewerEmail: REQUESTER }), 'LINK_CLOSED');
+  err(call('', 'api_getReviewOriginal', fresh, 'view'), 'LINK_CLOSED');
+  // superseded: submitting V4 kills V3 links
+  const live = tokenFrom(ok(call(LEADER, 'api_createReviewLink', v3.versionId)).url);
+  const r4 = upload(A, { kind: 'version', taskId: task1.taskId, deliverableId: deliv1 }, 'banner-v4.png', png(3000));
+  ok(call(A, 'api_submitForApproval', task1.taskId, [r4.versionId]));
+  assert.strictEqual(ok(call('', 'api_getReview', live)).state, 'superseded');
+  err(call('', 'api_submitReview', live, { decision: 'approved', reviewerName: 'M', reviewerEmail: REQUESTER }), 'LINK_CLOSED');
+  // tokens are stored hashed only
+  assert.ok(!JSON.stringify(ss.data).includes(live));
+});
+
+scenario('11. Persistence: a fresh execution reads everything back from the sheet', () => {
+  const t = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.ok(t.activity.length > 10);
+  assert.ok(t.activity.some(a => a.action === 'comment') === false);
+  ok(call(A, 'api_addComment', task1.taskId, 'Working on V4 now'));
+  const again = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.ok(again.activity.some(a => a.action === 'comment' && a.note === 'Working on V4 now'));
+  assert.ok(again.deliverables.length === 5);
+  // Audit trail integrity: status rows record a real change, edits record which fields changed
+  assert.ok(again.activity.filter(a => a.action === 'status').every(a => a.fromValue !== a.toValue), 'status log from/to must differ');
+  ok(call(LEADER, 'api_updateTask', task1.taskId, { formats: 'PNG + JPG' }));
+  const third = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.ok(third.activity.some(a => a.action === 'updated' && a.toValue === 'formats'), 'edit is logged');
+});
+
+scenario('Status rules: illegal manual transitions refused; hold/resume; cancel closes links', () => {
+  err(call(B, 'api_setTaskStatus', taskB, 'Approved', {}), 'INVALID_TRANSITION');
+  err(call(LEADER, 'api_setTaskStatus', taskB, 'Approved', {}), 'INVALID_TRANSITION');
+  ok(call(B, 'api_setTaskStatus', taskB, 'In Progress', {}));
+  ok(call(LEADER, 'api_setTaskStatus', taskB, 'On Hold', { reason: 'Waiting for photos' }));
+  err(call(B, 'api_updateProgress', taskB, 25, ''), 'INVALID_STATE');
+  ok(call(LEADER, 'api_resumeTask', taskB));
+  assert.strictEqual(ok(call(B, 'api_getTask', taskB)).task.status, 'In Progress');
+  const r = upload(B, { kind: 'version', taskId: taskB, title: 'Cover', purpose: 'Pitch' }, 'cover.pdf', Buffer.concat([Buffer.from('%PDF-1.7\n'), crypto.randomBytes(500)]));
+  ok(call(B, 'api_submitForApproval', taskB, [r.versionId]));
+  const tok = reviewTokensFromMail('Please review')[0];
+  ok(call(LEADER, 'api_setTaskStatus', taskB, 'Cancelled', { reason: 'No longer needed' }));
+  assert.strictEqual(ok(call('', 'api_getReview', tok)).state, 'revoked');
+});
+
+scenario('Reassignment: old designer loses access, new designer gains it, both notified', () => {
+  ok(call(LEADER, 'api_assignTask', task1.taskId, { assigneeEmail: B, dueDate: future(2), priority: 'Urgent', note: 'Asha on leave' }));
+  err(call(A, 'api_getTask', task1.taskId), 'NOT_FOUND');
+  const t = ok(call(B, 'api_getTask', task1.taskId));
+  assert.ok(t.deliverables[0].versions.every(v => v.uploadedBy === 'Previous designer'), 'B does not see A’s identity');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(x => x.type === 'task_reassigned'));
+});
+
+scenario('Reports & CSV are computed from records and leader-only', () => {
+  const r = ok(call(LEADER, 'api_getReports', { from: future(-30), to: future(1) }));
+  assert.strictEqual(r.summary.requirements, 2);
+  assert.strictEqual(r.summary.decisions, 6); // 1 changes + 5 approvals
+  const asha = r.designers.find(d => d.email === A);
+  assert.strictEqual(asha.revisionCycles, 1);
+  assert.ok(r.byDepartment.find(x => x.label === 'Marketing'));
+  const csv = ok(call(LEADER, 'api_exportCsv', 'tasks', { from: future(-30), to: future(1) }));
+  assert.ok(csv.csv.includes(task1.taskId));
+  assert.ok(!/\n=|,=/.test(csv.csv), 'no raw formulas in CSV');
+  err(call(B, 'api_exportCsv', 'tasks', {}), 'FORBIDDEN');
+});
+
+scenario('Team: deactivated user loses access immediately; last leader protected', () => {
+  ok(call(LEADER, 'api_setUserActive', A, false));
+  err(call(A, 'api_bootstrap'), 'NO_ACCESS');
+  err(call(LEADER, 'api_setUserActive', LEADER, false), 'VALIDATION');
+  err(call(LEADER, 'api_saveUser', { email: 'x@gmail.com', name: 'X', role: 'designer' }), 'VALIDATION');
+  ok(call(LEADER, 'api_setUserActive', A, true));
+});
+
+scenario('Maintenance trigger sends overdue + due-soon alerts once', () => {
+  const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.taskId === task1.taskId);
+  ok(call(LEADER, 'api_updateTask', task1.taskId, { dueDate: future(-1) }));
+  state.currentUser = OWNER; env.ctx.DB_CACHE_ = {}; env.ctx.SETTINGS_MEMO_ = null;
+  const trig = state.triggers[0];
+  env.ctx.hourlyMaintenance({ triggerUid: trig.id });
+  env.ctx.DB_CACHE_ = {};
+  env.ctx.hourlyMaintenance({ triggerUid: trig.id });
+  const n = ok(call(B, 'api_getNotifications')).items.filter(x => x.type === 'task_overdue' && x.title.includes(t.title));
+  assert.strictEqual(n.length, 1);
+});
+
+scenario('Pages render: public form, review, app shell, no-access', () => {
+  const pub = env.ctx.doGet({ parameter: {} });
+  state.currentUser = '';
+  const form = env.ctx.doGet({ parameter: {} });
+  assert.ok(form.html.includes('Request a creative') && form.html.includes('function api('));
+  const rv = env.ctx.doGet({ parameter: { p: 'review', t: '<script>' } });
+  assert.ok(rv.html.includes('var BOOT = {"token":""}'));
+  state.currentUser = A;
+  env.ctx.DB_CACHE_ = {};
+  const app = env.ctx.doGet({ parameter: { p: 'app', r: 'task/GFX-2026-0001"></script>' } });
+  assert.ok(app.html.includes('startApp'));
+  assert.ok(!app.html.includes('"></script>"'));
+  state.currentUser = 'stranger@rosierfoods.com';
+  env.ctx.DB_CACHE_ = {};
+  const no = env.ctx.doGet({ parameter: { p: 'app' } });
+  assert.ok(no.html.includes('stranger@rosierfoods.com'));
+  ['Form', 'Review', 'App', 'NoAccess'].forEach(n => {
+    const html = env.ctx.doGet({ parameter: n === 'Review' ? { p: 'review' } : n === 'NoAccess' ? { p: 'app' } : {} }).html;
+    const scripts = html.match(/<script>([\s\S]*?)<\/script>/g) || [];
+    scripts.forEach(s => { new Function(s.replace(/^<script>|<\/script>$/g, '')); }); // syntax check every inline script
+  });
+});
+
+console.log('\nAcceptance scenarios\n' + results.join('\n') + '\n\n' + passed + '/' + results.length + ' passed');

@@ -1,0 +1,200 @@
+<script>
+/* AppAdmin.js — reports, team management, settings (team leader only; the server enforces this too). */
+
+/* ================= REPORTS ================= */
+var REPORT_RANGE = null;
+
+VIEWS.reports = function (arg, el, token) {
+  setCrumb('Reports');
+  if (!REPORT_RANGE) {
+    var to = new Date(), from = new Date(Date.now() - 89 * 864e5);
+    var iso = function (d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); };
+    REPORT_RANGE = { from: iso(from), to: iso(to) };
+  }
+  api('api_getReports', REPORT_RANGE).then(function (r) {
+    if (stale(token)) return;
+    var s = r.summary;
+    var maxDept = Math.max.apply(null, [1].concat(r.byDepartment.map(function (x) { return x.count; })));
+    var maxType = Math.max.apply(null, [1].concat(r.byCreativeType.map(function (x) { return x.count; })));
+    var bars = function (rows, max) {
+      return rows.length ? rows.map(function (x) {
+        return '<div class="bar-row"><span class="ellipsis" title="' + h(x.label) + '">' + h(x.label) + '</span><span class="bar"><i style="width:' + Math.round(x.count / max * 100) + '%"></i></span><span class="small" style="text-align:right">' + x.count + '</span></div>';
+      }).join('') : emptyState('No tasks in this range.');
+    };
+    var trend = function (rows) {
+      var max = Math.max.apply(null, [1].concat(rows.map(function (x) { return Math.max(x.requirements, x.completed); })));
+      return rows.length ? '<div class="table-wrap"><table class="t"><thead><tr><th>Period</th><th>Requirements in</th><th>Tasks completed</th><th>Creatives approved</th></tr></thead><tbody>' + rows.map(function (x) {
+        return '<tr><td class="mono">' + h(x.period) + '</td>' +
+          '<td><div class="row"><div class="prog" style="width:90px"><i style="width:' + Math.round(x.requirements / max * 100) + '%;background:var(--info)"></i></div>' + x.requirements + '</div></td>' +
+          '<td><div class="row"><div class="prog ok" style="width:90px"><i style="width:' + Math.round(x.completed / max * 100) + '%"></i></div>' + x.completed + '</div></td><td>' + x.approvals + '</td></tr>';
+      }).join('') + '</tbody></table></div>' : emptyState('No activity in this range.');
+    };
+    el.innerHTML =
+      '<div class="page-h"><div><h1>Team analytics</h1><p>Calculated from the live task, assignment and approval records.</p></div>' +
+      '<div class="row wrap"><input type="date" id="rf" value="' + h(r.range.from) + '" style="width:auto"><span class="faint">to</span><input type="date" id="rt" value="' + h(r.range.to) + '" style="width:auto">' +
+      '<button class="btn" id="rApply">Apply</button></div></div>' +
+      '<div class="kpis">' +
+      kpiCard('Requirements received', s.requirements) + kpiCard('Tasks completed', s.tasksCompleted) + kpiCard('Overdue now', s.overdueNow, null, { alert: true }) +
+      kpiCard('Avg. completion', s.avgCompletionDays === null ? '—' : s.avgCompletionDays + 'd', null, { sub: 'assignment → completion' }) +
+      kpiCard('Avg. approval time', s.avgApprovalHours === null ? '—' : (s.avgApprovalHours >= 48 ? Math.round(s.avgApprovalHours / 24 * 10) / 10 + 'd' : s.avgApprovalHours + 'h'), null, { sub: 'link sent → decision' }) +
+      kpiCard('Revision cycles', s.revisionCycles, null, { sub: (s.avgRevisionsPerCompletedTask === null ? '—' : s.avgRevisionsPerCompletedTask) + ' per completed task' }) +
+      kpiCard('Approval rate', s.approvalRate === null ? '—' : s.approvalRate + '%', null, { sub: s.decisions + ' decisions' }) +
+      '</div>' +
+      '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Designers</h3><button class="btn sm" data-csv="designers">' + icon('download') + ' CSV</button></div><div class="table-wrap">' +
+      (r.designers.length ? '<table class="t"><thead><tr><th>Designer</th><th>Assigned</th><th>Completed</th><th>Avg. completion</th><th>Active now</th><th>Overdue now</th><th>Revision cycles</th><th>Approval rate</th></tr></thead><tbody>' +
+        r.designers.map(function (d) {
+          return '<tr><td><b>' + h(d.name) + '</b>' + (d.active ? '' : ' <span class="faint small">(inactive)</span>') + '<div class="faint small">' + h(d.email) + '</div></td><td>' + d.assigned + '</td><td>' + d.completed + '</td>' +
+            '<td>' + (d.avgCompletionDays === null ? '—' : d.avgCompletionDays + ' d') + '</td><td>' + d.activeNow + '</td><td' + (d.overdueNow ? ' class="overdue-flag"' : '') + '>' + d.overdueNow + '</td>' +
+            '<td>' + d.revisionCycles + '</td><td>' + (d.approvalRate === null ? '—' : d.approvalRate + '%') + '</td></tr>';
+        }).join('') + '</tbody></table>' : emptyState('No designer data yet.', '', 'users')) + '</div></div>' +
+      '<div class="grid-2" style="margin-top:18px"><div class="card"><div class="card-h"><h3>Workload by department</h3></div><div class="card-b">' + bars(r.byDepartment, maxDept) + '</div></div>' +
+      '<div class="card"><div class="card-h"><h3>Workload by creative type</h3></div><div class="card-b">' + bars(r.byCreativeType, maxType) + '</div></div></div>' +
+      '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Trends</h3><div class="seg" id="trSeg"><button data-t="weekly" class="on">Weekly</button><button data-t="monthly">Monthly</button></div></div><div id="trend">' + trend(r.weekly) + '</div></div>' +
+      '<div class="card" style="margin-top:18px"><div class="card-b row wrap between"><div><b>Export</b><div class="faint small">CSV files for the selected date range.</div></div><div class="row wrap">' +
+      '<button class="btn" data-csv="tasks">' + icon('download') + ' Tasks</button><button class="btn" data-csv="designers">' + icon('download') + ' Designers</button><button class="btn" data-csv="decisions">' + icon('download') + ' Approval decisions</button></div></div></div>';
+    $('#rApply').onclick = function () {
+      REPORT_RANGE = { from: $('#rf').value, to: $('#rt').value };
+      if (!REPORT_RANGE.from || !REPORT_RANGE.to) return toast('Pick both dates.', true);
+      render('reports');
+    };
+    $all('#trSeg button').forEach(function (b) {
+      b.onclick = function () { $all('#trSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); $('#trend').innerHTML = trend(r[b.getAttribute('data-t')]); };
+    });
+    $all('[data-csv]', el).forEach(function (b) {
+      b.onclick = function () {
+        b.disabled = true;
+        api('api_exportCsv', b.getAttribute('data-csv'), REPORT_RANGE).then(function (x) { downloadText(x.fileName, x.csv); })
+          .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+      };
+    });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+/* ================= TEAM ================= */
+VIEWS.team = function (arg, el, token) {
+  setCrumb('Team management');
+  api('api_listTeam').then(function (d) {
+    if (stale(token)) return;
+    el.innerHTML = '<div class="page-h"><div><h1>Team</h1><p>People who can sign in to the portal. Designers only see their own tasks.</p></div>' +
+      '<button class="btn primary" id="addUser">' + icon('plus') + ' Add team member</button></div>' +
+      '<div class="card"><div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Role</th><th>Active tasks</th><th>Completed</th><th>Status</th><th></th></tr></thead><tbody>' +
+      d.users.map(function (u) {
+        return '<tr><td><b>' + h(u.name) + '</b><div class="faint small">' + h(u.email) + '</div></td><td>' + (u.role === 'leader' ? 'Team leader' : 'Designer') + '</td>' +
+          '<td>' + u.activeTasks + '</td><td>' + u.completed + '</td><td>' + (u.active ? '<span class="badge s-approved">Active</span>' : '<span class="badge s-cancelled">Deactivated</span>') + '</td>' +
+          '<td style="text-align:right;white-space:nowrap"><button class="btn sm ghost" data-edit="' + h(u.email) + '">Edit</button>' +
+          (u.email === APP.boot.user.email ? '' : '<button class="btn sm ' + (u.active ? 'danger' : '') + '" data-toggle="' + h(u.email) + '" data-active="' + (u.active ? '1' : '0') + '">' + (u.active ? 'Deactivate' : 'Reactivate') + '</button>') + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>' +
+      '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Departments</h3><button class="btn sm" id="addDept">' + icon('plus') + ' Add</button></div><div class="card-b row wrap">' +
+      d.departments.map(function (x) {
+        return '<span class="badge plain" style="height:28px;padding:0 4px 0 10px;' + (x.active ? '' : 'opacity:.55') + '">' + h(x.name) +
+          '<button class="btn ghost sm" style="height:22px;padding:0 6px" data-dept="' + h(x.departmentId) + '" data-name="' + h(x.name) + '" data-dactive="' + (x.active ? '1' : '0') + '">' + (x.active ? 'Hide' : 'Show') + '</button></span>';
+      }).join('') + '<p class="faint small" style="width:100%;margin:6px 0 0">Departments appear in the requirement form dropdown.</p></div></div>';
+
+    $('#addUser').onclick = function () { userModal(null, d.allowedDomain); };
+    $all('[data-edit]', el).forEach(function (b) { b.onclick = function () { userModal(d.users.filter(function (u) { return u.email === b.getAttribute('data-edit'); })[0], d.allowedDomain); }; });
+    $all('[data-toggle]', el).forEach(function (b) {
+      b.onclick = function () {
+        var on = b.getAttribute('data-active') === '1', email = b.getAttribute('data-toggle');
+        confirmBox(on ? 'Deactivate ' + email + '?' : 'Reactivate ' + email + '?', on ? 'They lose access immediately. Their open tasks stay assigned so you can reassign them.' : 'They’ll be able to sign in again.', on ? 'Deactivate' : 'Reactivate', on)
+          .then(function (y) {
+            if (!y) return;
+            api('api_setUserActive', email, !on).then(function (r) {
+              toast(on ? 'Deactivated' + (r.openTasks ? ' — ' + r.openTasks + ' open task(s) need reassigning' : '') : 'Reactivated');
+              render('team');
+            }).catch(function (e) { toast(errMsg(e), true); });
+          });
+      };
+    });
+    $('#addDept').onclick = function () {
+      modal({ title: 'Add department', body: '<div class="field"><label class="req">Name</label><input type="text" id="dn" maxlength="100"></div><div class="alert bad hidden" data-form-error></div>',
+        actions: [{ label: 'Cancel' }, { label: 'Add', cls: 'primary', onClick: function (close, m) {
+          return api('api_saveDepartment', { name: $('#dn', m).value }).then(function () { close(); render('team'); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+        } }] });
+    };
+    $all('[data-dept]', el).forEach(function (b) {
+      b.onclick = function () {
+        api('api_saveDepartment', { departmentId: b.getAttribute('data-dept'), name: b.getAttribute('data-name'), active: b.getAttribute('data-dactive') !== '1' })
+          .then(function () { render('team'); }).catch(function (e) { toast(errMsg(e), true); });
+      };
+    });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function userModal(u, domain) {
+  modal({
+    title: u ? 'Edit team member' : 'Add team member',
+    body: '<div class="field"><label class="req">Name</label><input type="text" id="un" maxlength="100" value="' + h(u ? u.name : '') + '"></div>' +
+      '<div class="field"><label class="req">Google account email</label><input type="email" id="ue" maxlength="254" value="' + h(u ? u.email : '') + '"' + (u ? ' readonly' : '') + ' placeholder="name@' + h(domain) + '">' +
+      '<span class="hint">They sign in with this company Google account. No password is created.</span></div>' +
+      '<div class="field"><label class="req">Role</label><select id="ur"><option value="designer"' + (u && u.role === 'designer' ? ' selected' : '') + '>Designer — sees only their own tasks</option>' +
+      '<option value="leader"' + (u && u.role === 'leader' ? ' selected' : '') + '>Team leader — full access</option></select></div>' +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Save', cls: 'primary', onClick: function (close, m) {
+      return api('api_saveUser', { name: $('#un', m).value, email: $('#ue', m).value, role: $('#ur', m).value })
+        .then(function () { close(); toast('Saved'); render('team'); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }]
+  });
+}
+
+/* ================= SETTINGS ================= */
+VIEWS.settings = function (arg, el, token) {
+  setCrumb('Settings');
+  api('api_getSettings').then(function (d) {
+    if (stale(token)) return;
+    var s = d.settings;
+    var txt = function (k, label, hint, type) { return '<div class="field"><label for="s_' + k + '">' + h(label) + '</label><input type="' + (type || 'text') + '" id="s_' + k + '" value="' + h(s[k]) + '">' + (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div>'; };
+    var chk = function (k, label) { return '<label class="check"><input type="checkbox" id="s_' + k + '"' + (s[k] ? ' checked' : '') + '> ' + h(label) + '</label>'; };
+    var sec = function (title, inner) { return '<div class="card"><div class="card-h"><h3>' + h(title) + '</h3></div><div class="card-b stack">' + inner + '</div></div>'; };
+    el.innerHTML = '<div class="page-h"><div><h1>Settings</h1><p>Portal configuration, review links, uploads and Google Drive.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>' +
+      '<div class="two-col"><div class="stack">' +
+      sec('General', '<div class="grid-2">' + txt('companyName', 'Company name') + txt('portalName', 'Portal name') + '</div>' +
+        txt('allowedDomain', 'Company email domain', 'Team members must use this domain. Requesters too, if the box below is ticked.') + chk('requireRequesterDomain', 'Only accept requirements from company email addresses')) +
+      sec('Portal links', txt('publicUrl', 'Public web app URL', 'The …/exec URL of the deployment with access “Anyone”. Used in review links and emails.', 'url') +
+        txt('internalUrl', 'Internal web app URL', 'The …/exec URL of the deployment with access “Anyone within your domain”.', 'url') +
+        txt('brandGuidelinesUrl', 'Brand guidelines link', 'Shown on the request form and every task.', 'url')) +
+      sec('Review links', '<div class="field"><label>Reviewer identity</label><select id="s_reviewerIdentity">' +
+        [['required', 'Required — reviewer must give name and work email'], ['optional', 'Optional — reviewer may give name and email'], ['anonymous', 'Anonymous — don’t ask']].map(function (o) {
+          return '<option value="' + o[0] + '"' + (s.reviewerIdentity === o[0] ? ' selected' : '') + '>' + h(o[1]) + '</option>';
+        }).join('') + '</select></div>' +
+        txt('tokenExpiryDays', 'Link expiry (days)', '1–90. Links also stop working once a decision is made or a newer version is sent.', 'number') +
+        chk('allowReviewerDownload', 'Let reviewers download the file (up to 20 MB)') + chk('sendReviewLinkToRequester', 'Email review links to the requester automatically')) +
+      sec('Workflow', chk('autoCompleteOnApproval', 'Mark tasks Completed automatically once every required creative is approved') +
+        '<div class="grid-2">' + txt('workloadThreshold', 'Workload alert at (active tasks)', '', 'number') + txt('dueSoonHours', 'Due-soon reminder (hours before)', '', 'number') + '</div>' +
+        txt('priorities', 'Priorities (comma separated, highest last)', 'Used in the form and on tasks.')) +
+      sec('Notifications', chk('emailNotifications', 'Send email notifications (in-app notifications are always on)') + chk('emailRequesterOnSubmit', 'Email requesters a confirmation with their reference ID') +
+        '<p class="faint small" style="margin:0">Emails remaining today on this Google account: <b>' + (d.mailQuotaRemaining === null ? 'unknown' : d.mailQuotaRemaining) + '</b></p>') +
+      sec('Uploads', '<div class="grid-3">' + txt('maxUploadMB', 'Team max file size (MB)', '', 'number') + txt('maxPublicUploadMB', 'Requester max file size (MB)', '', 'number') + txt('maxPublicFiles', 'Requester max files', '', 'number') + '</div>' +
+        txt('allowedExtensions', 'File types the team can upload') + txt('publicExtensions', 'File types requesters can attach')) +
+      sec('Creative types & form fields', '<p class="muted small" style="margin:0">Each type can add its own questions to the request form. Field types: text, textarea, number, select (with options).</p>' +
+        '<textarea id="s_creativeTypes" rows="16" class="mono" spellcheck="false">' + h(JSON.stringify(s.creativeTypes, null, 2)) + '</textarea>') +
+      '</div><div class="stack">' +
+      '<div class="card"><div class="card-h"><h3>Google Drive</h3></div><div class="card-b stack">' +
+      (d.drive.rootUrl ? '<a href="' + h(d.drive.rootUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Open portal root folder</a>' : '') +
+      d.drive.folders.map(function (f) {
+        return '<div class="row between small"><span class="mono">' + h(f.name) + '</span>' + (f.ok ? '<span class="badge ' + (f.sharing === 'PRIVATE' ? 's-approved' : 's-submitted-for-approval') + '">' + (f.sharing === 'PRIVATE' ? 'Private' : h(f.sharing)) + '</span>' : '<span class="badge s-changes-requested">Missing</span>') + '</div>';
+      }).join('') +
+      '<p class="faint small" style="margin:0">Folders should stay <b>Private</b>. Reviewers and designers never get Drive links — the portal shows files to them itself. If a folder is missing, the script owner should run <span class="mono">setup()</span> again.</p></div></div>' +
+      '<div class="card"><div class="card-h"><h3>Database</h3></div><div class="card-b stack"><a href="' + h(d.databaseUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Open the Google Sheet</a>' +
+      '<p class="faint small" style="margin:0">Read-only for everyone but the script owner. Don’t edit rows by hand — use the portal.</p></div></div>' +
+      '<div class="card"><div class="card-h"><h3>Workflow statuses</h3></div><div class="card-b"><p class="faint small">Status names are fixed so reports and permissions stay consistent. Allowed manual moves:</p>' +
+      '<div class="stack" style="gap:6px;margin-top:8px">' + d.statuses.map(function (st) {
+        var to = Object.keys(d.transitions[st] || {});
+        return '<div class="small">' + statusBadge(st) + ' <span class="faint">→ ' + (to.length ? to.map(h).join(', ') : 'system only') + '</span></div>';
+      }).join('') + '</div></div></div>' +
+      '</div></div>';
+
+    $('#saveSettings').onclick = function () {
+      var patch = {};
+      ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
+      ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
+      ['requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      try { JSON.parse(patch.creativeTypes); } catch (e) { return toast('Creative types isn’t valid JSON: ' + e.message, true); }
+      var b = this; b.disabled = true;
+      api('api_saveSettings', patch).then(function () {
+        toast('Settings saved');
+        return api('api_bootstrap').then(function (bt) { APP.boot = bt; });
+      }).catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+    };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+</script>

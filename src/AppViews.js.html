@@ -1,0 +1,392 @@
+<script>
+/* AppViews.js — dashboards, requirements queue, task board, approvals. */
+
+/* ================= OVERVIEW ================= */
+VIEWS.overview = function (arg, el, token) {
+  if (APP.role === 'leader') return leaderOverview(el, token);
+  return designerOverview(el, token, arg);
+};
+
+function leaderOverview(el, token) {
+  setCrumb('Overview');
+  api('api_leaderDashboard').then(function (d) {
+    if (stale(token)) return;
+    navCount('requirements', d.kpis.newRequirements);
+    navCount('approvals', d.pendingApprovals.length);
+    var k = d.kpis;
+    el.innerHTML =
+      '<div class="page-h"><div><h1>Good ' + greeting() + ', ' + h(APP.boot.user.name.split(' ')[0]) + '</h1><p>Here’s where the graphics team stands today.</p></div>' +
+      '<button class="btn primary" data-go="requirements">' + icon('inbox') + ' Review requirements</button></div>' +
+      '<div class="kpis">' +
+      kpiCard('New requirements', k.newRequirements, 'tasks/status=' + encodeURIComponent('New Requirement'), { color: 'var(--info)' }) +
+      kpiCard('Unassigned', k.unassigned, 'tasks/status=unassigned', { color: '#5b3f8f' }) +
+      kpiCard('In progress', k.inProgress, 'tasks/status=' + encodeURIComponent('In Progress'), { color: 'var(--accent)' }) +
+      kpiCard('Awaiting approval', k.awaitingApproval, 'approvals', { color: 'var(--warn)' }) +
+      kpiCard('Revisions required', k.revisions, 'tasks/status=' + encodeURIComponent('Changes Requested'), { color: 'var(--bad)' }) +
+      kpiCard('Completed', k.completed, 'tasks/status=Completed', { color: 'var(--ok)', sub: k.completedThisMonth + ' this month' }) +
+      kpiCard('Overdue', k.overdue, 'tasks/status=overdue', { alert: true, color: 'var(--bad)' }) +
+      '</div>' +
+      '<div class="two-col" style="margin-top:18px"><div class="stack">' +
+      listCard('Incoming requirements', d.incoming, 'Nothing new. Requirements raised through the form land here.', 'requirements', true) +
+      listCard('Ready to assign', d.needsAssignment, 'No tasks are waiting for a designer.', 'tasks/status=' + encodeURIComponent('Ready for Assignment'), true) +
+      listCard('Overdue', d.overdue, 'Nothing is overdue. Nice.', 'tasks/status=overdue', false) +
+      '</div><div class="stack">' +
+      approvalsMini(d.pendingApprovals) +
+      workloadCard(d.workload, d.workloadThreshold) +
+      activityCard(d.activity) +
+      '</div></div>';
+    wireGo(el);
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+}
+
+function greeting() { var h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
+
+function listCard(title, rows, emptyText, moreRoute, showRequester) {
+  return '<div class="card"><div class="card-h"><h3>' + h(title) + (rows.length ? ' <span class="faint">(' + rows.length + ')</span>' : '') + '</h3>' +
+    (moreRoute ? '<a href="#" class="small" data-go="' + h(moreRoute) + '">View all</a>' : '') + '</div><div class="card-b tight">' +
+    (rows.length ? rows.map(function (t) {
+      return '<div class="list-item" data-go="task/' + h(t.taskId) + '"><div class="li-main"><div class="li-title">' + h(t.title) + '</div>' +
+        '<div class="li-sub">' + h(t.taskId) + (showRequester && t.requesterName ? ' · ' + h(t.requesterName) + ' · ' + h(t.department) : '') +
+        (t.assigneeName ? ' · ' + h(t.assigneeName) : '') + '</div></div>' +
+        '<div class="row" style="flex:none">' + priorityBadge(t.priority) + '<span class="small">' + dueLabel(t) + '</span></div></div>';
+    }).join('') : emptyState(emptyText)) + '</div></div>';
+}
+
+function approvalsMini(rows) {
+  return '<div class="card"><div class="card-h"><h3>Pending approvals</h3><a href="#" class="small" data-go="approvals">Open approvals</a></div><div class="card-b tight">' +
+    (rows.length ? rows.map(function (r) {
+      return '<div class="list-item" data-go="task/' + h(r.taskId) + '"><div class="li-main"><div class="li-title">' + h(r.deliverableTitle) + ' <span class="faint">V' + h(r.versionNo) + '</span></div>' +
+        '<div class="li-sub">' + h(r.taskId) + ' · ' + h(r.uploadedByName) + ' · sent ' + ago(r.createdAt) + '</div></div>' + statusBadge('Awaiting Approval') + '</div>';
+    }).join('') : emptyState('No creatives waiting for review.', '', 'check')) + '</div></div>';
+}
+
+function workloadCard(rows, threshold) {
+  var max = Math.max(threshold, rows.reduce(function (m, r) { return Math.max(m, r.active); }, 0), 1);
+  return '<div class="card"><div class="card-h"><h3>Designer workload</h3><span class="faint small">Alert at ' + threshold + '+ active</span></div><div class="card-b">' +
+    (rows.length ? rows.map(function (r) {
+      return '<div class="bar-row" title="' + h(r.active + ' active, ' + r.overdue + ' overdue, ' + r.awaiting + ' awaiting approval') + '">' +
+        '<span class="ellipsis">' + h(r.name) + (r.overloaded ? ' <span style="color:var(--bad)">●</span>' : '') + '</span>' +
+        '<span class="bar"><i class="' + (r.overloaded ? 'hot' : '') + '" style="width:' + Math.round(r.active / max * 100) + '%"></i></span>' +
+        '<span class="small" style="text-align:right">' + r.active + (r.overdue ? ' <span class="overdue-flag">·' + r.overdue + '</span>' : '') + '</span></div>';
+    }).join('') : emptyState('Add designers in Team Management.', '', 'users')) + '</div></div>';
+}
+
+function activityCard(rows) {
+  return '<div class="card"><div class="card-h"><h3>Recent activity</h3></div><div class="card-b" style="max-height:420px;overflow-y:auto">' +
+    (rows.length ? '<ul class="timeline">' + rows.map(function (a) {
+      return '<li><a href="#" data-go="task/' + h(a.taskId) + '"><b>' + h(a.taskId) + '</b></a> · ' + activityText(a) +
+        '<div class="t-meta">' + h(a.actor) + ' · ' + ago(a.createdAt) + '</div></li>';
+    }).join('') + '</ul>' : emptyState('No activity yet.')) + '</div></div>';
+}
+
+/** Human sentence for an activity row. */
+function activityText(a) {
+  switch (a.action) {
+    case 'created': return 'raised this' + (a.note ? ' — ' + h(a.note) : '');
+    case 'status': return 'moved from ' + h(a.fromValue) + ' to <b>' + h(a.toValue) + '</b>' + (a.note && a.note !== 'Updated automatically' ? ' — ' + h(a.note) : '');
+    case 'assigned': return 'assigned to <b>' + h(a.toValue || '') + '</b>' + (a.fromValue ? ' (was ' + h(a.fromValue) + ')' : '');
+    case 'assignment': return h(a.toValue || 'assigned') + ' this task' + (a.note ? ' · ' + h(a.note) : '');
+    case 'progress': return 'updated progress ' + h(a.fromValue) + ' → <b>' + h(a.toValue) + '</b>';
+    case 'upload': return 'uploaded <b>' + h(a.toValue) + '</b>';
+    case 'submitted': return 'sent <b>' + h(a.toValue) + '</b> for approval';
+    case 'approved': return '<span style="color:var(--ok)">approved</span> <b>' + h(a.toValue) + '</b>';
+    case 'changes_requested': return '<span style="color:var(--bad)">requested changes</span> on <b>' + h(a.toValue) + '</b>';
+    case 'comment': return 'commented';
+    case 'updated': return 'updated ' + h(a.toValue);
+    case 'reference_added': return 'added reference ' + h(a.toValue);
+    case 'link_created': return 'created a review link';
+    case 'link_revoked': return 'revoked review links';
+    case 'overdue': return '<span class="overdue-flag">became overdue</span>';
+    default: return h(a.action);
+  }
+}
+
+/* ================= DESIGNER DASHBOARD ================= */
+var DESIGNER_TABS = [
+  { id: 'all', label: 'All my tasks', f: function () { return true; } },
+  { id: 'todo', label: 'To do', f: function (t) { return t.status === 'Assigned'; } },
+  { id: 'progress', label: 'In progress', f: function (t) { return t.status === 'In Progress'; } },
+  { id: 'awaiting', label: 'Awaiting approval', f: function (t) { return t.status === 'Submitted for Approval' || t.status === 'Resubmitted for Approval'; } },
+  { id: 'revisions', label: 'Revisions required', f: function (t) { return t.status === 'Changes Requested'; } },
+  { id: 'done', label: 'Completed', f: function (t) { return t.status === 'Completed' || t.status === 'Approved'; } }
+];
+
+function designerOverview(el, token, tab) {
+  setCrumb('My dashboard');
+  api('api_designerDashboard').then(function (d) {
+    if (stale(token)) return;
+    var k = d.kpis, s = d.stats;
+    navCount('tasks', k.changesRequested);
+    el.innerHTML =
+      '<div class="page-h"><div><h1>Hi ' + h(APP.boot.user.name.split(' ')[0]) + '</h1><p>Your tasks and deadlines.</p></div></div>' +
+      '<div class="kpis">' +
+      kpiCard('My active tasks', k.active, null, { color: 'var(--accent)' }) +
+      kpiCard('Due today', k.dueToday, null, { alert: true, color: 'var(--warn)' }) +
+      kpiCard('Due in next 7 days', k.upcoming, null, { color: 'var(--info)' }) +
+      kpiCard('Awaiting my submission', k.awaitingSubmission, null, { color: '#5b3f8f' }) +
+      kpiCard('Changes requested', k.changesRequested, null, { alert: true, color: 'var(--bad)' }) +
+      kpiCard('Approved this month', k.approvedThisMonth, null, { color: 'var(--ok)' }) +
+      '</div>' +
+      '<div class="card" style="margin-top:14px"><div class="card-b row wrap" style="gap:24px;font-size:13px">' +
+      '<span><span class="faint">Completed (all time)</span> <b>' + s.completedTotal + '</b></span>' +
+      '<span><span class="faint">Avg. completion</span> <b>' + (s.avgCompletionDays === null ? '—' : s.avgCompletionDays + ' days') + '</b></span>' +
+      '<span><span class="faint">Approval rate</span> <b>' + (s.approvalRate === null ? '—' : s.approvalRate + '%') + '</b></span>' +
+      '<span><span class="faint">Overdue now</span> <b' + (s.overdue ? ' class="overdue-flag"' : '') + '>' + s.overdue + '</b></span></div></div>' +
+      '<div class="card" style="margin-top:14px"><div class="tabs" id="dtabs" style="padding:0 8px">' +
+      DESIGNER_TABS.map(function (t) { return '<button data-tab="' + t.id + '">' + h(t.label) + '<span class="count">' + d.tasks.filter(t.f).length + '</span></button>'; }).join('') +
+      '</div><div id="dlist"></div></div>';
+    function show(id) {
+      var tab = DESIGNER_TABS.filter(function (t) { return t.id === id; })[0] || DESIGNER_TABS[0];
+      $all('#dtabs button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === tab.id); });
+      var rows = d.tasks.filter(tab.f);
+      $('#dlist').innerHTML = rows.length ? '<div class="cards-grid">' + rows.map(designerCard).join('') + '</div>' :
+        emptyState(tab.id === 'all' ? 'No tasks assigned to you yet.' : 'Nothing here right now.', tab.id === 'all' ? 'Your team leader will assign work to you.' : '', 'tasks');
+      wireGo($('#dlist'));
+    }
+    $all('#dtabs button').forEach(function (b) { b.onclick = function () { show(b.getAttribute('data-tab')); }; });
+    show(tab === 'revisions' ? 'revisions' : (k.changesRequested ? 'revisions' : 'all'));
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+}
+
+function designerCard(t) {
+  return '<div class="tcard" data-go="task/' + h(t.taskId) + '">' +
+    '<div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
+    '<div class="tc-title">' + h(t.title) + '</div>' +
+    '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + ' creatives approved</div>' +
+    '<div class="row between">' + statusBadge(t.status) + '<span class="small">Due ' + dueLabel(t) + '</span></div>' +
+    '<div class="row"><div class="grow">' + progressBar(t.progress, t.status === 'Completed') + '</div><span class="faint small">' + h(t.progress) + '%</span></div></div>';
+}
+
+/* ================= REQUIREMENTS (leader) ================= */
+VIEWS.requirements = function (arg, el, token) {
+  setCrumb('Incoming requirements');
+  api('api_listTasks', { status: 'unassigned' }).then(function (rows) {
+    if (stale(token)) return;
+    rows.sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+    navCount('requirements', rows.filter(function (r) { return r.status === 'New Requirement'; }).length);
+    var publicUrl = APP.boot.publicUrl;
+    el.innerHTML = '<div class="page-h"><div><h1>Incoming requirements</h1><p>Everything raised through the request form that still needs a designer.</p></div>' +
+      (publicUrl ? '<button class="btn" id="copyForm">' + icon('link') + ' Copy request-form link</button>' : '') + '</div>' +
+      '<div class="card"><div class="table-wrap">' + (rows.length ? '<table class="t"><thead><tr><th>Requirement</th><th>Requested by</th><th>Type</th><th>Qty</th><th>Wanted by</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>' +
+      rows.map(function (t) {
+        return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' + h(t.requirementId) + ' · ' + h(t.taskId) + ' · ' + ago(t.createdAt) + '</div></td>' +
+          '<td>' + h(t.requesterName) + '<div class="faint small">' + h(t.department) + '</div></td><td>' + h(t.creativeType) + '</td><td>' + h(t.deliverablesRequired) + '</td>' +
+          '<td>' + dueLabel(t) + '</td><td>' + priorityBadge(t.priority) + '</td><td>' + statusBadge(t.status) + '</td>' +
+          '<td><button class="btn sm primary" data-go="task/' + h(t.taskId) + '">Review & assign</button></td></tr>';
+      }).join('') + '</tbody></table>' : emptyState('No requirements waiting.', 'New requests from the form will show up here.')) + '</div></div>';
+    wireGo(el);
+    if ($('#copyForm')) $('#copyForm').onclick = function () { copyText(publicUrl); };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function copyText(text) {
+  function fallback() {
+    modal({ title: 'Copy link', body: '<input type="text" readonly value="' + h(text) + '" id="cpy">', actions: [{ label: 'Done' }] });
+    setTimeout(function () { var i = $('#cpy'); if (i) { i.select(); } }, 50);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast('Link copied'); }, fallback);
+  else fallback();
+}
+
+/* ================= TASKS ================= */
+var TASK_UI = { view: 'table', sort: 'dueDate', dir: 1, filters: {} };
+
+VIEWS.tasks = function (arg, el, token) {
+  if (APP.role !== 'leader') return designerOverview(el, token);
+  setCrumb('Tasks');
+  // Deep links like tasks/status=Completed
+  if (arg && arg.indexOf('status=') === 0) TASK_UI.filters = { status: decodeURIComponent(arg.slice(7)) };
+  else if (!arg) TASK_UI.filters = TASK_UI.filters || {};
+  el.innerHTML = '<div class="page-h"><div><h1>Task board</h1><p>Every graphics task, filter by status, priority, campaign or deadline.</p></div>' +
+    '<div class="seg" id="viewSeg"><button data-v="table">' + icon('list') + ' Table</button><button data-v="board">' + icon('board') + ' Board</button></div></div>' +
+    '<div class="card"><div class="filters" id="filters"></div><div id="taskOut"><div class="loading-page"><span class="spinner"></span></div></div></div>';
+  $all('#viewSeg button').forEach(function (b) {
+    b.innerHTML = b.innerHTML; b.classList.toggle('on', b.getAttribute('data-v') === TASK_UI.view);
+    b.onclick = function () { TASK_UI.view = b.getAttribute('data-v'); $all('#viewSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); drawTasks(); };
+  });
+  Promise.all([api('api_listTasks', {}), api('api_leaderDashboard')]).then(function (res) {
+    if (stale(token)) return;
+    TASK_UI.all = res[0];
+    TASK_UI.team = res[1].workload;
+    TASK_UI.campaigns = res[1].campaigns;
+    drawFilters();
+    drawTasks();
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function drawFilters() {
+  var f = TASK_UI.filters;
+  var statuses = [['', 'All statuses'], ['open', 'All open'], ['unassigned', 'Unassigned'], ['overdue', 'Overdue']].concat(APP.boot.statuses.map(function (s) { return [s, s]; }));
+  $('#filters').innerHTML =
+    '<input type="search" id="fq" placeholder="Search title, ID, campaign, requester…" value="' + h(f.q || '') + '">' +
+    sel('fs', statuses, f.status) +
+    sel('fp', [['', 'Any priority']].concat(APP.boot.priorities.map(function (p) { return [p, p]; })), f.priority) +
+    sel('fa', [['', 'Any designer'], ['__none', 'Unassigned']].concat((TASK_UI.team || []).map(function (u) { return [u.email, u.name]; })), f.assignee) +
+    sel('fc', [['', 'Any campaign']].concat((TASK_UI.campaigns || []).map(function (c) { return [c, c]; })), f.campaign) +
+    '<label class="small faint">Due</label><input type="date" id="fdf" value="' + h(f.dueFrom || '') + '"><span class="faint">–</span><input type="date" id="fdt" value="' + h(f.dueTo || '') + '">' +
+    '<button class="btn ghost sm" id="fclear">Clear</button>';
+  function sel(id, opts, val) {
+    return '<select id="' + id + '">' + opts.map(function (o) { return '<option value="' + h(o[0]) + '"' + (o[0] === (val || '') ? ' selected' : '') + '>' + h(o[1]) + '</option>'; }).join('') + '</select>';
+  }
+  var update = function () {
+    TASK_UI.filters = { q: $('#fq').value, status: $('#fs').value, priority: $('#fp').value, assignee: $('#fa').value, campaign: $('#fc').value, dueFrom: $('#fdf').value, dueTo: $('#fdt').value };
+    drawTasks();
+  };
+  ['fs', 'fp', 'fa', 'fc', 'fdf', 'fdt'].forEach(function (id) { $('#' + id).onchange = update; });
+  var timer; $('#fq').oninput = function () { clearTimeout(timer); timer = setTimeout(update, 200); };
+  $('#fclear').onclick = function () { TASK_UI.filters = {}; drawFilters(); drawTasks(); };
+}
+
+function filterTasks(rows) {
+  var f = TASK_UI.filters, q = String(f.q || '').toLowerCase().trim(), today = todayIso();
+  var CLOSED = ['Completed', 'Cancelled'], PRE = ['New Requirement', 'Under Review', 'Ready for Assignment'];
+  return rows.filter(function (t) {
+    if (f.status === 'open' && CLOSED.indexOf(t.status) !== -1) return false;
+    if (f.status === 'unassigned' && PRE.indexOf(t.status) === -1) return false;
+    if (f.status === 'overdue' && !t.overdue) return false;
+    if (f.status && ['open', 'unassigned', 'overdue'].indexOf(f.status) === -1 && t.status !== f.status) return false;
+    if (f.priority && t.priority !== f.priority) return false;
+    if (f.assignee === '__none' && t.assigneeEmail) return false;
+    if (f.assignee && f.assignee !== '__none' && t.assigneeEmail !== f.assignee) return false;
+    if (f.campaign && t.campaign !== f.campaign) return false;
+    if (f.dueFrom && (!t.dueDate || t.dueDate < f.dueFrom)) return false;
+    if (f.dueTo && (!t.dueDate || t.dueDate > f.dueTo)) return false;
+    if (q && [t.taskId, t.requirementId, t.title, t.campaign, t.product, t.requesterName, t.department, t.assigneeName].join(' ').toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+}
+
+var PRIORITY_RANK = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
+
+function drawTasks() {
+  var rows = filterTasks(TASK_UI.all || []);
+  var out = $('#taskOut');
+  if (!out) return;
+  if (TASK_UI.view === 'board') {
+    var cols = [
+      ['Incoming', ['New Requirement', 'Under Review', 'Ready for Assignment']],
+      ['Assigned', ['Assigned']], ['In progress', ['In Progress']],
+      ['In review', ['Submitted for Approval', 'Resubmitted for Approval']], ['Changes requested', ['Changes Requested']],
+      ['Done', ['Approved', 'Completed']], ['On hold / cancelled', ['On Hold', 'Cancelled']]
+    ];
+    out.innerHTML = '<div class="board" style="padding:14px">' + cols.map(function (c) {
+      var list = rows.filter(function (t) { return c[1].indexOf(t.status) !== -1; });
+      return '<div class="col"><div class="col-h"><span>' + h(c[0]) + '</span><span>' + list.length + '</span></div>' +
+        list.map(function (t) {
+          return '<div class="tcard" data-go="task/' + h(t.taskId) + '"><div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
+            '<div class="tc-title">' + h(t.title) + '</div><div class="tc-meta">' + (t.assigneeName ? h(t.assigneeName) : '<i>Unassigned</i>') + ' · due ' + dueLabel(t) + '</div>' +
+            (c[1].length > 1 ? statusBadge(t.status) : '') + '</div>';
+        }).join('') + '</div>';
+    }).join('') + '</div>';
+  } else {
+    var key = TASK_UI.sort, dir = TASK_UI.dir;
+    rows.sort(function (a, b) {
+      var x = a[key], y = b[key];
+      if (key === 'priority') { x = PRIORITY_RANK[x]; y = PRIORITY_RANK[y]; }
+      if (key === 'progress') { x = Number(x); y = Number(y); }
+      if (x === y) return 0;
+      if (x === '' || x === undefined) return 1; if (y === '' || y === undefined) return -1;
+      return (x > y ? 1 : -1) * dir;
+    });
+    var th = function (k, label) { return '<th class="sortable" data-sort="' + k + '">' + h(label) + (key === k ? (dir > 0 ? ' ↑' : ' ↓') : '') + '</th>'; };
+    out.innerHTML = rows.length ? '<div class="table-wrap"><table class="t"><thead><tr>' + th('taskId', 'Task') + th('title', 'Title') + th('assigneeName', 'Designer') +
+      th('priority', 'Priority') + th('dueDate', 'Due') + th('status', 'Status') + th('progress', 'Progress') + '<th>Creatives</th></tr></thead><tbody>' +
+      rows.map(function (t) {
+        return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td class="mono">' + h(t.taskId) + '</td><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' +
+          h([t.campaign, t.department].filter(Boolean).join(' · ')) + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
+          '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + '</td>' +
+          '<td><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="faint small">' + h(t.progress) + '%</span></div></td>' +
+          '<td>' + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' : emptyState('No tasks match these filters.', 'Try clearing a filter.', 'tasks');
+    $all('th[data-sort]', out).forEach(function (x) {
+      x.onclick = function () { var k = x.getAttribute('data-sort'); if (TASK_UI.sort === k) TASK_UI.dir *= -1; else { TASK_UI.sort = k; TASK_UI.dir = 1; } drawTasks(); };
+    });
+  }
+  wireGo(out);
+}
+
+/* ================= APPROVALS (leader) ================= */
+VIEWS.approvals = function (arg, el, token) {
+  setCrumb('Creative approvals');
+  var scope = arg === 'history' ? 'all' : 'open';
+  api('api_listApprovals', scope).then(function (rows) {
+    if (stale(token)) return;
+    if (scope === 'open') navCount('approvals', rows.length);
+    el.innerHTML = '<div class="page-h"><div><h1>Creative approvals</h1><p>Creatives sent for review, and the decisions on them.</p></div></div>' +
+      '<div class="card"><div class="tabs" style="padding:0 8px"><button data-go="approvals" class="' + (scope === 'open' ? 'on' : '') + '">Waiting for a decision</button>' +
+      '<button data-go="approvals/history" class="' + (scope === 'all' ? 'on' : '') + '">History</button></div>' +
+      (rows.length ? rows.map(function (r) {
+        var dec = r.decision;
+        return '<div class="ver" data-req="' + h(r.requestId) + '">' +
+          '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.fileName) + '">' + ext(r.fileName) + '</div>' +
+          '<div class="grow"><div class="row wrap"><b>' + h(r.deliverableTitle) + '</b><span class="badge plain">V' + h(r.versionNo) + '</span>' +
+          (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
+          '<div class="faint small"><a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a> · ' + h(r.taskTitle) + ' · by <b>' + h(r.uploadedByName) + '</b> · sent ' + fmtDateTime(r.createdAt) + '</div>' +
+          (dec ? '<div class="feedback ' + (dec.decision === 'approved' ? 'approved' : 'changes') + '">' + (dec.reviewerName ? h(dec.reviewerName) + (dec.reviewerEmail ? ' (' + h(dec.reviewerEmail) + ')' : '') : 'Anonymous reviewer') +
+            ' · ' + fmtDateTime(dec.decidedAt) + (dec.channel === 'portal' ? ' · in portal' : '') + (dec.comment ? '<div class="pre">' + h(dec.comment) + '</div>' : '') + '</div>' : '') +
+          '</div>' +
+          (r.status === 'Open' ? '<div class="row wrap" style="flex:none"><button class="btn sm" data-link="' + h(r.versionId) + '">' + icon('link') + ' Link</button>' +
+            '<button class="btn sm danger" data-chg="' + h(r.versionId) + '">Changes</button><button class="btn sm ok" data-ok="' + h(r.versionId) + '">Approve</button></div>' : '') +
+          '</div>';
+      }).join('') : emptyState(scope === 'open' ? 'Nothing waiting for a decision.' : 'No decisions yet.', '', 'check')) + '</div>';
+    wireGo(el);
+    loadThumbs(el);
+    $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved'); }; });
+    $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes'); }; });
+    $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+/** Lazy-load small previews for [data-thumb] elements; click opens a larger one. */
+function loadThumbs(root) {
+  $all('[data-thumb]', root).forEach(function (t) {
+    var id = t.getAttribute('data-thumb'), kind = t.getAttribute('data-kind') || 'version';
+    api('api_getAsset', kind, id, 'thumb').then(function (p) {
+      if (p.dataUrl) t.innerHTML = '<img src="' + h(p.dataUrl) + '" alt="">';
+    }).catch(function () { /* keep the extension label */ });
+    t.onclick = function () { openAsset(kind, id, t.getAttribute('data-name')); };
+  });
+}
+
+function openAsset(kind, id, name) {
+  var lb = lightbox('', (name || '') + ' (loading…)', '<button class="btn sm" data-dl>' + icon('download') + ' Download</button>');
+  $('[data-dl]', lb).onclick = function () {
+    api('api_getAsset', kind, id, 'original').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); }).catch(function (e) { toast(errMsg(e), true); });
+  };
+  api('api_getAsset', kind, id, 'preview').then(function (p) {
+    if (!document.body.contains(lb)) return;
+    $('.lb-bar .ellipsis', lb).textContent = name || '';
+    if (p.dataUrl) $('img', lb).src = p.dataUrl;
+    else $('.lb-stage', lb).innerHTML = '<div class="empty" style="color:#ddd">' + h(p.message || 'No preview available. Use Download.') + '</div>';
+  }).catch(function (e) { toast(errMsg(e), true); lb.remove(); });
+}
+
+function leaderDecide(versionId, decision, after) {
+  var approve = decision === 'approved';
+  modal({
+    title: approve ? 'Approve this creative?' : 'Request changes',
+    body: (approve ? '<p class="muted">The approval is recorded under your name. Any open review links for this version will stop working.</p>' : '') +
+      '<div class="field"><label class="' + (approve ? '' : 'req') + '">Feedback for the designer</label><textarea id="ldc" rows="4" maxlength="4000"></textarea></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: approve ? 'Approve' : 'Send feedback', cls: approve ? 'ok' : 'danger solid', onClick: function (close, m) {
+        var c = $('#ldc', m).value.trim();
+        if (!approve && c.length < 5) return fieldErrors(m, 'Tell the designer what to change.');
+        return api('api_leaderDecision', versionId, decision, c).then(function () {
+          close(); toast(approve ? 'Approved' : 'Feedback sent'); if (after) after(); else render(APP.route); loadNotifications();
+        }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      }
+    }]
+  });
+}
+
+function newReviewLink(versionId) {
+  api('api_createReviewLink', versionId).then(function (r) {
+    modal({
+      title: 'New review link', body: '<p class="muted">Share this with the person who should approve the creative. It works without login and expires in ' + h(r.expiresInDays) + ' days. Older links keep working until a decision is made or you revoke them.</p>' +
+        '<input type="text" readonly id="rlink" value="' + h(r.url) + '">',
+      actions: [{ label: 'Close' }, { label: 'Copy link', cls: 'primary', onClick: function (close) { copyText(r.url); close(); } }]
+    });
+    setTimeout(function () { var i = $('#rlink'); if (i) i.select(); }, 60);
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+</script>

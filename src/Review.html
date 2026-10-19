@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<?!= include_('Styles') ?>
+<style>
+  .pub-head { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .pub-head .in { max-width: 1240px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 20px 60px; }
+  .rv { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+  .rv-preview { position: sticky; top: 16px; }
+  .rv-preview .preview-box { min-height: 420px; cursor: zoom-in; }
+  .rv-preview .preview-box img { max-height: 76vh; }
+  .rv-tools { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .meta-title { font-size: 20px; margin-bottom: 4px; }
+  .decide { display: flex; flex-direction: column; gap: 12px; }
+  .decide .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .decide .btn { height: auto; min-height: 46px; font-size: 13px; letter-spacing: .02em; white-space: normal; min-width: 0; padding: 6px 10px; line-height: 1.25; }
+  .state { max-width: 520px; margin: 60px auto; text-align: center; padding: 40px 28px; }
+  .state .ic { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 14px; background: var(--muted-soft); color: var(--text-3); }
+  .state .ic svg { width: 26px; height: 26px; }
+  .state.ok .ic { background: var(--ok-soft); color: var(--ok); }
+  .hist { border-left: 2px solid var(--line); padding-left: 12px; font-size: 13px; }
+  @media (max-width: 900px) { .rv { grid-template-columns: 1fr; } .rv-preview { position: static; } .rv-preview .preview-box { min-height: 240px; } }
+</style>
+</head>
+<body>
+<header class="pub-head"><div class="in">
+  <div class="brand"><div class="mark" id="brandMark">G</div><span id="brandName">Creative review</span></div>
+  <span class="faint small">Secure review link</span>
+</div></header>
+<main id="main"><div class="loading-page"><span class="spinner"></span> Loading creative…</div></main>
+
+<?!= include_('Common.js') ?>
+<script>
+var BOOT = <?!= bootJson ?>;
+var TOKEN = BOOT.token, DATA = null, ORIGINAL = null;
+
+if (!TOKEN) showState('invalid'); else load();
+
+function load() {
+  api('api_getReview', TOKEN).then(function (d) {
+    DATA = d;
+    if (d.companyName) { $('#brandName').textContent = d.companyName + ' · Creative review'; $('#brandMark').textContent = d.companyName.charAt(0); }
+    if (d.state === 'open') render(); else showState(d.state, d);
+  }).catch(function (e) {
+    $('#main').innerHTML = '<div class="card state"><div class="ic">' + icon('alert') + '</div><h2>Couldn’t load this creative</h2><p class="muted">' + h(errMsg(e)) +
+      '</p><button class="btn" onclick="load()">Try again</button></div>';
+  });
+}
+
+function showState(state, d) {
+  var c = (d && d.creative) || {};
+  var map = {
+    invalid: ['alert', 'This link isn’t valid', 'Please check you copied the full link, or ask the graphics team for a new one.'],
+    expired: ['clock', 'This review link has expired', 'Ask the graphics team for a fresh link.'],
+    revoked: ['x', 'This review link is no longer active', 'The graphics team has withdrawn this link. Ask them for the latest one.'],
+    superseded: ['refresh', 'A newer version is waiting for you', 'This version was replaced by an updated one. Use the newest review link from the graphics team.'],
+    decided: ['check', 'Decision recorded', '']
+  };
+  var m = map[state] || map.invalid;
+  var extra = '';
+  if (state === 'decided' && d && d.decision) {
+    m[1] = d.decision.decision === 'approved' ? 'Creative approved' : 'Changes requested';
+    extra = '<p class="muted">' + h(c.title) + ' · ' + h(c.version) + ' — recorded on ' + fmtDate(d.decision.decidedOn) + '.</p>' +
+      (d.decision.comment ? '<div class="alert info" style="text-align:left">' + h(d.decision.comment) + '</div>' : '') +
+      '<p class="faint small" style="margin-top:12px">Thank you. The graphics team has been notified.</p>';
+  }
+  $('#main').innerHTML = '<div class="card state' + (state === 'decided' ? ' ok' : '') + '"><div class="ic">' + icon(m[0]) + '</div><h2>' + h(m[1]) + '</h2>' +
+    (m[2] ? '<p class="muted" style="margin-top:6px">' + h(m[2]) + '</p>' : '') + extra + '</div>';
+}
+
+function render() {
+  var c = DATA.creative, mode = DATA.identityMode;
+  var hist = (DATA.history || []).map(function (x) {
+    return '<div class="hist"><div><b>' + h(x.version) + '</b> · ' + (x.decision === 'approved' ? 'Approved' : 'Changes requested') + ' · <span class="faint">' + fmtDate(x.decidedOn) + '</span></div>' +
+      (x.comment ? '<div class="pre muted">' + h(x.comment) + '</div>' : '') + '</div>';
+  }).join('');
+  $('#main').innerHTML =
+    '<div class="rv">' +
+    '<div class="rv-preview"><div class="preview-box" id="pv" title="Click to zoom">' + previewHtml(DATA.preview, c.title) + '</div>' +
+    '<div class="rv-tools">' +
+    (DATA.isImage ? '<button class="btn" id="zoomBtn">' + icon('zoomIn') + ' Zoom / full resolution</button>' : '') +
+    (DATA.allowDownload && DATA.canOpenOriginal ? '<button class="btn" id="dlBtn">' + icon('download') + ' Download ' + h(c.fileType) + '</button>' : '') +
+    '<span class="faint small" style="align-self:center">' + h(c.fileType) + ' · ' + h(c.fileSize) + '</span></div>' +
+    (DATA.preview && DATA.preview.kind === 'thumbnail' ? '<p class="faint small" style="margin-top:6px">This is a preview image of the file. Download it to see the original.</p>' : '') +
+    '</div>' +
+
+    '<div class="stack">' +
+    '<div class="card"><div class="card-b"><div class="row between" style="align-items:flex-start"><div class="grow"><div class="faint small">' + h(c.deliverableType || 'Creative') + '</div>' +
+    '<h1 class="meta-title">' + h(c.title) + '</h1></div>' + statusBadge(c.status) + '</div>' +
+    '<dl class="kv" style="margin-top:12px">' +
+    '<dt>Purpose</dt><dd>' + h(c.purpose || '—') + '</dd>' +
+    (c.campaign ? '<dt>Campaign</dt><dd>' + h(c.campaign) + '</dd>' : '') +
+    (c.product ? '<dt>Product</dt><dd>' + h(c.product) + '</dd>' : '') +
+    '<dt>Dimensions</dt><dd>' + h(c.dimensions || '—') + '</dd>' +
+    '<dt>Version</dt><dd><b>' + h(c.version) + '</b></dd>' +
+    '<dt>Submitted</dt><dd>' + fmtDate(c.submittedOn) + '</dd></dl></div></div>' +
+
+    (hist ? '<div class="card"><div class="card-b stack" style="gap:10px"><div class="section-title" style="margin:0">Earlier feedback on this creative</div>' + hist + '</div></div>' : '') +
+
+    '<div class="card"><div class="card-b decide" id="decide">' +
+    '<h2>Your decision</h2>' +
+    (mode !== 'anonymous' ?
+      '<div class="field"><label for="rn" class="' + (mode === 'required' ? 'req' : '') + '">Your name</label><input type="text" id="rn" maxlength="100" autocomplete="name"></div>' +
+      '<div class="field"><label for="re" class="' + (mode === 'required' ? 'req' : '') + '">Work email</label><input type="email" id="re" maxlength="254" autocomplete="email"></div>' : '') +
+    '<div class="field"><label for="cm">Feedback <span class="faint" id="cmHint">(needed if you request changes)</span></label>' +
+    '<textarea id="cm" rows="4" maxlength="4000" placeholder="What should change? Be as specific as you can."></textarea></div>' +
+    '<div class="alert bad hidden" data-form-error></div>' +
+    '<div class="btns"><button class="btn danger" id="chgBtn">REQUEST CHANGES</button><button class="btn ok" id="okBtn">' + icon('check') + ' APPROVE CREATIVE</button></div>' +
+    (mode === 'anonymous' ? '<p class="faint small" style="margin:0">Your review is recorded without your name.</p>' : '') +
+    '</div></div></div></div>';
+
+  if ($('#zoomBtn')) { $('#zoomBtn').onclick = openOriginal; $('#pv').onclick = openOriginal; }
+  else if (DATA.preview && DATA.preview.dataUrl) $('#pv').onclick = function () { lightbox(DATA.preview.dataUrl, c.title + ' · ' + c.version); };
+  if ($('#dlBtn')) $('#dlBtn').onclick = function () {
+    var b = this; b.disabled = true;
+    api('api_getReviewOriginal', TOKEN, 'download').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); })
+      .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+  };
+  $('#okBtn').onclick = function () { decide('approved'); };
+  $('#chgBtn').onclick = function () { decide('changes'); };
+}
+
+function openOriginal() {
+  var c = DATA.creative;
+  if (ORIGINAL) return lightbox(ORIGINAL, c.title + ' · ' + c.version);
+  var lb = lightbox(DATA.preview && DATA.preview.dataUrl ? DATA.preview.dataUrl : '', c.title + ' · ' + c.version + ' (loading full resolution…)');
+  api('api_getReviewOriginal', TOKEN, 'view').then(function (f) {
+    ORIGINAL = 'data:' + f.mimeType + ';base64,' + f.base64;
+    if (document.body.contains(lb)) { $('img', lb).src = ORIGINAL; $('.lb-bar .ellipsis', lb).textContent = c.title + ' · ' + c.version; }
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+
+function decide(decision) {
+  fieldErrors(document, '');
+  var mode = DATA.identityMode;
+  var input = { decision: decision, comment: $('#cm').value.trim(), reviewerName: $('#rn') ? $('#rn').value.trim() : '', reviewerEmail: $('#re') ? $('#re').value.trim() : '' };
+  if (mode === 'required' && (!input.reviewerName || !input.reviewerEmail)) return fieldErrors(document, 'Please add your name and work email so the team knows who reviewed this.');
+  if (input.reviewerEmail && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(input.reviewerEmail)) return fieldErrors(document, 'Please enter a valid email.');
+  if (decision === 'changes' && input.comment.length < 5) { $('#cm').focus(); return fieldErrors(document, 'Tell the team what to change before requesting changes.'); }
+  var c = DATA.creative;
+  var title = decision === 'approved' ? 'Approve ' + c.title + ' (' + c.version + ')?' : 'Request changes on ' + c.title + '?';
+  var msg = decision === 'approved' ? 'This marks the creative as final. You can’t undo this from the link.' : 'The designer will get your feedback and send a new version.';
+  confirmBox(title, msg, decision === 'approved' ? 'Approve' : 'Send feedback', false).then(function (yes) {
+    if (!yes) return;
+    $all('#decide button').forEach(function (b) { b.disabled = true; });
+    api('api_submitReview', TOKEN, input).then(function () {
+      showState('decided', { creative: c, decision: { decision: decision, decidedOn: todayIso(), comment: input.comment } });
+    }).catch(function (e) {
+      if (e.code === 'ALREADY_DECIDED' || e.code === 'LINK_CLOSED') return load();
+      $all('#decide button').forEach(function (b) { b.disabled = false; });
+      fieldErrors(document, errMsg(e));
+    });
+  });
+}
+</script>
+</body>
+</html>

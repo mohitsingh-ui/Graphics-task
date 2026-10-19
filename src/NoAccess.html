@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<?!= include_('Styles') ?>
+<style>
+  .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .box { max-width: 440px; width: 100%; padding: 32px; text-align: center; }
+  .mark { width: 44px; height: 44px; border-radius: 11px; background: var(--accent); color: #fff; display: grid; place-items: center; margin: 0 auto 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card box">
+  <div class="mark">G</div>
+  <h1 style="font-size:20px">Graphics team portal</h1>
+  <p class="muted" style="margin-top:8px" id="msg"></p>
+  <div class="stack" style="margin-top:20px">
+    <a class="btn primary lg" id="switchBtn" href="https://accounts.google.com/AccountChooser" target="_top">Sign in with a different Google account</a>
+    <a class="btn lg hidden" id="formBtn" target="_top">Raise a graphics requirement instead</a>
+  </div>
+  <p class="faint small" style="margin-top:18px">Team access is managed by your graphics team leader. Sign-in uses your company Google account — there’s no separate password.</p>
+</div></div>
+<?!= include_('Common.js') ?>
+<script>
+var BOOT = <?!= bootJson ?>;
+$('#msg').innerHTML = BOOT.email
+  ? 'You’re signed in as <b>' + h(BOOT.email) + '</b>, but this account hasn’t been added to the graphics team.'
+  : 'Please sign in with your company Google account to open your dashboard.';
+if (BOOT.publicUrl) { $('#formBtn').href = BOOT.publicUrl; $('#formBtn').classList.remove('hidden'); }
+</script>
+</body>
+</html>
