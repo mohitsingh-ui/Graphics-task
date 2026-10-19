@@ -1,0 +1,72 @@
+# Deploys the portal to Google Apps Script on every push to main.
+# GitHub is the source of truth; never edit code in the Apps Script editor.
+#
+# Required secrets (Settings → Environments → production):
+#   CLASPRC_JSON            contents of ~/.clasprc.json after `clasp login` as the owner account
+#   SCRIPT_ID               Apps Script project id
+#   PUBLIC_DEPLOYMENT_ID    deployment id of the "Anyone" web app
+#   INTERNAL_DEPLOYMENT_ID  deployment id of the "Anyone within domain" web app
+
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-apps-script
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Backend acceptance scenarios
+        run: node test/scenarios.test.js
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ]; then echo "Missing CLASPRC_JSON or SCRIPT_ID secret"; exit 1; fi
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
+          printf '{"scriptId":"%s","rootDir":"src"}' "$SCRIPT_ID" > .clasp.json
+
+      - name: Push code to Apps Script
+        run: clasp push --force
+
+      - name: Create a version and update both web apps
+        env:
+          PUBLIC_DEPLOYMENT_ID: ${{ secrets.PUBLIC_DEPLOYMENT_ID }}
+          INTERNAL_DEPLOYMENT_ID: ${{ secrets.INTERNAL_DEPLOYMENT_ID }}
+        run: |
+          MSG="$(git log -1 --pretty=%s | cut -c1-90) (${GITHUB_SHA::7})"
+          if [ -n "$PUBLIC_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$PUBLIC_DEPLOYMENT_ID" --description "public: $MSG"; fi
+          if [ -n "$INTERNAL_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$INTERNAL_DEPLOYMENT_ID" --description "internal: $MSG"; fi
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f ~/.clasprc.json .clasp.json
