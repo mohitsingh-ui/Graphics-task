@@ -1,11 +1,5 @@
 # Tests on every push / pull request; deploys to Google Apps Script on main.
 # GitHub is the source of truth - never edit code in the Apps Script editor.
-#
-# Secrets (Settings -> Environments -> production -> Environment secrets):
-#   CLASPRC_JSON            ~/.clasprc.json as JSON, or as base64 (base64 -i ~/.clasprc.json)
-#   SCRIPT_ID               Apps Script project id
-#   PUBLIC_DEPLOYMENT_ID    Deployment ID of the "Anyone" web app
-#   INTERNAL_DEPLOYMENT_ID  Deployment ID of the "Anyone within domain" web app
 
 name: Test and deploy
 
@@ -51,8 +45,6 @@ jobs:
       - name: Install clasp
         run: npm install -g @google/clasp@2.4.2
 
-      # The live project uses the 6-file bundle (Code.gs + 4 pages + manifest),
-      # the same files that were pasted into the editor. Rebuild it from src/.
       - name: Build bundle
         run: python3 tools/build-paste-kit.py
 
@@ -61,33 +53,40 @@ jobs:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
         run: |
-          if [ -z "$CLASPRC_JSON" ]; then echo "::error::CLASPRC_JSON secret is missing or empty (add it under Environments -> production)"; exit 1; fi
+          if [ -z "$CLASPRC_JSON" ]; then echo "::error::CLASPRC_JSON secret is missing or empty"; exit 1; fi
           if [ -z "$SCRIPT_ID" ]; then echo "::error::SCRIPT_ID secret is missing or empty"; exit 1; fi
-          # Accepts the file pasted as plain JSON or as base64 (base64 survives copy/paste).
           node -e '
             const fs = require("fs"), os = require("os");
             const raw = (process.env.CLASPRC_JSON || "").trim();
             let c = null, how = "";
             try { c = JSON.parse(raw); how = "JSON"; } catch (e) {}
             if (!c) { try { c = JSON.parse(Buffer.from(raw.replace(/\s+/g, ""), "base64").toString("utf8")); how = "base64"; } catch (e) {} }
-            if (!c) { console.log("::error::CLASPRC_JSON is neither JSON nor base64 (length " + raw.length + "). On your Mac run: base64 -i ~/.clasprc.json | pbcopy  then paste into the secret."); process.exit(1); }
+            if (!c) { console.log("::error::CLASPRC_JSON is neither JSON nor base64. On your Mac run: base64 -i ~/.clasprc.json | pbcopy  then paste into the secret."); process.exit(1); }
             if (!c.token || !c.token.refresh_token) { console.log("::error::CLASPRC_JSON has no token.refresh_token. Keys found: " + Object.keys(c).join(", ")); process.exit(1); }
             fs.writeFileSync(os.homedir() + "/.clasprc.json", JSON.stringify(c), { mode: 0o600 });
             console.log("Credentials look valid (" + how + ").");
           '
           printf '{"scriptId":"%s","rootDir":"paste-kit"}' "$SCRIPT_ID" > .clasp.json
 
-      - name: Push code to Apps Script
-        run: clasp push --force
-
-      - name: Update both web apps
+      # Google takes each web app's access setting from the version it runs,
+      # so the public and internal links are published from separate versions.
+      - name: Publish public web app (anyone, no login)
         env:
           PUBLIC_DEPLOYMENT_ID: ${{ secrets.PUBLIC_DEPLOYMENT_ID }}
+        run: |
+          MSG="$(git log -1 --pretty=%s | cut -c1-80) (${GITHUB_SHA::7})"
+          node -e 'const f="paste-kit/appsscript.json",fs=require("fs"),m=JSON.parse(fs.readFileSync(f));m.webapp={executeAs:"USER_DEPLOYING",access:"ANYONE_ANONYMOUS"};fs.writeFileSync(f,JSON.stringify(m,null,2))'
+          clasp push --force
+          if [ -n "$PUBLIC_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$PUBLIC_DEPLOYMENT_ID" --description "public: $MSG"; else echo "::warning::PUBLIC_DEPLOYMENT_ID not set"; fi
+
+      - name: Publish internal web app (company accounts only)
+        env:
           INTERNAL_DEPLOYMENT_ID: ${{ secrets.INTERNAL_DEPLOYMENT_ID }}
         run: |
-          MSG="$(git log -1 --pretty=%s | cut -c1-90) (${GITHUB_SHA::7})"
-          if [ -n "$PUBLIC_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$PUBLIC_DEPLOYMENT_ID" --description "public: $MSG"; else echo "::warning::PUBLIC_DEPLOYMENT_ID not set - public web app not updated"; fi
-          if [ -n "$INTERNAL_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$INTERNAL_DEPLOYMENT_ID" --description "internal: $MSG"; else echo "::warning::INTERNAL_DEPLOYMENT_ID not set - internal web app not updated"; fi
+          MSG="$(git log -1 --pretty=%s | cut -c1-80) (${GITHUB_SHA::7})"
+          node -e 'const f="paste-kit/appsscript.json",fs=require("fs"),m=JSON.parse(fs.readFileSync(f));m.webapp={executeAs:"USER_DEPLOYING",access:"DOMAIN"};fs.writeFileSync(f,JSON.stringify(m,null,2))'
+          clasp push --force
+          if [ -n "$INTERNAL_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$INTERNAL_DEPLOYMENT_ID" --description "internal: $MSG"; else echo "::warning::INTERNAL_DEPLOYMENT_ID not set"; fi
 
       - name: Remove credentials
         if: always()
