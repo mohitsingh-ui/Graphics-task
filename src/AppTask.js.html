@@ -31,6 +31,7 @@ function drawTask(el) {
   if (p.canUpload) actions += '<button class="btn primary" id="aUpload">' + icon('upload') + ' Upload creative</button>';
   if (p.canUpload && drafts.length) actions += '<button class="btn ok" id="aSubmit">' + icon('send') + ' Submit for approval (' + drafts.length + ')</button>';
   if (p.canAssign) actions += '<button class="btn' + (t.assigneeEmail ? '' : ' primary') + '" id="aAssign">' + icon('users') + ' ' + (t.assigneeEmail ? 'Reassign' : 'Assign designer') + '</button>';
+  if (p.canAssign && !d.deliverables.length) actions += '<button class="btn" id="aDivide">' + icon('board') + ' Divide among team</button>';
   if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
   if (p.canResume) actions += '<button class="btn" id="aResume">Resume task</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
@@ -64,6 +65,7 @@ function drawTask(el) {
   if ($('#aUpload')) $('#aUpload').onclick = uploadModal;
   if ($('#aSubmit')) $('#aSubmit').onclick = function () { submitModal(drafts); };
   if ($('#aAssign')) $('#aAssign').onclick = assignModal;
+  if ($('#aDivide')) $('#aDivide').onclick = divideModal;
   if ($('#aEdit')) $('#aEdit').onclick = editModal;
   if ($('#aResume')) $('#aResume').onclick = function () { run(api('api_resumeTask', t.taskId), 'Task resumed'); };
   if ($('#aStatus')) $('#aStatus').onclick = statusModal;
@@ -98,7 +100,7 @@ function briefCard(d) {
     .concat(r.typeFields.map(function (f) { return [f.label, f.value]; })).filter(function (x) { return x[1]; });
   return '<div class="card"><div class="card-h"><h3>Creative brief</h3><span class="faint small">' + h(r.requirementId) + '</span></div><div class="card-b">' +
     block('Why it’s needed', t.purpose, true) +
-    block('Brief', t.brief, true) +
+    block('Requirement', t.brief, true) +
     (specs.length ? '<div class="brief-block"><div class="section-title">Specs</div><dl class="kv">' + specs.map(function (s) { return '<dt>' + h(s[0]) + '</dt><dd>' + h(s[1]) + '</dd>'; }).join('') + '</dl></div>' : '') +
     (t.copyText ? '<div class="brief-block"><div class="section-title">Copy that must appear</div><div class="pre" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px">' + h(t.copyText) + '</div></div>' : '') +
     block('Instructions from the team leader / requester', t.instructions, true) +
@@ -231,6 +233,62 @@ function assignModal() {
   });
 }
 
+/** Split this task's creatives between several designers. */
+function divideModal() {
+  var t = TASK.task;
+  var team = TASK.team.slice().sort(function (a, b) { return (a.role === 'designer' ? 0 : 1) - (b.role === 'designer' ? 0 : 1) || a.activeTasks - b.activeTasks; });
+  var total = Math.max(2, Number(t.deliverablesRequired) || 2);
+  var rows = [{ email: '', count: Math.ceil(total / 2) }, { email: '', count: Math.floor(total / 2) }];
+  var thr = APP.boot.workloadThreshold;
+  var m = modal({
+    title: 'Divide among team', wide: true,
+    body: '<p class="muted" style="margin:0">Give each designer their share of the <b>' + h(t.deliverablesRequired) + '</b> creative(s). Each person gets their own task with the same brief and references.</p>' +
+      '<div id="dvRows" class="stack" style="gap:8px"></div>' +
+      '<div class="row between"><button class="btn sm" id="dvAdd">' + icon('plus') + ' Add designer</button><span class="small" id="dvTotal"></span></div>' +
+      '<div class="grid-3"><div class="field"><label class="req">Due date</label><input type="date" id="dvDate" value="' + h(t.dueDate) + '"></div>' +
+      '<div class="field"><label>Due time</label><input type="time" id="dvTime" step="900" value="' + h(t.dueTime || '') + '"></div>' +
+      '<div class="field"><label class="req">Priority</label><select id="dvPri">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, {
+      label: 'Divide & assign', cls: 'primary', onClick: function (close, el) {
+        sync();
+        var parts = rows.map(function (r) { return { assigneeEmail: r.email, count: r.count }; });
+        if (parts.some(function (p) { return !p.assigneeEmail || !(p.count >= 1); })) return fieldErrors(el, 'Pick a designer and at least 1 creative on every row.');
+        var seen = {};
+        if (parts.some(function (p) { if (seen[p.assigneeEmail]) return true; seen[p.assigneeEmail] = 1; return false; })) return fieldErrors(el, 'Each designer should appear only once.');
+        if (!$('#dvDate', el).value) return fieldErrors(el, 'Pick a due date.');
+        return api('api_divideTask', t.taskId, { parts: parts, dueDate: $('#dvDate', el).value, dueTime: $('#dvTime', el).value, priority: $('#dvPri', el).value })
+          .then(function (r) { close(); toast('Divided into ' + r.taskIds.length + ' tasks and assigned'); loadNotifications(); reloadTask(); })
+          .catch(function (e) { fieldErrors(el, errMsg(e)); });
+      }
+    }]
+  });
+  function draw() {
+    $('#dvRows', m.el).innerHTML = rows.map(function (r, i) {
+      return '<div class="row" data-i="' + i + '"><select class="grow" data-k="email"><option value="">Choose designer…</option>' + team.map(function (u) {
+        return '<option value="' + h(u.email) + '"' + (u.email === r.email ? ' selected' : '') + '>' + h(u.name) + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
+      }).join('') + '</select><input type="number" min="1" max="50" data-k="count" value="' + h(r.count) + '" style="width:90px" aria-label="Creatives">' +
+        '<span class="faint small" style="width:60px">creative(s)</span>' +
+        (rows.length > 2 ? '<button class="btn ghost icon" data-rm="' + i + '" aria-label="Remove">' + icon('x') + '</button>' : '<span style="width:36px"></span>') + '</div>';
+    }).join('');
+    $all('[data-k]', m.el).forEach(function (inp) { inp.oninput = inp.onchange = function () { sync(); total_(); }; });
+    $all('[data-rm]', m.el).forEach(function (b) { b.onclick = function () { sync(); rows.splice(Number(b.getAttribute('data-rm')), 1); draw(); }; });
+    total_();
+  }
+  function sync() {
+    $all('#dvRows [data-i]', m.el).forEach(function (row) {
+      var r = rows[Number(row.getAttribute('data-i'))];
+      r.email = $('[data-k="email"]', row).value; r.count = Number($('[data-k="count"]', row).value);
+    });
+  }
+  function total_() {
+    var sum = rows.reduce(function (s, r) { return s + (Number(r.count) || 0); }, 0), need = Number(t.deliverablesRequired) || 0;
+    $('#dvTotal', m.el).innerHTML = 'Total <b>' + sum + '</b> of ' + need + ' creative(s)' + (sum !== need ? ' <span style="color:var(--warn)">— doesn’t match the request</span>' : ' ✓');
+  }
+  $('#dvAdd', m.el).onclick = function () { sync(); if (rows.length < 10) { rows.push({ email: '', count: 1 }); draw(); } };
+  draw();
+}
+
 function editModal() {
   var t = TASK.task;
   var f = function (id, label, val, type, attrs) {
@@ -341,7 +399,7 @@ function uploadModal(deliverableId) {
       }).join('') + '</select></div></div>' +
       '<div id="u_new" class="stack">' +
       '<div class="field"><label class="req">Creative title</label><input type="text" id="u_title" maxlength="150" placeholder="e.g. Homepage banner — desktop"></div>' +
-      '<div class="field"><label class="req">What the creative is for</label><input type="text" id="u_purpose" maxlength="500" value="' + h(t.purpose ? t.purpose.slice(0, 500) : '') + '"></div>' +
+      '<div class="field"><label>What the creative is for <span class="faint">(optional)</span></label><input type="text" id="u_purpose" maxlength="500" value="' + h(t.purpose ? t.purpose.slice(0, 500) : '') + '"></div>' +
       '<div class="field"><label>Deliverable type</label><input type="text" id="u_type" maxlength="100" value="' + h(t.creativeType) + '"></div></div>' +
       '<div class="field"><label>Version</label><input type="text" id="u_ver" readonly></div>' +
       '<div class="field"><label class="req">File(s)</label><div class="drop" id="u_drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files</b> or click to choose</div>' +
@@ -391,7 +449,7 @@ function uploadModal(deliverableId) {
     var title = $('#u_title', el).value.trim(), purpose = $('#u_purpose', el).value.trim();
     var pending = files.filter(function (x) { return x.state !== 'done'; });
     if (!pending.length) return fieldErrors(el, files.length ? 'Everything is uploaded.' : 'Choose a file to upload.');
-    if (!target && (!title || !purpose)) return fieldErrors(el, 'Add a creative title and what it’s for.');
+    if (!target && !title) return fieldErrors(el, 'Give the creative a title, e.g. “Homepage banner – desktop”.');
     var note = $('#u_note', el).value.trim(), andSubmit = $('#u_submit', el).checked;
     var created = [];
     var chain = Promise.resolve();

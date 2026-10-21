@@ -109,7 +109,7 @@ scenario('1b. Public form validation: domain (when switched on), required fields
   ok(call(LEADER, 'api_saveSettings', { requireRequesterDomain: true }));
   assert.match(err(call('', 'api_submitRequirement', base), 'VALIDATION').message, /rosierfoods\.com/);
   ok(call(LEADER, 'api_saveSettings', { requireRequesterDomain: false }));
-  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', title: '' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', brief: '' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', website: 'spam' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', preferredDate: '2020-01-01' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', creativeType: 'website_banner', typeFields: {} })), 'VALIDATION');
@@ -125,6 +125,37 @@ scenario('Any email can raise a requirement and approve (default)', () => {
   assert.strictEqual(t.dueDate, future(6));
   assert.strictEqual(t.dueTime, '15:30');
   ok(call(LEADER, 'api_setTaskStatus', t.taskId, 'Cancelled', { reason: 'test only' }));
+});
+
+scenario('Short email-style form: only who, department, requirement, deadline, count, references', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Riya', email: 'riya@outlook.com', department: 'Sales',
+    brief: 'Distributor meet standee\nSize 6x3 ft, logo top, QR bottom', preferredDate: future(5), preferredTime: '10:00', quantity: 3,
+    referenceUrls: 'https://example.com/ref' }));
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
+  assert.strictEqual(t.title, 'Distributor meet standee');
+  assert.strictEqual(t.deliverablesRequired, '3');
+  assert.strictEqual(t.priority, 'Medium');
+  assert.strictEqual(t.dueTime, '10:00');
+  err(call('', 'api_submitRequirement', { requesterName: 'R', email: 'r@x.com', department: 'Sales', preferredDate: future(5) }), 'VALIDATION'); // no requirement text
+  ok(call(LEADER, 'api_setTaskStatus', t.taskId, 'Cancelled', { reason: 'test only' }));
+});
+
+scenario('Leader divides one requirement between designers', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Riya', email: 'riya@outlook.com', department: 'Sales',
+    brief: 'Festive social pack', preferredDate: future(5), quantity: 5 }));
+  const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
+  err(call(A, 'api_divideTask', t.taskId, { parts: [{ assigneeEmail: A, count: 3 }, { assigneeEmail: B, count: 2 }], dueDate: future(4), priority: 'High' }), 'FORBIDDEN');
+  err(call(LEADER, 'api_divideTask', t.taskId, { parts: [{ assigneeEmail: A, count: 3 }], dueDate: future(4), priority: 'High' }), 'VALIDATION');
+  const r = ok(call(LEADER, 'api_divideTask', t.taskId, { parts: [{ assigneeEmail: A, count: 3 }, { assigneeEmail: B, count: 2 }], dueDate: future(4), dueTime: '16:00', priority: 'High' }));
+  assert.strictEqual(r.taskIds.length, 2);
+  const a = ok(call(A, 'api_getTask', r.taskIds[0])).task, b = ok(call(B, 'api_getTask', r.taskIds[1])).task;
+  assert.strictEqual(a.title, 'Festive social pack (1/2)'); assert.strictEqual(a.deliverablesRequired, '3'); assert.strictEqual(a.status, 'Assigned');
+  assert.strictEqual(b.title, 'Festive social pack (2/2)'); assert.strictEqual(b.deliverablesRequired, '2'); assert.strictEqual(b.dueTime, '16:00');
+  assert.strictEqual(b.requirementId, sub.requirementId);
+  err(call(A, 'api_getTask', r.taskIds[1]), 'NOT_FOUND');   // each designer sees only their part
+  assert.ok(ok(call(B, 'api_getNotifications')).items.some(n => n.type === 'task_assigned' && n.title.includes('(2/2)')));
+  r.taskIds.forEach(id => ok(call(LEADER, 'api_setTaskStatus', id, 'Cancelled', { reason: 'test only' })));
 });
 
 scenario('Team leader raises a requirement while signed in', () => {
@@ -385,7 +416,7 @@ scenario('Reassignment: old designer loses access, new designer gains it, both n
 
 scenario('Reports & CSV are computed from records and leader-only', () => {
   const r = ok(call(LEADER, 'api_getReports', { from: future(-30), to: future(1) }));
-  assert.strictEqual(r.summary.requirements, 4); // banner, sales deck, outside email, leader brief
+  assert.strictEqual(r.summary.requirements, 6); // banner, deck, outside email, short form, divide test, leader brief
   assert.strictEqual(r.summary.decisions, 6); // 1 changes + 5 approvals
   const asha = r.designers.find(d => d.email === A);
   assert.strictEqual(asha.revisionCycles, 1);

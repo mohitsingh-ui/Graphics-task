@@ -44,7 +44,7 @@ function reviewDto_(ctx, withPreview) {
 
   out.creative = {
     title: d.title,
-    purpose: d.purpose || t.purpose,
+    purpose: d.purpose || t.purpose || String(t.brief || '').slice(0, 300),
     campaign: t.campaign,
     product: t.product,
     dimensions: t.dimensions,

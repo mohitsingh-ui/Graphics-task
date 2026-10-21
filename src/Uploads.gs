@@ -87,7 +87,7 @@ function api_startUpload(ctx) {
         rec.meta = {
           deliverableId: str_(ctx.deliverableId, 60, 'Deliverable', false),
           title: str_(ctx.title, 150, 'Creative title', !ctx.deliverableId),
-          purpose: str_(ctx.purpose, 500, 'What the creative is for', !ctx.deliverableId),
+          purpose: str_(ctx.purpose, 500, 'What the creative is for', false),
           deliverableType: str_(ctx.deliverableType, 100, 'Deliverable type', false),
           note: str_(ctx.note, 1000, 'Submission note', false)
         };

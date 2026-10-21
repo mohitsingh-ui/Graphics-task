@@ -397,33 +397,8 @@ function api_assignTask(taskId, input) {
     var note = str_(input.note, 1000, 'Note', false);
     return withLock_(function () {
       var t = requireTask_(u, taskId);
-      if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '. Reopen it before assigning.');
-      var member = userByEmail_(assignee);
-      if (!member || !bool_(member.active)) throw AppError_('VALIDATION', 'That person is not an active team member.');
-      var previous = t.assigneeEmail;
-      var patch = { assigneeEmail: member.email.toLowerCase(), assignedBy: u.email, assignedAt: nowIso_(), dueDate: dueDate, dueTime: dueTime,
-        priority: priority, updatedAt: nowIso_() };
-      if (startDate) patch.startDate = startDate;
-      if (input.instructions !== undefined) patch.instructions = instructions;
-      dbUpdate_('Tasks', t.taskId, patch);
-      dbInsert_('TaskAssignments', { assignmentId: 'ASG-' + uuid_(), taskId: t.taskId, assigneeEmail: patch.assigneeEmail,
-        previousAssignee: previous || '', assignedBy: u.email, dueDate: dueDate, dueTime: dueTime, priority: priority, note: note, assignedAt: nowIso_() });
-      logActivity_(t.taskId, u, 'assigned', previous || '', patch.assigneeEmail, note, 'leader');
-      logActivity_(t.taskId, u, 'assignment', '', previous ? 'reassigned' : 'assigned', 'due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority', 'team');
-
-      var fresh = dbGet_('Tasks', t.taskId);
-      if (PRE_ASSIGN.indexOf(fresh.status) !== -1) setStatus_(fresh, STATUS.ASSIGNED, u, '');
-      else if (fresh.status === STATUS.ON_HOLD && PRE_ASSIGN.indexOf(fresh.prevStatus) !== -1) dbUpdate_('Tasks', t.taskId, { prevStatus: STATUS.ASSIGNED });
-
-      var req = dbGet_('Requirements', t.requirementId);
-      if (req && req.status === 'Received') dbUpdate_('Requirements', req.requirementId, { status: 'In work', updatedAt: nowIso_() });
-
-      notify_([patch.assigneeEmail], previous ? 'task_reassigned' : 'task_assigned',
-        (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
-        t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
-      if (previous && previous !== patch.assigneeEmail) {
-        notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
-      }
+      assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
+        instructions: input.instructions !== undefined ? instructions : undefined, note: note });
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -548,6 +523,96 @@ function api_createTaskFromRequirement(requirementId, input) {
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'Split from ' + req.requirementId, 'team');
       return { taskId: taskId };
+    });
+  });
+}
+
+
+/** Assigns a task (caller holds the lock and has checked leader rights). */
+function assignInternal_(u, t, o) {
+  var assignee = o.assignee, dueDate = o.dueDate, dueTime = o.dueTime || '', startDate = o.startDate || '', priority = o.priority, note = o.note || '';
+  var instructions = o.instructions;
+  if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '. Reopen it before assigning.');
+  var member = userByEmail_(assignee);
+  if (!member || !bool_(member.active)) throw AppError_('VALIDATION', 'That person is not an active team member.');
+  var previous = t.assigneeEmail;
+  var patch = { assigneeEmail: member.email.toLowerCase(), assignedBy: u.email, assignedAt: nowIso_(), dueDate: dueDate, dueTime: dueTime,
+    priority: priority, updatedAt: nowIso_() };
+  if (startDate) patch.startDate = startDate;
+  if (instructions !== undefined) patch.instructions = instructions;
+  dbUpdate_('Tasks', t.taskId, patch);
+  dbInsert_('TaskAssignments', { assignmentId: 'ASG-' + uuid_(), taskId: t.taskId, assigneeEmail: patch.assigneeEmail,
+    previousAssignee: previous || '', assignedBy: u.email, dueDate: dueDate, dueTime: dueTime, priority: priority, note: note, assignedAt: nowIso_() });
+  logActivity_(t.taskId, u, 'assigned', previous || '', patch.assigneeEmail, note, 'leader');
+  logActivity_(t.taskId, u, 'assignment', '', previous ? 'reassigned' : 'assigned', 'due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority', 'team');
+
+  var fresh = dbGet_('Tasks', t.taskId);
+  if (PRE_ASSIGN.indexOf(fresh.status) !== -1) setStatus_(fresh, STATUS.ASSIGNED, u, '');
+  else if (fresh.status === STATUS.ON_HOLD && PRE_ASSIGN.indexOf(fresh.prevStatus) !== -1) dbUpdate_('Tasks', t.taskId, { prevStatus: STATUS.ASSIGNED });
+
+  var req = dbGet_('Requirements', t.requirementId);
+  if (req && req.status === 'Received') dbUpdate_('Requirements', req.requirementId, { status: 'In work', updatedAt: nowIso_() });
+
+  notify_([patch.assigneeEmail], previous ? 'task_reassigned' : 'task_assigned',
+    (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
+    t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
+  if (previous && previous !== patch.assigneeEmail) {
+    notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
+  }
+}
+
+/**
+ * Divide one task between several designers.
+ * parts: [{ assigneeEmail, count, note }]. The first part keeps this task;
+ * each other part becomes a new task on the same requirement, already assigned.
+ */
+function api_divideTask(taskId, input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    var parts = Array.isArray(input.parts) ? input.parts : [];
+    if (parts.length < 2 || parts.length > 10) throw AppError_('VALIDATION', 'Choose between 2 and 10 designers.');
+    var dueDate = date_(input.dueDate, 'Due date', true);
+    var dueTime = time_(input.dueTime, 'Due time', false);
+    var priority = oneOf_(str_(input.priority, 20, 'Priority', true), settings_().priorities, 'Priority');
+    var clean = parts.map(function (p, i) {
+      return {
+        assignee: email_(p.assigneeEmail, 'Designer ' + (i + 1), true),
+        count: int_(p.count, 1, 50, 'Creatives for designer ' + (i + 1)),
+        note: str_(p.note, 1000, 'Note', false)
+      };
+    });
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '.');
+      if (taskDeliverables_(t.taskId).length) throw AppError_('INVALID_STATE', 'Creatives were already uploaded on this task, so it can’t be divided. Use “Add task” for extra work instead.');
+      clean.forEach(function (p) {
+        var m = userByEmail_(p.assignee);
+        if (!m || !bool_(m.active)) throw AppError_('VALIDATION', p.assignee + ' is not an active team member.');
+      });
+      var n = clean.length, baseTitle = t.title.replace(/ \(\d+\/\d+\)$/, '');
+      var ids = [t.taskId];
+      // Part 1 stays on this task
+      dbUpdate_('Tasks', t.taskId, { title: baseTitle + ' (1/' + n + ')', deliverablesRequired: String(clean[0].count), updatedAt: nowIso_() });
+      logActivity_(t.taskId, u, 'updated', '', 'divided into ' + n + ' parts', '', 'team');
+      assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note });
+      // Parts 2..n become new tasks
+      for (var i = 1; i < n; i++) {
+        var newId = nextSeqId_('GFX');
+        var now = nowIso_();
+        var copy = {};
+        SCHEMA.Tasks.forEach(function (c) { copy[c] = t[c]; });
+        Object.assign(copy, {
+          taskId: newId, title: baseTitle + ' (' + (i + 1) + '/' + n + ')', deliverablesRequired: String(clean[i].count),
+          assigneeEmail: '', assignedBy: '', assignedAt: '', status: STATUS.READY, prevStatus: '', progress: '0',
+          completedAt: '', dueSoonNotifiedAt: '', overdueNotifiedAt: '', internalNotes: '', createdBy: u.email, createdAt: now, updatedAt: now
+        });
+        dbInsert_('Tasks', copy);
+        logActivity_(newId, u, 'created', '', STATUS.READY, 'Divided from ' + t.taskId, 'team');
+        assignInternal_(u, dbGet_('Tasks', newId), { assignee: clean[i].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[i].note });
+        ids.push(newId);
+      }
+      return { taskIds: ids };
     });
   });
 }
