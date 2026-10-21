@@ -1,3 +1,12 @@
+# Tests on every push / pull request; deploys to Google Apps Script on main.
+# GitHub is the source of truth - never edit code in the Apps Script editor.
+#
+# Secrets (Settings -> Environments -> production -> Environment secrets):
+#   CLASPRC_JSON            full contents of ~/.clasprc.json after `clasp login`
+#   SCRIPT_ID               Apps Script project id
+#   PUBLIC_DEPLOYMENT_ID    Deployment ID of the "Anyone" web app
+#   INTERNAL_DEPLOYMENT_ID  Deployment ID of the "Anyone within domain" web app
+
 name: Test and deploy
 
 on:
@@ -19,8 +28,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - name: Backend acceptance scenarios
         run: node test/scenarios.test.js
+
+      - name: Same scenarios against the deployable bundle
+        run: |
+          python3 tools/build-paste-kit.py
+          GAS_SRC=paste-kit node test/scenarios.test.js
 
   deploy:
     needs: test
@@ -36,17 +51,28 @@ jobs:
       - name: Install clasp
         run: npm install -g @google/clasp@2.4.2
 
-      - name: Build bundle (same 6 files as the live project)
+      # The live project uses the 6-file bundle (Code.gs + 4 pages + manifest),
+      # the same files that were pasted into the editor. Rebuild it from src/.
+      - name: Build bundle
         run: python3 tools/build-paste-kit.py
 
-      - name: Write clasp credentials
+      - name: Write and check clasp credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
         run: |
-          if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ]; then echo "Missing CLASPRC_JSON or SCRIPT_ID secret"; exit 1; fi
+          if [ -z "$CLASPRC_JSON" ]; then echo "::error::CLASPRC_JSON secret is missing or empty (add it under Environments -> production)"; exit 1; fi
+          if [ -z "$SCRIPT_ID" ]; then echo "::error::SCRIPT_ID secret is missing or empty"; exit 1; fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
           chmod 600 ~/.clasprc.json
+          node -e '
+            const fs = require("fs"), os = require("os");
+            let c;
+            try { c = JSON.parse(fs.readFileSync(os.homedir() + "/.clasprc.json", "utf8")); }
+            catch (e) { console.log("::error::CLASPRC_JSON is not valid JSON. On your Mac run: cat ~/.clasprc.json | pbcopy  and paste it again."); process.exit(1); }
+            if (!c.token || !c.token.refresh_token) { console.log("::error::CLASPRC_JSON has no token.refresh_token. Keys found: " + Object.keys(c).join(", ")); process.exit(1); }
+            console.log("Credentials look valid.");
+          '
           printf '{"scriptId":"%s","rootDir":"paste-kit"}' "$SCRIPT_ID" > .clasp.json
 
       - name: Push code to Apps Script
@@ -58,8 +84,8 @@ jobs:
           INTERNAL_DEPLOYMENT_ID: ${{ secrets.INTERNAL_DEPLOYMENT_ID }}
         run: |
           MSG="$(git log -1 --pretty=%s | cut -c1-90) (${GITHUB_SHA::7})"
-          if [ -n "$PUBLIC_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$PUBLIC_DEPLOYMENT_ID" --description "public: $MSG"; fi
-          if [ -n "$INTERNAL_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$INTERNAL_DEPLOYMENT_ID" --description "internal: $MSG"; fi
+          if [ -n "$PUBLIC_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$PUBLIC_DEPLOYMENT_ID" --description "public: $MSG"; else echo "::warning::PUBLIC_DEPLOYMENT_ID not set - public web app not updated"; fi
+          if [ -n "$INTERNAL_DEPLOYMENT_ID" ]; then clasp deploy --deploymentId "$INTERNAL_DEPLOYMENT_ID" --description "internal: $MSG"; else echo "::warning::INTERNAL_DEPLOYMENT_ID not set - internal web app not updated"; fi
 
       - name: Remove credentials
         if: always()
