@@ -1,12 +1,3 @@
-# Deploys the portal to Google Apps Script on every push to main.
-# GitHub is the source of truth; never edit code in the Apps Script editor.
-#
-# Required secrets (Settings → Environments → production):
-#   CLASPRC_JSON            contents of ~/.clasprc.json after `clasp login` as the owner account
-#   SCRIPT_ID               Apps Script project id
-#   PUBLIC_DEPLOYMENT_ID    deployment id of the "Anyone" web app
-#   INTERNAL_DEPLOYMENT_ID  deployment id of the "Anyone within domain" web app
-
 name: Test and deploy
 
 on:
@@ -45,6 +36,9 @@ jobs:
       - name: Install clasp
         run: npm install -g @google/clasp@2.4.2
 
+      - name: Build bundle (same 6 files as the live project)
+        run: python3 tools/build-paste-kit.py
+
       - name: Write clasp credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
@@ -53,12 +47,12 @@ jobs:
           if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ]; then echo "Missing CLASPRC_JSON or SCRIPT_ID secret"; exit 1; fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
           chmod 600 ~/.clasprc.json
-          printf '{"scriptId":"%s","rootDir":"src"}' "$SCRIPT_ID" > .clasp.json
+          printf '{"scriptId":"%s","rootDir":"paste-kit"}' "$SCRIPT_ID" > .clasp.json
 
       - name: Push code to Apps Script
         run: clasp push --force
 
-      - name: Create a version and update both web apps
+      - name: Update both web apps
         env:
           PUBLIC_DEPLOYMENT_ID: ${{ secrets.PUBLIC_DEPLOYMENT_ID }}
           INTERNAL_DEPLOYMENT_ID: ${{ secrets.INTERNAL_DEPLOYMENT_ID }}
