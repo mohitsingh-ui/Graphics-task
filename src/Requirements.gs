@@ -29,7 +29,9 @@ function api_submitRequirement(payload) {
     var s = settings_();
 
     // Bots fill the hidden "website" field; humans never see it.
-    if (payload.website) throw AppError_('VALIDATION', 'Submission rejected.');
+    // Spam guard: a hidden field only bots fill. It is named so browser autofill ignores it
+    // (an earlier "website" field was being filled by Chrome autofill and blocked real people).
+    if (payload.gfx_trap_9) throw AppError_('VALIDATION', 'Something went wrong sending this. Please reload the page and try again.');
 
     // A signed-in team member (e.g. the team leader) raising a requirement is recorded as such.
     var member = null;
@@ -42,7 +44,7 @@ function api_submitRequirement(payload) {
     var r = {
       requesterName: str_(payload.requesterName, 100, 'Your name', true),
       department: str_(payload.department, 100, 'Department', true),
-      email: email_(payload.email, 'Email', true),
+      email: email_(payload.email, 'Email', !!(s.requireRequesterDomain && s.allowedDomain)),
       phone: str_(payload.phone, 20, 'Contact number', false),
       title: str_(payload.title, 150, 'Requirement title', false) || titleFrom_(requirementText),
       creativeType: str_(payload.creativeType, 50, 'Type of creative', false),
@@ -62,7 +64,7 @@ function api_submitRequirement(payload) {
     };
     if (s.priorities.indexOf(r.priorityRequested) === -1) r.priorityRequested = s.priorities[Math.min(1, s.priorities.length - 1)];
 
-    if (s.requireRequesterDomain && s.allowedDomain && !member && r.email.split('@')[1] !== s.allowedDomain.toLowerCase()) {
+    if (s.requireRequesterDomain && s.allowedDomain && !member && r.email && r.email.split('@')[1] !== s.allowedDomain.toLowerCase()) {
       throw AppError_('VALIDATION', 'Please use your @' + s.allowedDomain + ' work email.');
     }
     if (r.preferredDate < isoDateOnly_()) throw AppError_('VALIDATION', 'The deadline can’t be in the past.');
@@ -90,7 +92,7 @@ function api_submitRequirement(payload) {
     if (!r.platform) r.platform = tf.platform || tf.marketplace || tf.adPlatform || tf.placement || tf.channel || '';
 
     if (!member) {
-      rateLimit_('submit:' + r.email, 6, 600);
+      rateLimit_('submit:' + (r.email || r.requesterName.toLowerCase()), 6, 600);
       rateLimit_('submit:all', 120, 600);
     }
 
@@ -111,11 +113,11 @@ function api_submitRequirement(payload) {
         referenceUrls: r.referenceUrls.join('\n'), assigneeEmail: '', assignedBy: '', assignedAt: '',
         startDate: '', dueDate: r.preferredDate, dueTime: r.preferredTime, priority: r.priorityRequested, status: STATUS.NEW, prevStatus: '',
         progress: '0', instructions: r.instructions, internalNotes: '', folderId: folder.getId(), completedAt: '',
-        dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: r.email, createdAt: now, updatedAt: now
+        dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: r.email || 'requester', createdAt: now, updatedAt: now
       });
       logActivity_(taskId, member ? { email: member.email, role: member.role } : { email: r.email, role: 'requester' }, 'created', '', STATUS.NEW,
         (member ? 'raised from the portal (' : 'via the request form (') + reqId + ')', 'team');
-      return { requirementId: reqId, taskId: taskId, folderId: folder.getId(), trackToken: issueTrackToken_(r.email) };
+      return { requirementId: reqId, taskId: taskId, folderId: folder.getId(), trackToken: issueTrackToken_(r.email || 'req:' + reqId) };
     });
 
     var ticket = randomToken_();
@@ -158,7 +160,7 @@ function notifyNewRequirement_(requirementId) {
     req.requesterName + ' (' + req.department + ') needs ' + req.quantity + ' creative(s) by ' + dueText_(req.preferredDate, req.preferredTime) +
     '.\n\n' + String(req.brief).slice(0, 400) + '\n\n' + files + ' reference file(s) attached.',
     task ? 'task/' + task.taskId : 'requirements');
-  if (settings_().emailRequesterOnSubmit) {
+  if (settings_().emailRequesterOnSubmit && req.email) {
     var link = trackUrl_(issueTrackToken_(req.email));
     sendMail_(req.email, 'We’ve got your request (' + requirementId + ')',
       'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" has reached the graphics team.\n' +

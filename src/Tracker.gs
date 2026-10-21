@@ -16,14 +16,26 @@ function trackUrl_(token) {
   return base + '?p=my&t=' + token;
 }
 
-/** Creates a tracking token for an email. Caller holds the lock. */
-function issueTrackToken_(email) {
+/** Creates a tracking token for an email (or "req:<id>" when no email was given). Caller holds the lock. */
+function issueTrackToken_(key) {
   var token = randomToken_();
   dbInsert_('RequesterLinks', {
-    linkId: 'TRK-' + uuid_(), email: String(email).toLowerCase(), tokenHash: sha256_(token),
+    linkId: 'TRK-' + uuid_(), email: String(key).toLowerCase(), tokenHash: sha256_(token),
     createdAt: nowIso_(), expiresAt: new Date(Date.now() + TRACK_DAYS * 864e5).toISOString(), lastUsedAt: ''
   });
   return token;
+}
+
+/** Tracking keys for one token or a list of tokens (from this device). Invalid ones are skipped if others work. */
+function trackKeys_(tokens) {
+  var list = (Array.isArray(tokens) ? tokens : [tokens]).slice(0, 30), keys = [], lastErr = null;
+  list.forEach(function (t) { try { var k = trackEmail_(t); if (keys.indexOf(k) === -1) keys.push(k); } catch (e) { lastErr = e; } });
+  if (!keys.length) throw lastErr || AppError_('LINK_INVALID', 'This link isn’t valid.');
+  return keys;
+}
+
+function ownsRequirement_(keys, r) {
+  return keys.indexOf(String(r.email || '').toLowerCase()) !== -1 || keys.indexOf(('req:' + r.requirementId).toLowerCase()) !== -1;
 }
 
 function trackEmail_(token) {
@@ -50,9 +62,9 @@ function requesterStatus_(tasks) {
 
 function api_getMyRequests(token) {
   return respond_(function () {
-    rateLimit_('track:' + String(token).slice(0, 60), 60, 600);
-    var email = trackEmail_(token);
-    var reqs = dbFind_('Requirements', function (r) { return String(r.email).toLowerCase() === email; })
+    var keys = trackKeys_(token);
+    rateLimit_('track:' + keys.join(',').slice(0, 120), 60, 600);
+    var reqs = dbFind_('Requirements', function (r) { return ownsRequirement_(keys, r); })
       .sort(function (a, b) { return a.submittedAt < b.submittedAt ? 1 : -1; }).slice(0, 100);
     var out = reqs.map(function (r) {
       var tasks = dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; });
@@ -79,6 +91,7 @@ function api_getMyRequests(token) {
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
     });
+    var email = keys.filter(function (k) { return k.indexOf('req:') !== 0; })[0] || '';
     return { email: email, requests: out };
   });
 }
@@ -86,13 +99,13 @@ function api_getMyRequests(token) {
 /** Fresh review link for a creative in one of the requester's own requests. */
 function api_trackReview(token, versionId) {
   return respond_(function () {
-    rateLimit_('trackrev:' + String(token).slice(0, 60), 30, 600);
-    var email = trackEmail_(token);
+    var keys = trackKeys_(token);
+    rateLimit_('trackrev:' + keys.join(',').slice(0, 120), 30, 600);
     return withLock_(function () {
       var v = dbGet_('CreativeVersions', str_(versionId, 60, 'Creative', true));
       var t = v && dbGet_('Tasks', v.taskId);
       var r = t && dbGet_('Requirements', t.requirementId);
-      if (!r || String(r.email).toLowerCase() !== email) throw AppError_('NOT_FOUND', 'Creative not found.');
+      if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
       var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
       if (!rq) throw AppError_('ALREADY_DECIDED', 'This creative is no longer waiting for review.');
       return { url: reviewUrl_(issueToken_(rq.requestId, 'requester')) };

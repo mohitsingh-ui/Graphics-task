@@ -110,7 +110,7 @@ scenario('1b. Public form validation: domain (when switched on), required fields
   assert.match(err(call('', 'api_submitRequirement', base), 'VALIDATION').message, /rosierfoods\.com/);
   ok(call(LEADER, 'api_saveSettings', { requireRequesterDomain: false }));
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', brief: '' })), 'VALIDATION');
-  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', website: 'spam' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', gfx_trap_9: 'spam' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', preferredDate: '2020-01-01' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', creativeType: 'website_banner', typeFields: {} })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { preferredTime: '25:00' })), 'VALIDATION');
@@ -131,6 +131,20 @@ scenario('Short email-style form: only who, department, requirement, deadline, c
   const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Riya', email: 'riya@outlook.com', department: 'Sales',
     brief: 'Distributor meet standee\nSize 6x3 ft, logo top, QR bottom', preferredDate: future(5), preferredTime: '10:00', quantity: 3,
     referenceUrls: 'https://example.com/ref' }));
+  // Browser autofill putting a URL into a field called "website" must not block a real person,
+  // and email is optional: the request still gets a working tracking link for this device.
+  const noMail = ok(call('', 'api_submitRequirement', { requesterName: 'Walk-in', department: 'Sales', website: 'https://autofill.example',
+    brief: 'Shelf talker', preferredDate: future(5), quantity: 1, formOpenedMs: 45000 }));
+  const mails = state.mail.length;
+  ok(call('', 'api_finalizeRequirement', noMail.uploadTicket));
+  assert.ok(state.mail.slice(mails).every(m => m.to && m.to.includes('@')), 'no email sent to an empty address');
+  assert.ok(state.mail.slice(mails).some(m => /New requirement/.test(m.subject)), 'leader still alerted');
+  const both = ok(call('', 'api_getMyRequests', [noMail.trackToken, sub.trackToken]));
+  assert.ok(both.requests.some(r => r.title === 'Shelf talker') && both.requests.some(r => r.title === 'Distributor meet standee'));
+  const onlyNoMail = ok(call('', 'api_getMyRequests', noMail.trackToken));
+  assert.deepStrictEqual(onlyNoMail.requests.map(r => r.title), ['Shelf talker']);
+  assert.strictEqual(onlyNoMail.email, '');
+  ok(call(LEADER, 'api_setTaskStatus', ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === noMail.requirementId).taskId, 'Cancelled', { reason: 'test only' }));
   ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
   const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
   assert.strictEqual(t.title, 'Distributor meet standee');
@@ -416,7 +430,7 @@ scenario('Reassignment: old designer loses access, new designer gains it, both n
 
 scenario('Reports & CSV are computed from records and leader-only', () => {
   const r = ok(call(LEADER, 'api_getReports', { from: future(-30), to: future(1) }));
-  assert.strictEqual(r.summary.requirements, 6); // banner, deck, outside email, short form, divide test, leader brief
+  assert.strictEqual(r.summary.requirements, 7); // banner, deck, outside email, short form, divide test, leader brief
   assert.strictEqual(r.summary.decisions, 6); // 1 changes + 5 approvals
   const asha = r.designers.find(d => d.email === A);
   assert.strictEqual(asha.revisionCycles, 1);

@@ -70,7 +70,7 @@ function completeTask_(task, actor, note) {
     });
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
-      if (settings_().emailNotifications) {
+      if (settings_().emailNotifications && req.email) {
         var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
           .map(function (t) { return t.finalLink; });
         if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);

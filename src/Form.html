@@ -68,8 +68,14 @@ var CFG = null, FILES = [];
 
 /* ---- tracking link: from the URL, else remembered on this device ---- */
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
-var TRACK = BOOT.track || store('gfxTrack') || '';
-if (BOOT.track) store('gfxTrack', BOOT.track);
+// Every request sent from this device is remembered (several, also without an email).
+var TRACKS = [];
+try { TRACKS = JSON.parse(store('gfxTracks') || '[]') || []; } catch (e) { TRACKS = []; }
+if (store('gfxTrack') && TRACKS.indexOf(store('gfxTrack')) === -1) TRACKS.push(store('gfxTrack'));
+if (BOOT.track && TRACKS.indexOf(BOOT.track) === -1) TRACKS.unshift(BOOT.track);
+function saveTracks() { TRACKS = TRACKS.slice(0, 30); store('gfxTracks', JSON.stringify(TRACKS)); store('gfxTrack', null); }
+function addTrack(t) { if (t && TRACKS.indexOf(t) === -1) { TRACKS.unshift(t); saveTracks(); } }
+saveTracks();
 
 $all('.tabs-top button').forEach(function (b) { b.onclick = function () { showTab(b.getAttribute('data-tab')); }; });
 function showTab(tab) {
@@ -85,20 +91,22 @@ api('api_getFormConfig').then(function (cfg) { CFG = cfg; showTab(BOOT.tab === '
 /* ---- My requests ---- */
 function renderMy() {
   var el = $('#main');
-  if (!TRACK) return renderAskEmail();
+  if (!TRACKS.length) return renderAskEmail();
   el.innerHTML = '<div class="loading-page"><span class="spinner"></span> Loading your requests…</div>';
-  api('api_getMyRequests', TRACK).then(function (d) {
+  api('api_getMyRequests', TRACKS).then(function (d) {
     var list = d.requests;
-    el.innerHTML = '<div class="intro"><h1>My requests</h1><p class="muted">Requests from <b>' + h(d.email) + '</b>. ' +
-      '<a href="#" id="forget">Not you?</a></p></div>' +
+    el.innerHTML = '<div class="intro"><h1>My requests</h1><p class="muted">' +
+      (d.email ? 'Requests from <b>' + h(d.email) + '</b>' : 'Requests sent from this device') + '. ' +
+      '<a href="#" id="forget">Not you? Clear this device</a>' + (d.email ? '' : ' · <a href="#" id="byEmail">Find requests by email</a>') + '</p></div>' +
       (list.length ? list.map(reqCard).join('') :
         '<div class="card"><div class="empty">' + icon('inbox') + '<b>No requests yet</b><span>Anything you send will show up here.</span></div></div>');
-    $('#forget').onclick = function (e) { e.preventDefault(); TRACK = ''; store('gfxTrack', null); renderMy(); };
+    $('#forget').onclick = function (e) { e.preventDefault(); TRACKS = []; saveTracks(); renderMy(); };
+    if ($('#byEmail')) $('#byEmail').onclick = function (e) { e.preventDefault(); renderAskEmail(); };
     $all('[data-review]', el).forEach(function (b) {
       b.onclick = function () {
         var w = null; try { w = window.open('', '_blank'); } catch (x) { w = null; }
         b.disabled = true;
-        api('api_trackReview', TRACK, b.getAttribute('data-review')).then(function (r) {
+        api('api_trackReview', TRACKS, b.getAttribute('data-review')).then(function (r) {
           if (w) w.location = r.url;
           else b.outerHTML = '<a class="btn primary sm" href="' + h(r.url) + '" target="_blank" rel="noopener">Open review ↗</a>';
           b.disabled = false;
@@ -106,7 +114,7 @@ function renderMy() {
       };
     });
   }).catch(function (e) {
-    if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACK = ''; store('gfxTrack', null); return renderAskEmail(errMsg(e)); }
+    if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACKS = []; saveTracks(); return renderAskEmail(errMsg(e)); }
     el.innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
   });
 }
@@ -141,18 +149,20 @@ function renderAskEmail(msg) {
   };
 }
 
+var FORM_OPENED = Date.now();
 function renderForm() {
+  FORM_OPENED = Date.now();
   var minDate = todayIso();
   $('#main').innerHTML =
     '<div class="intro"><h1>Request a creative</h1><p class="muted">Write to the graphics team like you’d write an email. We’ll confirm with a reference ID.' +
     (BOOT.backUrl ? ' <a href="' + h(BOOT.backUrl) + '" target="_top">Back to dashboard</a>' : '') + '</p></div>' +
     '<form id="f" novalidate autocomplete="on"><div class="mail" id="mail">' +
-    '<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">' +
+    '<div class="hp" aria-hidden="true"><input type="text" name="gfx_trap_9" tabindex="-1" autocomplete="off" data-lpignore="true" data-1p-ignore></div>' +
     '<div class="mail-head"><span class="mark">' + h((CFG.companyName || 'G').charAt(0)) + '</span>To: ' + h(CFG.companyName) + ' Graphics Team</div>' +
 
     '<div class="mrow split" data-f="from"><span class="mlabel">From</span>' +
     '<input type="text" id="requesterName" name="requesterName" maxlength="100" placeholder="Your name" autocomplete="name" aria-label="Your name">' +
-    '<input type="email" id="email" name="email" maxlength="254" placeholder="your@email.com" autocomplete="email" aria-label="Your email">' +
+    '<input type="email" id="email" name="email" maxlength="254" placeholder="' + (CFG.allowedDomain ? 'you@' + h(CFG.allowedDomain) : 'Email (optional, for updates)') + '" autocomplete="email" aria-label="Your email">' +
     '<span class="err hidden"></span></div>' +
 
     '<div class="mrow" data-f="department"><label class="mlabel" for="department">Department</label>' +
@@ -177,7 +187,7 @@ function renderForm() {
     '<span class="faint">Optional · up to ' + CFG.maxFiles + ' files, ' + CFG.maxFileMB + ' MB each · or drop them here</span></div>' +
     '<input type="file" id="fileIn" multiple class="hidden"><div id="fileList" class="stack" style="gap:6px"></div></div>' +
 
-    '<div class="send-bar"><span class="faint small">Leave the time empty if any time that day works.</span>' +
+    '<div class="send-bar"><span class="faint small">Leave the time empty if any time that day works. Add your email to get the review link by mail.</span>' +
     '<button type="submit" class="btn primary lg" id="submitBtn">' + icon('send') + ' Send request</button></div>' +
     '</div><div class="alert bad hidden" data-form-error style="margin-top:12px"></div></form>';
 
@@ -228,9 +238,10 @@ function validate(d) {
     var x = $('[data-f="' + key + '"]'); if (!x) return;
     x.classList.add('bad'); var e = $('.err', x); e.textContent = msg; e.classList.remove('hidden');
   }
-  if (!d.requesterName || !d.email) bad('from', 'Add your name and email.');
-  else if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(d.email)) bad('from', 'That email doesn’t look right.');
-  else if (CFG.allowedDomain && d.email.toLowerCase().split('@')[1] !== CFG.allowedDomain.toLowerCase() && !BOOT.email) bad('from', 'Please use your @' + CFG.allowedDomain + ' email.');
+  if (!d.requesterName) bad('from', 'Add your name.');
+  else if (!d.email && CFG.allowedDomain) bad('from', 'Add your @' + CFG.allowedDomain + ' email.');
+  else if (d.email && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(d.email)) bad('from', 'That email doesn’t look right.');
+  else if (CFG.allowedDomain && d.email && d.email.toLowerCase().split('@')[1] !== CFG.allowedDomain.toLowerCase() && !BOOT.email) bad('from', 'Please use your @' + CFG.allowedDomain + ' email.');
   if (!d.department) bad('department', 'Choose your department.');
   if (!d.preferredDate) bad('deadline', 'When do you need it?');
   else if (d.preferredDate < todayIso()) bad('deadline', 'Pick today or a later date.');
@@ -261,10 +272,10 @@ function submit(e) {
     });
     return chain.then(function () { return api('api_finalizeRequirement', r.uploadTicket); });
   }).then(function () {
-    if (result.trackToken) { TRACK = result.trackToken; store('gfxTrack', TRACK); }
+    addTrack(result.trackToken);
     showDone(result.requirementId, FILES.filter(function (x) { return x.state === 'error'; }));
   }).catch(function (err) {
-    if (result && result.trackToken) { TRACK = result.trackToken; store('gfxTrack', TRACK); }
+    if (result) addTrack(result.trackToken);
     if (result) return showDone(result.requirementId, FILES.filter(function (x) { return x.state !== 'done'; }));
     btn.disabled = false; btn.innerHTML = icon('send') + ' Send request';
     fieldErrors(document, errMsg(err));
