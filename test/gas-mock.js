@@ -23,7 +23,8 @@ function createEnv(opts = {}) {
     sessions: {},
     mail: [],
     triggers: [],
-    fetchLog: []
+    fetchLog: [],
+    stats: { opens: 0, reads: 0, writes: 0, fetches: 0, mails: 0 }
   };
   let idc = 0;
   const nid = p => p + (++idc).toString(36) + crypto.randomBytes(3).toString('hex');
@@ -41,8 +42,9 @@ function createEnv(opts = {}) {
       setFrozenRows: () => {},
       protect: () => ({ setDescription() { return this; }, getEditors: () => [], removeEditor() {}, canDomainEdit: () => false, setDomainEdit() {} }),
       getRange: (r, c, nr = 1, nc = 1) => { const rg = {
-        getValues: () => { ensure(r + nr - 1, c + nc - 1); return sh.data.slice(r - 1, r - 1 + nr).map(row => row.slice(c - 1, c - 1 + nc).map(v => v)); },
+        getValues: () => { state.stats.reads++; ensure(r + nr - 1, c + nc - 1); return sh.data.slice(r - 1, r - 1 + nr).map(row => row.slice(c - 1, c - 1 + nc).map(v => v)); },
         setValues: vals => {
+          state.stats.writes++;
           if (vals.length !== nr || vals[0].length !== nc) throw new Error('setValues dimension mismatch');
           ensure(r + nr - 1, c + nc - 1);
           vals.forEach((row, i) => row.forEach((v, j) => {
@@ -122,7 +124,7 @@ function createEnv(opts = {}) {
   }
   const UrlFetchApp = {
     fetch(url, p = {}) {
-      state.fetchLog.push({ url, method: p.method });
+      state.fetchLog.push({ url, method: p.method }); state.stats.fetches++;
       const auth = (p.headers || {}).Authorization;
       if (auth !== 'Bearer owner-token') return resp(401, { error: 'unauthorized' });
       if (url.startsWith('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable') && p.method === 'post') {
@@ -181,11 +183,18 @@ function createEnv(opts = {}) {
       getScriptTimeZone: () => 'Asia/Kolkata'
     },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in state.props ? state.props[k] : null), setProperty: (k, v) => { state.props[k] = String(v); } }) },
-    CacheService: { getScriptCache: () => ({ get: k => (state.cache.has(k) ? state.cache.get(k) : null), put: (k, v) => { state.cache.set(k, String(v)); }, remove: k => state.cache.delete(k) }) },
+    CacheService: { getScriptCache: () => ({
+      get: k => (state.cache.has(k) ? state.cache.get(k) : null),
+      put: (k, v) => { if (String(v).length > 100 * 1024) throw new Error('Argument too large: value'); state.cache.set(k, String(v)); },
+      remove: k => state.cache.delete(k),
+      getAll: ks => { const o = {}; ks.forEach(k => { if (state.cache.has(k)) o[k] = state.cache.get(k); }); return o; },
+      putAll: (o) => { Object.keys(o).forEach(k => { if (String(o[k]).length > 100 * 1024) throw new Error('Argument too large: value'); state.cache.set(k, String(o[k])); }); },
+      removeAll: ks => ks.forEach(k => state.cache.delete(k))
+    }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
-    SpreadsheetApp: { openById: id => state.spreadsheets[id].api, create: n => makeSpreadsheet(n), flush() {} },
+    SpreadsheetApp: { openById: id => { state.stats.opens++; return state.spreadsheets[id].api; }, create: n => makeSpreadsheet(n), flush() {} },
     DriveApp, UrlFetchApp, Utilities,
-    MailApp: { getRemainingDailyQuota: () => 100, sendEmail: m => state.mail.push(m) },
+    MailApp: { getRemainingDailyQuota: () => 100, sendEmail: m => { state.stats.mails++; state.mail.push(m); } },
     ScriptApp: {
       getOAuthToken: () => 'owner-token',
       getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/PUBLIC/exec' }),

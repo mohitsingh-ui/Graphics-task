@@ -47,8 +47,20 @@ function notify_(emails, type, title, body, route, sendEmail) {
   });
 }
 
-/** Email that goes outside the team (requesters, reviewers). */
+var MAIL_QUEUE_ = [];
+
+/** Queue an email; it is sent once the database lock is released, so saves stay quick for everyone. */
 function sendMail_(to, subject, bodyText, button) {
+  if (LOCK_DEPTH_ > 0) { MAIL_QUEUE_.push([to, subject, bodyText, button]); return true; }
+  return sendMailNow_(to, subject, bodyText, button);
+}
+
+function flushMail_() {
+  var q = MAIL_QUEUE_; MAIL_QUEUE_ = [];
+  q.forEach(function (m) { sendMailNow_(m[0], m[1], m[2], m[3]); });
+}
+
+function sendMailNow_(to, subject, bodyText, button) {
   try {
     if (MailApp.getRemainingDailyQuota() < 1) { console.warn('Mail quota exhausted; skipped email to ' + to); return false; }
     var s = settings_();

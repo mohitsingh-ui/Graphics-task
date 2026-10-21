@@ -10,6 +10,7 @@
 var DB_CACHE_ = {};
 var DB_SS_ = null;
 var LOCK_DEPTH_ = 0;
+var DIRTY_ = {};
 
 function ss_() {
   if (DB_SS_) return DB_SS_;
@@ -34,13 +35,19 @@ function withLock_(fn) {
   LOCK_DEPTH_ = 1;
   try {
     DB_CACHE_ = {}; // always read fresh data once we own the lock
+    DIRTY_ = {};
+    tcacheEnsureTags_();
     migrateSchema_();
     var out = fn();
     SpreadsheetApp.flush();
     return out;
   } finally {
+    // New tags make every cached copy of a changed table stale at once.
+    try { tcacheBump_(Object.keys(DIRTY_)); } catch (e) { console.warn('cache bump failed: ' + e); }
+    DIRTY_ = {};
     LOCK_DEPTH_ = 0;
     lock.releaseLock();
+    flushMail_();
   }
 }
 
@@ -65,6 +72,9 @@ function cellIn_(v) {
 /** All rows as objects. Each object carries a hidden _row index. */
 function dbAll_(table) {
   if (DB_CACHE_[table]) return DB_CACHE_[table];
+  var cached = tcacheGet_(table);
+  if (cached) { DB_CACHE_[table] = cached; return cached; }
+  var tagBefore = tcacheTag_(table);
   var sh = sheet_(table);
   var cols = SCHEMA[table];
   var last = sh.getLastRow();
@@ -81,6 +91,8 @@ function dbAll_(table) {
     }
   }
   DB_CACHE_[table] = rows;
+  // Only cache if no write landed while we were reading (tag unchanged).
+  if (tagBefore && tagBefore === tcacheTag_(table)) tcachePut_(table, rows, tagBefore);
   return rows;
 }
 
@@ -98,6 +110,7 @@ function dbInsert_(table, obj) {
   var cols = SCHEMA[table];
   var sh = sheet_(table);
   var row = cols.map(function (c) { return cellOut_(obj[c]); });
+  DIRTY_[table] = true;
   var at = Math.max(sh.getLastRow(), 1) + 1;
   sh.getRange(at, 1, 1, cols.length).setValues([row]);
   var stored = {};
@@ -116,6 +129,7 @@ function dbUpdate_(table, id, patch) {
   var merged = {};
   cols.forEach(function (c) { merged[c] = patch.hasOwnProperty(c) ? patch[c] : current[c]; });
   var row = cols.map(function (c) { return cellOut_(merged[c]); });
+  DIRTY_[table] = true;
   sheet_(table).getRange(current._row, 1, 1, cols.length).setValues([row]);
   // Replace the cached row with a new object. Objects callers already hold
   // stay as "before" snapshots, so code can compare old vs new values.
@@ -182,4 +196,68 @@ function migrateSchema_() {
     sh.getRange(1, 1, sh.getMaxRows(), cols.length).setNumberFormat('@');
   });
   props.setProperty('SCHEMA_VERSION', String(SCHEMA_VERSION));
+}
+
+/* ---------- shared read cache (CacheService) ----------
+ * Each table has a "tag" that changes on every write (bumped after the
+ * write is flushed, while the script lock is still held). A cached copy
+ * is used only if it was taken under the current tag, so readers can
+ * never see stale data after a write. Manual edits made directly in the
+ * Sheet show up within TCACHE_TTL seconds.
+ */
+var TCACHE_TTL = 600;
+var TCACHE_CHUNK = 90000;
+var TCACHE_MAX_CHUNKS = 30;
+
+function tcache_() { return CacheService.getScriptCache(); }
+function tcacheTag_(table) { try { return tcache_().get('tt_' + table); } catch (e) { return null; } }
+
+function tcacheEnsureTags_() {
+  try {
+    var c = tcache_(), keys = Object.keys(SCHEMA).map(function (t) { return 'tt_' + t; });
+    var have = c.getAll(keys), missing = {};
+    keys.forEach(function (k) { if (!have[k]) missing[k] = uuid_(); });
+    if (Object.keys(missing).length) c.putAll(missing, 21600);
+  } catch (e) { /* cache is optional */ }
+}
+
+function tcacheBump_(tables) {
+  if (!tables.length) return;
+  var o = {};
+  tables.forEach(function (t) { o['tt_' + t] = uuid_(); });
+  tcache_().putAll(o, 21600);
+}
+
+function tcacheGet_(table) {
+  try {
+    var c = tcache_();
+    var tag = c.get('tt_' + table);
+    if (!tag) return null;
+    var meta = parseJson_(c.get('tm_' + table), null);
+    if (!meta || meta.tag !== tag) return null;
+    var keys = [];
+    for (var i = 0; i < meta.n; i++) keys.push('tc_' + table + '_' + i);
+    var parts = c.getAll(keys), str = '';
+    for (var j = 0; j < keys.length; j++) { if (parts[keys[j]] === undefined || parts[keys[j]] === null) return null; str += parts[keys[j]]; }
+    var packed = JSON.parse(str), cols = SCHEMA[table];
+    return packed.map(function (r) {
+      var o = {};
+      for (var k = 0; k < cols.length; k++) o[cols[k]] = r[k + 1];
+      Object.defineProperty(o, '_row', { value: r[0], enumerable: false });
+      return o;
+    });
+  } catch (e) { return null; }
+}
+
+function tcachePut_(table, rows, tag) {
+  try {
+    var cols = SCHEMA[table];
+    var str = JSON.stringify(rows.map(function (o) { return [o._row].concat(cols.map(function (c) { return o[c]; })); }));
+    var n = Math.ceil(str.length / TCACHE_CHUNK) || 1;
+    if (n > TCACHE_MAX_CHUNKS) return;               // very large tables are read straight from the Sheet
+    var o = {};
+    for (var i = 0; i < n; i++) o['tc_' + table + '_' + i] = str.slice(i * TCACHE_CHUNK, (i + 1) * TCACHE_CHUNK);
+    o['tm_' + table] = JSON.stringify({ tag: tag, n: n });
+    tcache_().putAll(o, TCACHE_TTL);
+  } catch (e) { /* cache is optional */ }
 }

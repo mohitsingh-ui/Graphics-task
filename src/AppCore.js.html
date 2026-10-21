@@ -1,7 +1,17 @@
 <script>
 /* AppCore.js — app bootstrap, role-based navigation, routing, notifications. */
 
-var APP = { boot: null, route: 'overview', role: null, viewToken: 0 };
+var APP = { boot: null, route: 'overview', role: null, viewToken: 0, pre: {} };
+
+/** Uses data that arrived with the page (once), otherwise calls the server. */
+function apiPre(name) {
+  var r = APP.pre[name];
+  if (r) {
+    delete APP.pre[name];
+    return r.ok ? Promise.resolve(r.data) : Promise.reject(r.error || { message: 'Request failed.' });
+  }
+  return api(name);
+}
 
 var NAV = {
   leader: [
@@ -21,7 +31,8 @@ var NAV = {
 
 var VIEWS = {}; // filled by AppViews / AppTask / AppAdmin: VIEWS[name] = function (arg, el, token)
 
-function startApp(initialRoute) {
+function startApp(initialRoute, pre) {
+  APP.pre = pre || {};
   $('#menuBtn').innerHTML = icon('menu');
   $('#refreshBtn').innerHTML = icon('refresh');
   $('#bellBtn').innerHTML = icon('bell');
@@ -37,7 +48,7 @@ function startApp(initialRoute) {
     google.script.history.setChangeHandler(function (e) { if (e.state && e.state.r) render(e.state.r); });
   } catch (err) { /* history API unavailable in some previews */ }
 
-  api('api_bootstrap').then(function (b) {
+  apiPre('api_bootstrap').then(function (b) {
     APP.boot = b; APP.role = b.user.role;
     $('#brandName').textContent = b.companyName || 'Graphics';
     $('#brandSub').textContent = APP.role === 'leader' ? 'Team leader' : 'Designer';
@@ -105,7 +116,7 @@ function viewError(el, e) {
 /* ---------- notifications ---------- */
 
 function loadNotifications() {
-  return api('api_getNotifications').then(function (n) {
+  return apiPre('api_getNotifications').then(function (n) {
     APP.notifs = n;
     var b = $('#bellBtn');
     var d = $('.dotc', b);

@@ -9,7 +9,7 @@ VIEWS.overview = function (arg, el, token) {
 
 function leaderOverview(el, token) {
   setCrumb('Overview');
-  api('api_leaderDashboard').then(function (d) {
+  apiPre('api_leaderDashboard').then(function (d) {
     if (stale(token)) return;
     navCount('requirements', d.kpis.newRequirements);
     navCount('approvals', d.pendingApprovals.length);
@@ -113,7 +113,7 @@ var DESIGNER_TABS = [
 
 function designerOverview(el, token, tab) {
   setCrumb('My dashboard');
-  api('api_designerDashboard').then(function (d) {
+  apiPre('api_designerDashboard').then(function (d) {
     if (stale(token)) return;
     var k = d.kpis, s = d.stats;
     navCount('tasks', k.changesRequested);
@@ -211,11 +211,12 @@ VIEWS.tasks = function (arg, el, token) {
     b.innerHTML = b.innerHTML; b.classList.toggle('on', b.getAttribute('data-v') === TASK_UI.view);
     b.onclick = function () { TASK_UI.view = b.getAttribute('data-v'); $all('#viewSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); drawTasks(); };
   });
-  Promise.all([api('api_listTasks', {}), api('api_leaderDashboard')]).then(function (res) {
+  Promise.all([api('api_listTasks', {}), api('api_listTeam')]).then(function (res) {
     if (stale(token)) return;
     TASK_UI.all = res[0];
-    TASK_UI.team = res[1].workload;
-    TASK_UI.campaigns = res[1].campaigns;
+    TASK_UI.team = res[1].users.filter(function (u) { return u.active; }).map(function (u) { return { email: u.email, name: u.name }; });
+    var seen = {};
+    TASK_UI.campaigns = res[0].map(function (t) { return t.campaign; }).filter(function (c) { if (!c || seen[c]) return false; seen[c] = 1; return true; }).sort();
     drawFilters();
     drawTasks();
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
@@ -346,14 +347,24 @@ VIEWS.approvals = function (arg, el, token) {
 };
 
 /** Lazy-load small previews for [data-thumb] elements; click opens a larger one. */
+var THUMB_MEMO = {};
 function loadThumbs(root) {
-  $all('[data-thumb]', root).forEach(function (t) {
-    var id = t.getAttribute('data-thumb'), kind = t.getAttribute('data-kind') || 'version';
-    api('api_getAsset', kind, id, 'thumb').then(function (p) {
-      if (p.dataUrl) t.innerHTML = '<img src="' + h(p.dataUrl) + '" alt="">';
-    }).catch(function () { /* keep the extension label */ });
+  var nodes = $all('[data-thumb]', root), need = [];
+  nodes.forEach(function (t) {
+    var id = t.getAttribute('data-thumb'), kind = t.getAttribute('data-kind') || 'version', key = kind + ':' + id;
     t.onclick = function () { openAsset(kind, id, t.getAttribute('data-name')); };
+    if (THUMB_MEMO[key] !== undefined) { if (THUMB_MEMO[key]) t.innerHTML = '<img src="' + h(THUMB_MEMO[key]) + '" alt="">'; }
+    else if (!need.some(function (n) { return n.kind + ':' + n.id === key; })) need.push({ kind: kind, id: id });
   });
+  for (var i = 0; i < need.length; i += 24) {
+    api('api_getThumbs', need.slice(i, i + 24)).then(function (map) {
+      Object.keys(map).forEach(function (k) { THUMB_MEMO[k] = map[k]; });
+      nodes.forEach(function (t) {
+        var k = (t.getAttribute('data-kind') || 'version') + ':' + t.getAttribute('data-thumb');
+        if (map[k] && document.body.contains(t)) t.innerHTML = '<img src="' + h(map[k]) + '" alt="">';
+      });
+    }).catch(function () { /* keep the extension labels */ });
+  }
 }
 
 function openAsset(kind, id, name) {

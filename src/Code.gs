@@ -28,7 +28,14 @@ function doGet(e) {
     var email = activeEmail_();
     var member = email ? userByEmail_(email) : null;
     if (member && bool_(member.active)) {
-      return render_('App', { route: String(p.r || '').replace(/[^\w\-\/]/g, '').slice(0, 80) }, s.portalName, s.allowEmbedding);
+      var route = String(p.r || '').replace(/[^\w\-\/]/g, '').slice(0, 80);
+      // Pre-load the first screen's data into the page so it opens without extra round trips.
+      var pre = { api_bootstrap: api_bootstrap(), api_getNotifications: api_getNotifications() };
+      if (!route || route === 'overview') {
+        if (member.role === ROLES.LEADER) pre.api_leaderDashboard = api_leaderDashboard();
+        else pre.api_designerDashboard = api_designerDashboard();
+      }
+      return render_('App', { route: route, pre: pre }, s.portalName, s.allowEmbedding);
     }
     if (page === 'app') {
       return render_('NoAccess', { email: email, publicUrl: s.publicUrl }, s.portalName);

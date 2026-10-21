@@ -193,7 +193,7 @@ var DRIVE_FOLDERS = {
 /** Hard technical limits (not editable). */
 var LIMITS = {
   CHUNK_BYTES: 4 * 1024 * 1024,        // multiple of 256 KB, required by Drive resumable upload
-  PREVIEW_INLINE_BYTES: 8 * 1024 * 1024,
+  PREVIEW_INLINE_BYTES: 2 * 1024 * 1024,   // bigger images are shown via Drive's (much smaller) rendered preview
   ORIGINAL_INLINE_BYTES: 20 * 1024 * 1024,
   TEXT_SHORT: 200,
   TEXT_LONG: 8000,

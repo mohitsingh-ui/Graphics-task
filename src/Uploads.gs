@@ -200,29 +200,62 @@ function createVersion_(user, rec, file) {
 
 /* ---------- internal file access (team only) ---------- */
 
+/** Looks up a version/attachment file the current user may see. */
+function assetRef_(u, kind, id) {
+  if (kind === 'version') {
+    var v = dbGet_('CreativeVersions', str_(id, 60, 'Version', true));
+    if (!v) throw AppError_('NOT_FOUND', 'File not found.');
+    requireTask_(u, v.taskId);
+    return { fileId: v.fileId, mime: v.mimeType, size: v.sizeBytes, name: v.fileName };
+  }
+  if (kind === 'attachment') {
+    var a = dbGet_('ReferenceFiles', str_(id, 60, 'Attachment', true));
+    if (!a) throw AppError_('NOT_FOUND', 'File not found.');
+    var task = a.taskId ? dbGet_('Tasks', a.taskId) : dbFind_('Tasks', function (t) {
+      return t.requirementId === a.requirementId && (isLeader_(u) || t.assigneeEmail === u.email);
+    })[0];
+    if (!task) throw AppError_('NOT_FOUND', 'File not found.');
+    requireTask_(u, task.taskId);
+    return { fileId: a.fileId, mime: a.mimeType, size: a.sizeBytes, name: a.fileName };
+  }
+  throw AppError_('VALIDATION', 'Unknown file.');
+}
+
 /** Preview or original for a version/attachment the current user may see. */
 function api_getAsset(kind, id, mode) {
   return respond_(function () {
     var u = currentUser_();
-    var fileId, mime, size, name;
-    if (kind === 'version') {
-      var v = dbGet_('CreativeVersions', str_(id, 60, 'Version', true));
-      if (!v) throw AppError_('NOT_FOUND', 'File not found.');
-      requireTask_(u, v.taskId);
-      fileId = v.fileId; mime = v.mimeType; size = v.sizeBytes; name = v.fileName;
-    } else if (kind === 'attachment') {
-      var a = dbGet_('ReferenceFiles', str_(id, 60, 'Attachment', true));
-      if (!a) throw AppError_('NOT_FOUND', 'File not found.');
-      var task = a.taskId ? dbGet_('Tasks', a.taskId) : dbFind_('Tasks', function (t) {
-        return t.requirementId === a.requirementId && (isLeader_(u) || t.assigneeEmail === u.email);
-      })[0];
-      if (!task) throw AppError_('NOT_FOUND', 'File not found.');
-      requireTask_(u, task.taskId);
-      fileId = a.fileId; mime = a.mimeType; size = a.sizeBytes; name = a.fileName;
-    } else throw AppError_('VALIDATION', 'Unknown file.');
-    if (mode === 'original') return originalOf_(fileId, name);
-    var p = previewOf_(fileId, mime, size, mode === 'thumb' ? 480 : 1600);
-    if (mode === 'drive' && isLeader_(u)) { try { p.driveUrl = DriveApp.getFileById(fileId).getUrl(); } catch (e) { /* ignore */ } }
+    var f = assetRef_(u, kind, id);
+    if (mode === 'original') return originalOf_(f.fileId, f.name);
+    if (mode === 'thumb') { var t = smallThumb_(f); return t ? { kind: 'thumbnail', dataUrl: t } : { kind: 'none' }; }
+    var p = previewOf_(f.fileId, f.mime, f.size, 1600);
+    if (mode === 'drive' && isLeader_(u)) { try { p.driveUrl = DriveApp.getFileById(f.fileId).getUrl(); } catch (e) { /* ignore */ } }
     return p;
   });
+}
+
+/** Many small thumbnails in one round trip. items: [{kind, id}] (max 24). Returns { "kind:id": dataUrl|null }. */
+function api_getThumbs(items) {
+  return respond_(function () {
+    var u = currentUser_();
+    var out = {};
+    (Array.isArray(items) ? items : []).slice(0, 24).forEach(function (it) {
+      var key = it.kind + ':' + it.id;
+      try { out[key] = smallThumb_(assetRef_(u, it.kind, it.id)); } catch (e) { out[key] = null; }
+    });
+    return out;
+  });
+}
+
+/** 480px thumbnail, cached for 6 hours (files never change once uploaded). */
+function smallThumb_(f) {
+  var cache = CacheService.getScriptCache(), key = 'th_' + f.fileId;
+  var hit = cache.get(key);
+  if (hit) return hit === '-' ? null : hit;
+  var url = thumbnail_(f.fileId, 480);
+  if (!url && INLINE_IMAGE_TYPES.indexOf(f.mime) !== -1 && Number(f.size) <= 300 * 1024) {
+    var p = previewOf_(f.fileId, f.mime, f.size, 480); url = p.dataUrl || null;
+  }
+  try { cache.put(key, url && url.length < 95000 ? url : (url ? '' : '-'), 21600); } catch (e) { /* too big to cache */ }
+  return url;
 }

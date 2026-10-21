@@ -505,6 +505,21 @@ scenario('Embedding: off by default; when on, form/app embeddable but review pag
   ok(call(LEADER, 'api_saveSettings', { allowEmbedding: false }));
 });
 
+scenario('Speed: repeat reads come from cache, and writes are seen immediately', () => {
+  call(LEADER, 'api_getTask', task1.taskId);                       // warm
+  Object.keys(state.stats).forEach(k => state.stats[k] = 0);
+  call(LEADER, 'api_getTask', task1.taskId);
+  assert.strictEqual(state.stats.opens + state.stats.reads, 0, 'cached read should not touch the Sheet');
+  ok(call(LEADER, 'api_addComment', task1.taskId, 'cache check 123'));
+  const after = ok(call(LEADER, 'api_getTask', task1.taskId));
+  assert.ok(after.activity.some(a => a.note === 'cache check 123'), 'write visible right after');
+  const ids = after.deliverables[0].versions.map(v => ({ kind: 'version', id: v.versionId }));
+  const thumbs = ok(call(LEADER, 'api_getThumbs', ids));
+  assert.strictEqual(Object.keys(thumbs).length, ids.length);
+  const denied = ok(call(A, 'api_getThumbs', ids));               // A was reassigned off this task
+  assert.ok(Object.values(denied).every(v => v === null), 'no thumbnails for tasks you cannot see');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';
