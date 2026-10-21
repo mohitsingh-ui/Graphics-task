@@ -71,9 +71,14 @@ function completeTask_(task, actor, note) {
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
       if (settings_().emailNotifications) {
+        var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
+          .map(function (t) { return t.finalLink; });
+        if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
+        var track = trackUrl_(issueTrackToken_(req.email));
         sendMail_(req.email, 'Your creative is ready (' + req.requirementId + ')',
-          'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete. ' +
-          'The graphics team will share the final files with you.', null);
+          'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
+          (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
+          '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
       }
     }
   }
@@ -82,7 +87,7 @@ function completeTask_(task, actor, note) {
 /* ---------- DTOs ---------- */
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
-  'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'priority',
+  'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'finalLink', 'priority',
   'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt'];
 
 function taskDto_(t, user, extra) {
@@ -357,6 +362,7 @@ function taskPermissions_(u, t) {
     canUpload: (isAssignee || leader) && uploadable.indexOf(t.status) !== -1,
     canProgress: (isAssignee || leader) && [STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.CHANGES, STATUS.SUBMITTED, STATUS.RESUBMITTED].indexOf(t.status) !== -1,
     canAssign: leader && CLOSED.indexOf(t.status) === -1,
+    canSetFinalLink: (isAssignee || leader) && t.status !== STATUS.CANCELLED,
     canEdit: leader,
     canDecide: leader,
     canOverrideComplete: leader && [STATUS.COMPLETED, STATUS.CANCELLED].indexOf(t.status) === -1,

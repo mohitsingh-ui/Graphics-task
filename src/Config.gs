@@ -19,7 +19,7 @@ var SCHEMA = {
     'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'assigneeEmail',
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
-    'createdBy', 'createdAt', 'updatedAt', 'dueTime'],
+    'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -35,11 +35,12 @@ var SCHEMA = {
   ApprovalDecisions: ['decisionId', 'requestId', 'versionId', 'deliverableId', 'taskId', 'decision', 'comment',
     'reviewerName', 'reviewerEmail', 'channel', 'decidedBy', 'decidedAt'],
   Notifications: ['notificationId', 'recipientEmail', 'type', 'title', 'body', 'route', 'createdAt', 'readAt'],
-  Settings: ['key', 'value', 'updatedAt']
+  Settings: ['key', 'value', 'updatedAt'],
+  RequesterLinks: ['linkId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'lastUsedAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 

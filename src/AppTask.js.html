@@ -58,7 +58,7 @@ function drawTask(el) {
 
     '<div class="detail"><div class="stack">' +
     briefCard(d) + deliverablesCard(d) + activityTimeline(d) +
-    '</div><div class="stack">' + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
+    '</div><div class="stack">' + finalLinkCard(d) + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
 
   wireGo(el);
   loadThumbs(el);
@@ -71,6 +71,12 @@ function drawTask(el) {
   if ($('#aStatus')) $('#aStatus').onclick = statusModal;
   $all('[data-progress]', el).forEach(function (b) { b.onclick = function () { setProgress(Number(b.getAttribute('data-progress'))); }; });
   if ($('#cmtBtn')) $('#cmtBtn').onclick = addComment;
+  if ($('#flSave')) $('#flSave').onclick = function () {
+    var v = $('#flInput').value.trim(), b = this;
+    if (v && !/^https:\/\/\S+$/i.test(v)) return toast('Paste a full link starting with https://', true);
+    b.disabled = true;
+    run(api('api_setFinalLink', t.taskId, v), v ? 'Final files link saved — the requester can download it now' : 'Link removed').then(function () { b.disabled = false; });
+  };
   if ($('#notesSave')) $('#notesSave').onclick = function () { run(api('api_updateTask', t.taskId, { internalNotes: $('#notes').value }), 'Notes saved'); };
   if ($('#splitBtn')) $('#splitBtn').onclick = splitModal;
   if ($('#refUpload')) $('#refUpload').onclick = function () { pickFiles(true, function (files) { uploadRefs(files); }); };
@@ -152,6 +158,18 @@ function activityTimeline(d) {
         (a.note && ['status', 'assignment', 'created'].indexOf(a.action) === -1 ? '<div class="t-note">' + h(a.note) + '</div>' : '') +
         '<div class="t-meta">' + fmtDateTime(a.createdAt) + '</div></li>';
     }).join('') + '</ul>' : emptyState('No activity yet.')) + '</div></div>';
+}
+
+/** Google Drive (or any) link to the final files, shown to the requester on "My requests". */
+function finalLinkCard(d) {
+  var t = d.task, can = d.permissions.canSetFinalLink;
+  if (!can && !t.finalLink) return '';
+  return '<div class="card"><div class="card-h"><h3>Final files link</h3>' + (t.finalLink ? '<span class="badge s-approved">Shared</span>' : '') + '</div><div class="card-b stack">' +
+    (t.finalLink ? '<a class="btn ok" href="' + h(t.finalLink) + '" target="_blank" rel="noopener">' + icon('download') + ' Open final files</a>' : '') +
+    (can ? '<div class="field"><label for="flInput">Google Drive link to the final files</label><input type="url" id="flInput" placeholder="https://drive.google.com/…" value="' + h(t.finalLink || '') + '">' +
+      '<span class="hint">Set the Drive folder or file to <b>“Anyone with the link – Viewer”</b> so the requester can download it.</span></div>' +
+      '<div><button class="btn sm primary" id="flSave">Save link</button></div>' : '') +
+    '</div></div>';
 }
 
 function sideCard(d) {
@@ -406,6 +424,8 @@ function uploadModal(deliverableId) {
       '<div class="faint small">Max ' + h(APP.boot.maxUploadMB) + ' MB · ' + h(APP.boot.extensions.join(', ')) + '</div></div><div id="u_files" class="stack" style="gap:6px;margin-top:8px"></div>' +
       '<span class="hint" id="u_multi">Several files = several creatives, numbered automatically.</span></div>' +
       '<div class="field"><label>Submission note</label><textarea id="u_note" rows="2" maxlength="1000" placeholder="Optional — what changed, anything the reviewer should know"></textarea></div>' +
+      '<div class="field"><label>Google Drive link to final files <span class="faint">(optional)</span></label><input type="url" id="u_link" placeholder="https://drive.google.com/…" value="' + h(t.finalLink || '') + '">' +
+      '<span class="hint">Share it as “Anyone with the link – Viewer”. The requester gets a download button.</span></div>' +
       '<label class="check"><input type="checkbox" id="u_submit" checked> Send for approval right after upload</label>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, { label: 'Upload', cls: 'primary', onClick: function (close, el, btn) { return doUpload(close, el, btn); } }]
@@ -451,6 +471,8 @@ function uploadModal(deliverableId) {
     if (!pending.length) return fieldErrors(el, files.length ? 'Everything is uploaded.' : 'Choose a file to upload.');
     if (!target && !title) return fieldErrors(el, 'Give the creative a title, e.g. “Homepage banner – desktop”.');
     var note = $('#u_note', el).value.trim(), andSubmit = $('#u_submit', el).checked;
+    var finalLink = $('#u_link', el).value.trim();
+    if (finalLink && !/^https:\/\/\S+$/i.test(finalLink)) return fieldErrors(el, 'The Drive link should start with https://');
     var created = [];
     var chain = Promise.resolve();
     pending.forEach(function (x, i) {
@@ -463,6 +485,8 @@ function uploadModal(deliverableId) {
       });
     });
     return chain.then(function () {
+      if (finalLink !== (t.finalLink || '')) return api('api_setFinalLink', t.taskId, finalLink);
+    }).then(function () {
       if (andSubmit && created.length) return api('api_submitForApproval', t.taskId, created).then(function (r) { return r; });
     }).then(function (r) {
       close();

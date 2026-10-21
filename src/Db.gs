@@ -184,8 +184,12 @@ function migrateSchema_() {
   var ss = ss_();
   Object.keys(SCHEMA).forEach(function (name) {
     var sh = ss.getSheetByName(name);
-    if (!sh) return;
     var cols = SCHEMA[name];
+    if (!sh) {
+      sh = ss.insertSheet(name);
+      sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+    }
     if (sh.getMaxColumns() < cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), cols.length - sh.getMaxColumns());
     var header = sh.getRange(1, 1, 1, cols.length).getValues()[0];
     for (var i = 0; i < cols.length; i++) {

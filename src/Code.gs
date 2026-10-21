@@ -42,9 +42,11 @@ function doGet(e) {
     }
   }
   var formBoot = {};
+  if (page === 'my') formBoot.tab = 'my';
+  if (page === 'my' && TOKEN_RE.test(String(p.t || ''))) formBoot.track = String(p.t);
   var who = activeEmail_();
   var tm = who ? userByEmail_(who) : null;
-  if (tm && bool_(tm.active)) formBoot = { name: tm.name, email: tm.email, backUrl: s.internalUrl || '' };
+  if (tm && bool_(tm.active)) { formBoot.name = tm.name; formBoot.email = tm.email; formBoot.backUrl = s.internalUrl || ''; }
   return render_('Form', formBoot, 'Request a creative · ' + s.companyName, s.allowEmbedding);
 }
 

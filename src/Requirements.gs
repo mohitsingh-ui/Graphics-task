@@ -115,7 +115,7 @@ function api_submitRequirement(payload) {
       });
       logActivity_(taskId, member ? { email: member.email, role: member.role } : { email: r.email, role: 'requester' }, 'created', '', STATUS.NEW,
         (member ? 'raised from the portal (' : 'via the request form (') + reqId + ')', 'team');
-      return { requirementId: reqId, taskId: taskId, folderId: folder.getId() };
+      return { requirementId: reqId, taskId: taskId, folderId: folder.getId(), trackToken: issueTrackToken_(r.email) };
     });
 
     var ticket = randomToken_();
@@ -124,7 +124,7 @@ function api_submitRequirement(payload) {
       files: 0, finalized: false
     }), LIMITS.UPLOAD_TTL_SEC);
 
-    return { requirementId: result.requirementId, uploadTicket: ticket };
+    return { requirementId: result.requirementId, uploadTicket: ticket, trackToken: result.trackToken };
   });
 }
 
@@ -155,14 +155,16 @@ function notifyNewRequirement_(requirementId) {
   var files = dbFind_('ReferenceFiles', function (f) { return f.requirementId === requirementId; }).length;
   dbUpdate_('Requirements', requirementId, { notifiedAt: nowIso_(), updatedAt: nowIso_() });
   notify_(leaderEmails_().filter(function (e) { return e !== req.submittedBy; }), 'requirement_new', 'New requirement: ' + req.title,
-    req.requesterName + ' (' + req.department + ') needs ' + req.quantity + ' × ' + req.creativeType + ' by ' + dueText_(req.preferredDate, req.preferredTime) +
+    req.requesterName + ' (' + req.department + ') needs ' + req.quantity + ' creative(s) by ' + dueText_(req.preferredDate, req.preferredTime) +
     '.\n\n' + String(req.brief).slice(0, 400) + '\n\n' + files + ' reference file(s) attached.',
     task ? 'task/' + task.taskId : 'requirements');
   if (settings_().emailRequesterOnSubmit) {
+    var link = trackUrl_(issueTrackToken_(req.email));
     sendMail_(req.email, 'We’ve got your request (' + requirementId + ')',
-      'Hi ' + req.requesterName + ',\n\nYour graphics requirement "' + req.title + '" has reached the graphics team.\n' +
-      'Reference ID: ' + requirementId + '\nPreferred delivery: ' + dueText_(req.preferredDate, req.preferredTime) +
-      '\n\nThe team leader will review it and you’ll get a review link once the creative is ready.', null);
+      'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" has reached the graphics team.\n' +
+      'Reference ID: ' + requirementId + '\nNeeded by: ' + dueText_(req.preferredDate, req.preferredTime) +
+      '\n\nSee all your requests and their status any time:\n' + link +
+      '\n\nYou’ll get a review link as soon as the creative is ready.', { label: 'See my requests', url: link });
   }
 }
 

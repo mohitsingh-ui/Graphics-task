@@ -461,7 +461,7 @@ scenario('Live database from the previous version is upgraded in place', () => {
   ss.sheets.Requirements.data[0].splice(ss.sheets.Requirements.data[0].indexOf('preferredTime'), 2, '', '');
   state.props.SCHEMA_VERSION = '1';
   ok(call(LEADER, 'api_addComment', taskB2(), 'trigger a write'));
-  assert.strictEqual(state.props.SCHEMA_VERSION, '2');
+  assert.strictEqual(state.props.SCHEMA_VERSION, String(env.ctx.SCHEMA_VERSION));
   assert.strictEqual(tasks.data[0][idx], 'dueTime');
   assert.ok(ss.sheets.Requirements.data[0].includes('submittedBy'));
   assert.deepStrictEqual(tasks.data[1].slice(0, idx), sample, 'existing data untouched');
@@ -518,6 +518,55 @@ scenario('Speed: repeat reads come from cache, and writes are seen immediately',
   assert.strictEqual(Object.keys(thumbs).length, ids.length);
   const denied = ok(call(A, 'api_getThumbs', ids));               // A was reassigned off this task
   assert.ok(Object.values(denied).every(v => v === null), 'no thumbnails for tasks you cannot see');
+});
+
+scenario('My requests: private tracking link shows only your own requests and status', () => {
+  const mk = (email, text) => {
+    const s = ok(call('', 'api_submitRequirement', { requesterName: 'P', email, department: 'Sales', brief: text, preferredDate: future(6), quantity: 2 }));
+    ok(call('', 'api_finalizeRequirement', s.uploadTicket));
+    return s;
+  };
+  const s1 = mk('priya@gmail.com', 'Poster one'), s2 = mk('Priya@gmail.com', 'Poster two'), other = mk('someone@else.com', 'Not hers');
+  assert.match(s1.trackToken, /^[A-Za-z0-9_-]{40,60}$/);
+  const mine = ok(call('', 'api_getMyRequests', s2.trackToken));
+  assert.strictEqual(mine.email, 'priya@gmail.com');
+  assert.deepStrictEqual(mine.requests.map(r => r.title).sort(), ['Poster one', 'Poster two']);
+  assert.ok(mine.requests.every(r => r.status === 'Received'));
+  assert.ok(!JSON.stringify(mine).match(/asha|bilal|assignee|internalNotes|GFX-/i), 'no internal details');
+  err(call('', 'api_getMyRequests', 'x'.repeat(43)), 'LINK_INVALID');
+  // tracking link is in the confirmation email
+  assert.ok(state.mail.some(m => m.to === 'priya@gmail.com' && /p=my&t=/.test(m.body)));
+  // re-send link: same answer for unknown emails, email only to known
+  const before = state.mail.length;
+  assert.match(ok(call('', 'api_sendTrackLink', 'nobody@nowhere.com')).message, /If that email/);
+  assert.strictEqual(state.mail.length, before);
+  ok(call('', 'api_sendTrackLink', 'priya@gmail.com'));
+  assert.strictEqual(state.mail.length, before + 1);
+  // progress: assign, upload, submit -> "Ready for your review" with a working review button
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(t => t.requirementId === s1.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: B, dueDate: future(5), priority: 'High' }));
+  assert.strictEqual(ok(call('', 'api_getMyRequests', s1.trackToken)).requests.find(r => r.requirementId === s1.requirementId).status, 'In progress');
+  const up = upload(B, { kind: 'version', taskId: tid, title: 'Poster A4' }, 'p.png', png(2000));
+  ok(call(B, 'api_submitForApproval', tid, [up.versionId]));
+  const r1 = ok(call('', 'api_getMyRequests', s1.trackToken)).requests.find(r => r.requirementId === s1.requirementId);
+  assert.strictEqual(r1.status, 'Ready for your review');
+  assert.strictEqual(r1.awaiting.length, 1);
+  err(call('', 'api_trackReview', ok(call('', 'api_getMyRequests', other.trackToken)) && other.trackToken, up.versionId), 'NOT_FOUND'); // not their request
+  const rev = ok(call('', 'api_trackReview', s1.trackToken, up.versionId));
+  const tok = /t=([A-Za-z0-9_-]+)/.exec(rev.url)[1];
+  ok(call('', 'api_submitReview', tok, { decision: 'approved', reviewerName: 'Priya', reviewerEmail: 'priya@gmail.com' }));
+  // final files link by the designer -> download button + email
+  err(call(A, 'api_setFinalLink', tid, 'https://drive.google.com/x'), 'NOT_FOUND');      // not their task
+  err(call(B, 'api_setFinalLink', tid, 'javascript:alert(1)'), 'VALIDATION');
+  ok(call(LEADER, 'api_updateTask', tid, { deliverablesRequired: 1 }));               // 1 of 1 approved -> completes
+  ok(call(B, 'api_setFinalLink', tid, 'https://drive.google.com/drive/folders/abc'));
+  const r2 = ok(call('', 'api_getMyRequests', s1.trackToken)).requests.find(r => r.requirementId === s1.requirementId);
+  assert.strictEqual(r2.status, 'Completed');
+  assert.deepStrictEqual(r2.finalLinks, ['https://drive.google.com/drive/folders/abc']);
+  assert.ok(state.mail.some(m => m.to === 'priya@gmail.com' && m.body.includes('drive.google.com/drive/folders/abc')));
+  // page route
+  state.currentUser = ''; env.ctx.DB_CACHE_ = {}; env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(env.ctx.doGet({ parameter: { p: 'my', t: s1.trackToken } }).html.includes('"tab":"my"'));
 });
 
 scenario('Pages render: public form, review, app shell, no-access', () => {

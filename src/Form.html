@@ -33,6 +33,22 @@
   .done .tick { width: 56px; height: 56px; border-radius: 50%; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; margin: 0 auto 14px; }
   .done .tick svg { width: 28px; height: 28px; }
   .ref-id { display: inline-block; font-size: 22px; font-weight: 600; padding: 8px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
+  .tabs-top { display: flex; gap: 4px; margin-bottom: 18px; background: var(--muted-soft); padding: 4px; border-radius: 10px; width: fit-content; }
+  .tabs-top button { border: 0; background: none; padding: 8px 16px; border-radius: 7px; font: 500 13.5px var(--font); color: var(--text-2); cursor: pointer; }
+  .tabs-top button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  .req-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .req-card + .req-card { margin-top: 12px; }
+  .req-card .top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .req-card h3 { font-size: 15.5px; margin: 0 0 2px; }
+  .req-card .meta { font-size: 12.5px; color: var(--text-3); }
+  .req-card .brief { font-size: 13px; color: var(--text-2); margin: 8px 0 0; white-space: pre-line; }
+  .req-card .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .st-received, .st-on-hold { background: var(--muted-soft); color: var(--text-2); }
+  .st-in-progress { background: var(--accent-soft); color: var(--accent-ink); }
+  .st-ready-for-your-review { background: var(--warn-soft); color: var(--warn); }
+  .st-being-revised { background: var(--info-soft); color: var(--info); }
+  .st-completed { background: var(--ok-soft); color: var(--ok); }
+  .st-cancelled { background: var(--muted-soft); color: var(--text-3); }
   @media (max-width: 600px) {
     .mrow, .mrow.split { grid-template-columns: 1fr; gap: 2px; }
     .mrow.split > .mlabel { margin-top: 4px; }
@@ -40,15 +56,90 @@
 </style>
 </head>
 <body>
-<main id="main"><div class="loading-page"><span class="spinner"></span> Loading…</div></main>
+<main>
+  <div class="tabs-top" role="tablist"><button data-tab="new" class="on" role="tab">New request</button><button data-tab="my" role="tab">My requests</button></div>
+  <div id="main"><div class="loading-page"><span class="spinner"></span> Loading…</div></div>
+</main>
 
 <?!= include_('Common.js') ?>
 <script>
 var BOOT = <?!= bootJson ?>;
 var CFG = null, FILES = [];
 
-api('api_getFormConfig').then(function (cfg) { CFG = cfg; renderForm(); })
+/* ---- tracking link: from the URL, else remembered on this device ---- */
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
+var TRACK = BOOT.track || store('gfxTrack') || '';
+if (BOOT.track) store('gfxTrack', BOOT.track);
+
+$all('.tabs-top button').forEach(function (b) { b.onclick = function () { showTab(b.getAttribute('data-tab')); }; });
+function showTab(tab) {
+  $all('.tabs-top button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === tab); });
+  if (tab === 'my') return renderMy();
+  if (!CFG) return;
+  renderForm();
+}
+
+api('api_getFormConfig').then(function (cfg) { CFG = cfg; showTab(BOOT.tab === 'my' ? 'my' : 'new'); })
   .catch(function (e) { $('#main').innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>'; });
+
+/* ---- My requests ---- */
+function renderMy() {
+  var el = $('#main');
+  if (!TRACK) return renderAskEmail();
+  el.innerHTML = '<div class="loading-page"><span class="spinner"></span> Loading your requests…</div>';
+  api('api_getMyRequests', TRACK).then(function (d) {
+    var list = d.requests;
+    el.innerHTML = '<div class="intro"><h1>My requests</h1><p class="muted">Requests from <b>' + h(d.email) + '</b>. ' +
+      '<a href="#" id="forget">Not you?</a></p></div>' +
+      (list.length ? list.map(reqCard).join('') :
+        '<div class="card"><div class="empty">' + icon('inbox') + '<b>No requests yet</b><span>Anything you send will show up here.</span></div></div>');
+    $('#forget').onclick = function (e) { e.preventDefault(); TRACK = ''; store('gfxTrack', null); renderMy(); };
+    $all('[data-review]', el).forEach(function (b) {
+      b.onclick = function () {
+        var w = null; try { w = window.open('', '_blank'); } catch (x) { w = null; }
+        b.disabled = true;
+        api('api_trackReview', TRACK, b.getAttribute('data-review')).then(function (r) {
+          if (w) w.location = r.url;
+          else b.outerHTML = '<a class="btn primary sm" href="' + h(r.url) + '" target="_blank" rel="noopener">Open review ↗</a>';
+          b.disabled = false;
+        }).catch(function (e) { if (w) w.close(); toast(errMsg(e), true); b.disabled = false; renderMy(); });
+      };
+    });
+  }).catch(function (e) {
+    if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACK = ''; store('gfxTrack', null); return renderAskEmail(errMsg(e)); }
+    el.innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
+  });
+}
+
+function reqCard(r) {
+  var st = '<span class="badge st-' + slug(r.status) + '">' + h(r.status) + '</span>';
+  var progress = r.required ? '<div class="row" style="margin-top:10px"><div class="grow">' + progressBar(r.approved / r.required * 100, r.status === 'Completed') +
+    '</div><span class="faint small">' + r.approved + ' of ' + r.required + ' approved</span></div>' : '';
+  var acts = r.awaiting.map(function (a) {
+    return '<button class="btn primary sm" data-review="' + h(a.versionId) + '">' + icon('check') + ' Review ' + h(a.title) + ' ' + h(a.version) + '</button>';
+  }).concat(r.finalLinks.map(function (u, i) {
+    return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
+  })).join('');
+  return '<div class="req-card"><div class="top"><div><h3>' + h(r.title) + '</h3><div class="meta">' + h(r.requirementId) + ' · sent ' + fmtDate(r.submittedAt) +
+    ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' +
+    progress + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
+}
+
+function renderAskEmail(msg) {
+  $('#main').innerHTML = '<div class="intro"><h1>My requests</h1><p class="muted">We’ll email you a private link to see all your requests and their status.</p></div>' +
+    (msg ? '<div class="alert warn" style="margin-bottom:12px">' + h(msg) + '</div>' : '') +
+    '<form class="card" id="askF"><div class="card-b stack"><div class="field"><label for="askE">Your email</label>' +
+    '<input type="email" id="askE" placeholder="you@email.com" autocomplete="email" value="' + h(BOOT.email || '') + '"></div>' +
+    '<div><button class="btn primary" id="askB">' + icon('send') + ' Email me my link</button></div><div id="askOut"></div></div></form>';
+  $('#askF').onsubmit = function (e) {
+    e.preventDefault();
+    var v = $('#askE').value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v)) return toast('Enter a valid email.', true);
+    $('#askB').disabled = true;
+    api('api_sendTrackLink', v).then(function (r) { $('#askOut').innerHTML = '<div class="alert ok">' + h(r.message) + '</div>'; })
+      .catch(function (err) { toast(errMsg(err), true); }).then(function () { $('#askB').disabled = false; });
+  };
+}
 
 function renderForm() {
   var minDate = todayIso();
@@ -170,8 +261,10 @@ function submit(e) {
     });
     return chain.then(function () { return api('api_finalizeRequirement', r.uploadTicket); });
   }).then(function () {
+    if (result.trackToken) { TRACK = result.trackToken; store('gfxTrack', TRACK); }
     showDone(result.requirementId, FILES.filter(function (x) { return x.state === 'error'; }));
   }).catch(function (err) {
+    if (result && result.trackToken) { TRACK = result.trackToken; store('gfxTrack', TRACK); }
     if (result) return showDone(result.requirementId, FILES.filter(function (x) { return x.state !== 'done'; }));
     btn.disabled = false; btn.innerHTML = icon('send') + ' Send request';
     fieldErrors(document, errMsg(err));
@@ -183,12 +276,13 @@ function showDone(id, failed) {
   $('#main').innerHTML = '<div class="card done"><div class="tick">' + icon('check') + '</div>' +
     '<h1>Request sent</h1><p class="muted">The graphics team has it. Your reference ID:</p>' +
     '<div class="ref-id">' + h(id) + '</div>' +
-    '<p class="muted">You’ll get an email copy now, and a link to approve the creative when it’s ready.</p>' +
+    '<p class="muted">You’ll get an email copy now, and a link to approve the creative when it’s ready.<br>Track it any time under <b>My requests</b>.</p>' +
     (failed.length ? '<div class="alert warn" style="text-align:left;margin-top:16px">These files didn’t attach: ' + failed.map(function (x) { return h(x.file.name); }).join(', ') +
       '. Your request is saved — reply to the confirmation email with them.</div>' : '') +
-    '<div class="row" style="justify-content:center;margin-top:20px"><button class="btn" id="again">Send another request</button>' +
+    '<div class="row wrap" style="justify-content:center;margin-top:20px"><button class="btn primary" id="toMy">See my requests</button><button class="btn" id="again">Send another request</button>' +
     (BOOT.backUrl ? '<a class="btn primary" href="' + h(BOOT.backUrl) + '" target="_top">Back to dashboard</a>' : '') + '</div></div>';
   $('#again').onclick = function () { FILES = []; renderForm(); window.scrollTo(0, 0); };
+  $('#toMy').onclick = function () { showTab('my'); };
 }
 </script>
 </body>

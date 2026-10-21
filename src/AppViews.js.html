@@ -96,6 +96,7 @@ function activityText(a) {
     case 'reference_added': return 'added reference ' + h(a.toValue);
     case 'link_created': return 'created a review link';
     case 'link_revoked': return 'revoked review links';
+    case 'final_link': return a.toValue === 'added' ? 'shared the final files link' : 'removed the final files link';
     case 'overdue': return '<span class="overdue-flag">became overdue</span>';
     default: return h(a.action);
   }
