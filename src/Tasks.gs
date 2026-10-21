@@ -82,7 +82,7 @@ function completeTask_(task, actor, note) {
 /* ---------- DTOs ---------- */
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
-  'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'priority',
+  'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'priority',
   'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt'];
 
 function taskDto_(t, user, extra) {
@@ -121,7 +121,7 @@ function api_bootstrap() {
       creativeTypes: s.creativeTypes.map(function (t) { return { id: t.id, label: t.label }; }),
       chunkBytes: LIMITS.CHUNK_BYTES, maxUploadMB: s.maxUploadMB, extensions: s.allowedExtensions,
       workloadThreshold: s.workloadThreshold, brandGuidelinesUrl: s.brandGuidelinesUrl,
-      publicUrl: s.publicUrl
+      publicUrl: s.publicUrl, internalUrl: s.internalUrl
     };
   });
 }
@@ -177,7 +177,7 @@ function api_leaderDashboard() {
       kpis: kpis,
       incoming: tasks.filter(function (t) { return t.status === STATUS.NEW || t.status === STATUS.UNDER_REVIEW; }).sort(byNewest).slice(0, 8).map(withReq),
       needsAssignment: tasks.filter(function (t) { return t.status === STATUS.READY; }).sort(byNewest).slice(0, 8).map(withReq),
-      overdue: tasks.filter(isOverdue_).sort(function (a, b) { return a.dueDate > b.dueDate ? 1 : -1; }).slice(0, 8).map(withReq),
+      overdue: tasks.filter(isOverdue_).sort(function (a, b) { return (a.dueDate + a.dueTime) > (b.dueDate + b.dueTime) ? 1 : -1; }).slice(0, 8).map(withReq),
       pendingApprovals: pendingApprovals,
       workload: workload,
       workloadThreshold: s.workloadThreshold,
@@ -225,7 +225,7 @@ function api_designerDashboard() {
         approvalRate: myDecisions.length ? Math.round(approvals / myDecisions.length * 100) : null,
         overdue: active.filter(isOverdue_).length
       },
-      tasks: mine.sort(function (a, b) { return (a.dueDate || '9') > (b.dueDate || '9') ? 1 : -1; })
+      tasks: mine.sort(function (a, b) { return ((a.dueDate || '9') + (a.dueTime || '99')) > ((b.dueDate || '9') + (b.dueTime || '99')) ? 1 : -1; })
         .map(function (t) { return taskDto_(t, u, deliverableCounts_(t.taskId)); })
     };
   });
@@ -322,7 +322,7 @@ function api_getTask(taskId) {
       requirement: {
         requirementId: req.requirementId || '', requesterName: req.requesterName || '', department: req.department || '',
         email: req.email || '', phone: leader ? req.phone || '' : '', submittedAt: req.submittedAt || '',
-        platform: req.platform || '', preferredDate: req.preferredDate || '', priorityRequested: req.priorityRequested || '',
+        platform: req.platform || '', preferredDate: req.preferredDate || '', preferredTime: req.preferredTime || '', priorityRequested: req.priorityRequested || '',
         quantity: req.quantity || '', typeFields: typeFields
       },
       attachments: attachments,
@@ -333,7 +333,7 @@ function api_getTask(taskId) {
     };
     if (leader) {
       out.assignments = dbFind_('TaskAssignments', function (a) { return a.taskId === t.taskId; }).reverse()
-        .map(function (a) { return Object.assign(pick_(a, ['assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate', 'priority', 'note', 'assignedAt']),
+        .map(function (a) { return Object.assign(pick_(a, ['assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate', 'dueTime', 'priority', 'note', 'assignedAt']),
           { assigneeName: displayName_(a.assigneeEmail) }); });
       out.team = dbFind_('Users', function (x) { return bool_(x.active); }).map(function (x) {
         var load = dbFind_('Tasks', function (tt) { return tt.assigneeEmail === x.email && CLOSED.indexOf(tt.status) === -1 && tt.status !== STATUS.APPROVED; }).length;
@@ -390,6 +390,7 @@ function api_assignTask(taskId, input) {
     input = input || {};
     var assignee = email_(input.assigneeEmail, 'Designer', true);
     var dueDate = date_(input.dueDate, 'Due date', true);
+    var dueTime = time_(input.dueTime, 'Due time', false);
     var startDate = date_(input.startDate, 'Start date', false);
     var priority = oneOf_(str_(input.priority, 20, 'Priority', true), settings_().priorities, 'Priority');
     var instructions = str_(input.instructions, LIMITS.TEXT_LONG, 'Instructions', false);
@@ -400,15 +401,15 @@ function api_assignTask(taskId, input) {
       var member = userByEmail_(assignee);
       if (!member || !bool_(member.active)) throw AppError_('VALIDATION', 'That person is not an active team member.');
       var previous = t.assigneeEmail;
-      var patch = { assigneeEmail: member.email.toLowerCase(), assignedBy: u.email, assignedAt: nowIso_(), dueDate: dueDate,
+      var patch = { assigneeEmail: member.email.toLowerCase(), assignedBy: u.email, assignedAt: nowIso_(), dueDate: dueDate, dueTime: dueTime,
         priority: priority, updatedAt: nowIso_() };
       if (startDate) patch.startDate = startDate;
       if (input.instructions !== undefined) patch.instructions = instructions;
       dbUpdate_('Tasks', t.taskId, patch);
       dbInsert_('TaskAssignments', { assignmentId: 'ASG-' + uuid_(), taskId: t.taskId, assigneeEmail: patch.assigneeEmail,
-        previousAssignee: previous || '', assignedBy: u.email, dueDate: dueDate, priority: priority, note: note, assignedAt: nowIso_() });
+        previousAssignee: previous || '', assignedBy: u.email, dueDate: dueDate, dueTime: dueTime, priority: priority, note: note, assignedAt: nowIso_() });
       logActivity_(t.taskId, u, 'assigned', previous || '', patch.assigneeEmail, note, 'leader');
-      logActivity_(t.taskId, u, 'assignment', '', previous ? 'reassigned' : 'assigned', 'due ' + dueDate + ' · ' + priority + ' priority', 'team');
+      logActivity_(t.taskId, u, 'assignment', '', previous ? 'reassigned' : 'assigned', 'due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority', 'team');
 
       var fresh = dbGet_('Tasks', t.taskId);
       if (PRE_ASSIGN.indexOf(fresh.status) !== -1) setStatus_(fresh, STATUS.ASSIGNED, u, '');
@@ -419,7 +420,7 @@ function api_assignTask(taskId, input) {
 
       notify_([patch.assigneeEmail], previous ? 'task_reassigned' : 'task_assigned',
         (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
-        t.taskId + ' · due ' + dueDate + ' · ' + priority + ' priority' + (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
+        t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
       if (previous && previous !== patch.assigneeEmail) {
         notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
       }
@@ -444,6 +445,7 @@ function api_updateTask(taskId, patchIn) {
       instructions: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Instructions', false); },
       internalNotes: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Internal notes', false); },
       dueDate: function (v) { return date_(v, 'Due date', false); },
+      dueTime: function (v) { return time_(v, 'Due time', false); },
       startDate: function (v) { return date_(v, 'Start date', false); },
       priority: function (v) { return oneOf_(v, settings_().priorities, 'Priority'); },
       deliverablesRequired: function (v) { return String(int_(v, 1, 50, 'Deliverables required')); },
@@ -460,8 +462,8 @@ function api_updateTask(taskId, patchIn) {
       if (changed.length) {
         var leaderOnly = changed.length === 1 && changed[0] === 'internalNotes';
         logActivity_(t.taskId, u, 'updated', '', changed.join(', '), '', leaderOnly ? 'leader' : 'team');
-        if (patch.dueDate && patch.dueDate !== t.dueDate) dbUpdate_('Tasks', t.taskId, { dueSoonNotifiedAt: '', overdueNotifiedAt: '' });
-        if (t.assigneeEmail && !leaderOnly && (changed.indexOf('dueDate') !== -1 || changed.indexOf('priority') !== -1 || changed.indexOf('instructions') !== -1)) {
+        if ((patch.dueDate !== undefined && patch.dueDate !== t.dueDate) || (patch.dueTime !== undefined && patch.dueTime !== t.dueTime)) dbUpdate_('Tasks', t.taskId, { dueSoonNotifiedAt: '', overdueNotifiedAt: '' });
+        if (t.assigneeEmail && !leaderOnly && (changed.indexOf('dueDate') !== -1 || changed.indexOf('dueTime') !== -1 || changed.indexOf('priority') !== -1 || changed.indexOf('instructions') !== -1)) {
           notify_([t.assigneeEmail], 'task_updated', 'Task updated: ' + t.title, 'The team leader changed: ' +
             changed.filter(function (c) { return c !== 'internalNotes'; }).join(', ') + '.', 'task/' + t.taskId, false);
         }
@@ -540,7 +542,7 @@ function api_createTaskFromRequirement(requirementId, input) {
         purpose: req.purpose, campaign: req.campaign, product: req.product, deliverablesRequired: String(qty),
         dimensions: str_(input.dimensions, 200, 'Dimensions', false) || req.dimensions, formats: '', copyText: req.copyText,
         referenceUrls: req.referenceUrls, assigneeEmail: '', assignedBy: '', assignedAt: '', startDate: '',
-        dueDate: req.preferredDate, priority: req.priorityRequested, status: STATUS.READY, prevStatus: '', progress: '0',
+        dueDate: req.preferredDate, dueTime: req.preferredTime, priority: req.priorityRequested, status: STATUS.READY, prevStatus: '', progress: '0',
         instructions: req.instructions, internalNotes: '', folderId: req.folderId, completedAt: '', dueSoonNotifiedAt: '',
         overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now
       });

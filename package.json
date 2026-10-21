@@ -6,7 +6,9 @@
   "scripts": {
     "test": "node test/scenarios.test.js",
     "test:ui": "node test/ui.test.js",
-    "push": "clasp push"
+    "push": "clasp push",
+    "build:paste": "python3 tools/build-paste-kit.py",
+    "test:paste": "GAS_SRC=paste-kit node test/scenarios.test.js"
   },
   "devDependencies": {
     "playwright": "^1.56.0",

@@ -34,6 +34,7 @@ function withLock_(fn) {
   LOCK_DEPTH_ = 1;
   try {
     DB_CACHE_ = {}; // always read fresh data once we own the lock
+    migrateSchema_();
     var out = fn();
     SpreadsheetApp.flush();
     return out;
@@ -155,4 +156,30 @@ function settings_() {
   });
   SETTINGS_MEMO_ = s;
   return s;
+}
+
+/**
+ * Brings an existing database up to the current SCHEMA once per version:
+ * writes any missing header names (new columns are only ever appended)
+ * and keeps every column formatted as plain text. Caller holds the lock.
+ */
+function migrateSchema_() {
+  var props = PropertiesService.getScriptProperties();
+  if (Number(props.getProperty('SCHEMA_VERSION') || 1) >= SCHEMA_VERSION) return;
+  if (!props.getProperty('SPREADSHEET_ID')) return;
+  var ss = ss_();
+  Object.keys(SCHEMA).forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return;
+    var cols = SCHEMA[name];
+    if (sh.getMaxColumns() < cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), cols.length - sh.getMaxColumns());
+    var header = sh.getRange(1, 1, 1, cols.length).getValues()[0];
+    for (var i = 0; i < cols.length; i++) {
+      if (String(header[i]) === cols[i]) continue;
+      if (String(header[i]) !== '') throw new Error('Sheet "' + name + '" column ' + (i + 1) + ' is "' + header[i] + '", expected "' + cols[i] + '".');
+      sh.getRange(1, i + 1, 1, 1).setValues([[cols[i]]]).setFontWeight('bold');
+    }
+    sh.getRange(1, 1, sh.getMaxRows(), cols.length).setNumberFormat('@');
+  });
+  props.setProperty('SCHEMA_VERSION', String(SCHEMA_VERSION));
 }

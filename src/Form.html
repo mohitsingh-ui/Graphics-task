@@ -38,6 +38,7 @@
 
 <?!= include_('Common.js') ?>
 <script>
+var BOOT = <?!= bootJson ?>;
 var CFG = null, TYPE = null, FILES = [];
 
 api('api_getFormConfig').then(function (cfg) {
@@ -98,7 +99,8 @@ function renderForm() {
     sec(4, 'Timing',
       '<div class="grid-2">' +
       fld('preferredDate', 'Preferred delivery date', '<input type="date" name="preferredDate" min="' + minDate + '">', true) +
-      fld('priorityRequested', 'Priority', '<select name="priorityRequested">' + opt(CFG.priorities) + '</select>', true) + '</div>' +
+      fld('preferredTime', 'By what time?', '<input type="time" name="preferredTime" step="900">', false, 'Optional. Leave empty for end of day.') + '</div>' +
+      fld('priorityRequested', 'Priority', '<select name="priorityRequested">' + opt(CFG.priorities) + '</select>', true) +
       fld('instructions', 'Anything else?', '<textarea name="instructions" maxlength="8000" rows="2"></textarea>', false)) +
 
     '<div class="alert bad hidden" data-form-error style="margin-top:16px"></div>' +
@@ -106,6 +108,12 @@ function renderForm() {
     '<button type="submit" class="btn primary lg" id="submitBtn">' + icon('send') + ' Submit requirement</button></div>' +
     '</form>';
 
+  if (BOOT.email) {
+    $('#fld_requesterName').value = BOOT.name || '';
+    $('#fld_email').value = BOOT.email;
+    $('.intro p').innerHTML = 'You’re signed in as <b>' + h(BOOT.email) + '</b>. This goes straight into the team queue.' +
+      (BOOT.backUrl ? ' <a href="' + h(BOOT.backUrl) + '" target="_top">Back to dashboard</a>' : '');
+  }
   $all('.type-opt').forEach(function (b) { b.onclick = function () { pickType(b.getAttribute('data-type')); }; });
   var drop = $('#drop'), inp = $('#fileIn');
   drop.onclick = function () { inp.click(); };
@@ -196,6 +204,7 @@ function validate(d) {
   var q = Number(d.quantity);
   if (!q || q < 1 || q > 50 || Math.floor(q) !== q) bad('quantity', 'Between 1 and 50.');
   if (d.preferredDate && d.preferredDate < todayIso()) bad('preferredDate', 'Pick today or a later date.');
+  if (d.preferredDate && d.preferredTime && new Date(d.preferredDate + 'T' + d.preferredTime) < new Date()) bad('preferredTime', 'That time has already passed.');
   return ok;
 }
 
@@ -242,7 +251,8 @@ function showDone(id, failed) {
     '<p class="muted">Keep this reference ID. We’ve also emailed it to you.<br>When the creative is ready, you’ll get a link to review and approve it.</p>' +
     (failed.length ? '<div class="alert warn" style="text-align:left;margin-top:16px">These files didn’t upload: ' + failed.map(function (x) { return h(x.file.name); }).join(', ') +
       '. Your request is saved — please email them to the graphics team with your reference ID.</div>' : '') +
-    '<div style="margin-top:20px"><button class="btn" id="again">Submit another request</button></div></div>';
+    '<div style="margin-top:20px" class="row" style="justify-content:center"><button class="btn" id="again">Submit another request</button>' +
+    (BOOT.backUrl ? ' <a class="btn primary" href="' + h(BOOT.backUrl) + '" target="_top">Back to dashboard</a>' : '') + '</div></div>';
   $('#again').onclick = function () { FILES = []; TYPE = null; renderForm(); window.scrollTo(0, 0); };
 }
 </script>

@@ -159,9 +159,10 @@ function wireGo(el) {
 
 function dueLabel(t) {
   if (!t.dueDate) return '<span class="faint">No date</span>';
-  if (t.overdue) return '<span class="overdue-flag">' + icon('alert').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + fmtDate(t.dueDate) + '</span>';
-  if (t.dueDate === todayIso()) return '<span style="color:var(--warn);font-weight:500">Today</span>';
-  return fmtDate(t.dueDate);
+  var tm = t.dueTime ? ', ' + fmtTime(t.dueTime) : '';
+  if (t.overdue) return '<span class="overdue-flag">' + icon('alert').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + fmtDate(t.dueDate) + tm + '</span>';
+  if (t.dueDate === todayIso()) return '<span style="color:var(--warn);font-weight:500">Today' + tm + '</span>';
+  return fmtDate(t.dueDate) + tm;
 }
 
 function emptyState(title, sub, ic) {

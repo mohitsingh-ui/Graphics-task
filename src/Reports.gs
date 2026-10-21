@@ -143,11 +143,11 @@ function api_exportCsv(kind, range) {
     } else {
       var reqMap = {}; dbAll_('Requirements').forEach(function (x) { reqMap[x.requirementId] = x; });
       rows = [['Task ID', 'Requirement ID', 'Title', 'Department', 'Requester', 'Creative type', 'Campaign', 'Status', 'Priority',
-        'Assignee', 'Assigned at', 'Due date', 'Completed at', 'Deliverables required', 'Progress %', 'Overdue', 'Created at']];
+        'Assignee', 'Assigned at', 'Due date', 'Due time', 'Completed at', 'Deliverables required', 'Progress %', 'Overdue', 'Created at']];
       dbAll_('Tasks').filter(function (t) { return inRange_(t.createdAt, r) || inRange_(t.completedAt, r); }).forEach(function (t) {
         var q = reqMap[t.requirementId] || {};
         rows.push([t.taskId, t.requirementId, t.title, q.department, q.requesterName, t.creativeType, t.campaign, t.status, t.priority,
-          t.assigneeEmail, t.assignedAt, t.dueDate, t.completedAt, t.deliverablesRequired, t.progress, isOverdue_(t) ? 'Yes' : 'No', t.createdAt]);
+          t.assigneeEmail, t.assignedAt, t.dueDate, t.dueTime, t.completedAt, t.deliverablesRequired, t.progress, isOverdue_(t) ? 'Yes' : 'No', t.createdAt]);
       });
     }
     var csv = rows.map(function (row) {

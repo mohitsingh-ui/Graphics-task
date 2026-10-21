@@ -52,6 +52,14 @@ ok(call(LEADER, 'api_saveUser', { email: B, name: 'Bilal Designer', role: 'desig
 ok(call(LEADER, 'api_saveSettings', { publicUrl: 'https://script.google.com/macros/s/PUB/exec', internalUrl: 'https://script.google.com/macros/s/INT/exec' }));
 
 let req1, task1;
+let _tb2;
+function taskB2() {
+  if (_tb2) return _tb2;
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Z', department: 'Sales', email: 'z@example.org', title: 'Time test',
+    creativeType: 'other', purpose: 'p', brief: 'b', preferredDate: future(4), priorityRequested: 'Low' }));
+  _tb2 = ok(call(LEADER, 'api_listTasks', {})).find(t => t.requirementId === sub.requirementId).taskId;
+  return _tb2;
+}
 
 scenario('0. Setup created sheets, folders, leader, trigger; setup cannot be called by others', () => {
   const ss = Object.values(state.spreadsheets)[0];
@@ -96,13 +104,43 @@ scenario('1. New requirement without login → saved, ID created, in leader queu
   assert.ok(n.items.some(x => x.type === 'requirement_new'));
 });
 
-scenario('1b. Public form validation: domain, required fields, honeypot, past dates', () => {
+scenario('1b. Public form validation: domain (when switched on), required fields, honeypot, past dates', () => {
   const base = { requesterName: 'X', department: 'Sales', email: 'x@gmail.com', title: 'T', creativeType: 'other', purpose: 'p', brief: 'b', preferredDate: future(3), priorityRequested: 'Low' };
+  ok(call(LEADER, 'api_saveSettings', { requireRequesterDomain: true }));
   assert.match(err(call('', 'api_submitRequirement', base), 'VALIDATION').message, /rosierfoods\.com/);
+  ok(call(LEADER, 'api_saveSettings', { requireRequesterDomain: false }));
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', title: '' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', website: 'spam' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', preferredDate: '2020-01-01' })), 'VALIDATION');
   err(call('', 'api_submitRequirement', Object.assign({}, base, { email: 'x@rosierfoods.com', creativeType: 'website_banner', typeFields: {} })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { preferredTime: '25:00' })), 'VALIDATION');
+  err(call('', 'api_submitRequirement', Object.assign({}, base, { preferredDate: new Date().toISOString().slice(0, 10), preferredTime: '00:00' })), 'VALIDATION');
+});
+
+scenario('Any email can raise a requirement and approve (default)', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Agency', department: 'Other', email: 'designer@agency.example.com', title: 'Outside request',
+    creativeType: 'other', purpose: 'p', brief: 'b', preferredDate: future(6), preferredTime: '15:30', priorityRequested: 'Low' }));
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
+  assert.strictEqual(t.dueDate, future(6));
+  assert.strictEqual(t.dueTime, '15:30');
+  ok(call(LEADER, 'api_setTaskStatus', t.taskId, 'Cancelled', { reason: 'test only' }));
+});
+
+scenario('Team leader raises a requirement while signed in', () => {
+  const sub = ok(call(LEADER, 'api_submitRequirement', { requesterName: 'Owner', department: 'Marketing', email: LEADER, title: 'Leader brief',
+    creativeType: 'other', purpose: 'p', brief: 'b', preferredDate: future(2), preferredTime: '11:00', priorityRequested: 'High' }));
+  ok(call(LEADER, 'api_finalizeRequirement', sub.uploadTicket));
+  const t = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
+  const d = ok(call(LEADER, 'api_getTask', t.taskId));
+  assert.ok(d.activity.some(a => a.action === 'created' && /portal/.test(a.note)), 'recorded as raised from the portal');
+  assert.ok(!ok(call(LEADER, 'api_getNotifications')).items.some(n => n.type === 'requirement_new' && n.title.includes('Leader brief')), 'leader not notified about own request');
+  // Form page is prefilled for signed-in team members
+  state.currentUser = LEADER; env.ctx.DB_CACHE_ = {}; env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(env.ctx.doGet({ parameter: { p: 'form' } }).html.includes('"email":"' + LEADER + '"'));
+  state.currentUser = ''; env.ctx.DB_CACHE_ = {};
+  assert.ok(env.ctx.doGet({ parameter: { p: 'form' } }).html.includes('var BOOT = {}'));
+  ok(call(LEADER, 'api_setTaskStatus', t.taskId, 'Cancelled', { reason: 'test only' }));
 });
 
 scenario('2. Leader assigns to Designer A → appears on A’s dashboard', () => {
@@ -347,7 +385,7 @@ scenario('Reassignment: old designer loses access, new designer gains it, both n
 
 scenario('Reports & CSV are computed from records and leader-only', () => {
   const r = ok(call(LEADER, 'api_getReports', { from: future(-30), to: future(1) }));
-  assert.strictEqual(r.summary.requirements, 2);
+  assert.strictEqual(r.summary.requirements, 4); // banner, sales deck, outside email, leader brief
   assert.strictEqual(r.summary.decisions, 6); // 1 changes + 5 approvals
   const asha = r.designers.find(d => d.email === A);
   assert.strictEqual(asha.revisionCycles, 1);
@@ -364,6 +402,38 @@ scenario('Team: deactivated user loses access immediately; last leader protected
   err(call(LEADER, 'api_setUserActive', LEADER, false), 'VALIDATION');
   err(call(LEADER, 'api_saveUser', { email: 'x@gmail.com', name: 'X', role: 'designer' }), 'VALIDATION');
   ok(call(LEADER, 'api_setUserActive', A, true));
+});
+
+scenario('Deadline time: overdue exactly after the due time, shown in notifications', () => {
+  const today = env.ctx.isoDateOnly_();
+  const nowIst = new Date(Date.now() + 330 * 60000);
+  const hhmm = d => d.toISOString().slice(11, 16);
+  const past = hhmm(new Date(nowIst.getTime() - 2 * 3600000)), later = hhmm(new Date(nowIst.getTime() + 2 * 3600000));
+  const mk = (time) => ({ dueDate: today, dueTime: time, status: 'In Progress' });
+  if (past < hhmm(nowIst)) assert.strictEqual(env.ctx.isOverdue_(mk(past)), true, 'past time today is overdue');
+  if (later > hhmm(nowIst)) assert.strictEqual(env.ctx.isOverdue_(mk(later)), false, 'later time today is not overdue');
+  assert.strictEqual(env.ctx.isOverdue_(mk('')), false, 'no time = end of day');
+  ok(call(LEADER, 'api_assignTask', taskB2(), { assigneeEmail: A, dueDate: future(3), dueTime: '18:45', priority: 'High' }));
+  const n = ok(call(A, 'api_getNotifications')).items[0];
+  assert.match(n.body, /18:45/);
+  err(call(LEADER, 'api_updateTask', taskB2(), { dueTime: '7pm' }), 'VALIDATION');
+  ok(call(LEADER, 'api_updateTask', taskB2(), { dueTime: '' }));
+  assert.strictEqual(ok(call(A, 'api_getTask', taskB2())).task.dueTime, '');
+});
+
+scenario('Live database from the previous version is upgraded in place', () => {
+  const ss = Object.values(state.spreadsheets)[0];
+  const tasks = ss.sheets.Tasks;
+  const hdr = tasks.data[0], idx = hdr.indexOf('dueTime');
+  const sample = tasks.data[1].slice(0, idx);
+  tasks.data.forEach(row => { row[idx] = ''; });            // old sheet: no dueTime header
+  ss.sheets.Requirements.data[0].splice(ss.sheets.Requirements.data[0].indexOf('preferredTime'), 2, '', '');
+  state.props.SCHEMA_VERSION = '1';
+  ok(call(LEADER, 'api_addComment', taskB2(), 'trigger a write'));
+  assert.strictEqual(state.props.SCHEMA_VERSION, '2');
+  assert.strictEqual(tasks.data[0][idx], 'dueTime');
+  assert.ok(ss.sheets.Requirements.data[0].includes('submittedBy'));
+  assert.deepStrictEqual(tasks.data[1].slice(0, idx), sample, 'existing data untouched');
 });
 
 scenario('Maintenance trigger sends overdue + due-soon alerts once', () => {

@@ -8,6 +8,8 @@ edit code → git push → tests run → clasp push → Public + Internal deploy
 
 **Rule:** never edit code in the Apps Script editor. The next push overwrites it.
 
+You edit the files in `src/`. Before each deploy, the workflow bundles them into `paste-kit/` (Code.gs plus 4 pages plus the manifest) and pushes that bundle. The live project therefore always has the same 6 files you would paste by hand.
+
 ---
 
 ## One-time setup (about 20 minutes)

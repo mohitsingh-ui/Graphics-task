@@ -12,16 +12,16 @@ var SCHEMA = {
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
     'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'assigneeEmail',
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
-    'createdBy', 'createdAt', 'updatedAt'],
+    'createdBy', 'createdAt', 'updatedAt', 'dueTime'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
-    'priority', 'note', 'assignedAt'],
+    'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
     'visibility', 'createdAt'],
   CreativeSubmissions: ['deliverableId', 'taskId', 'title', 'purpose', 'deliverableType', 'status',
@@ -37,6 +37,9 @@ var SCHEMA = {
   Notifications: ['notificationId', 'recipientEmail', 'type', 'title', 'body', 'route', 'createdAt', 'readAt'],
   Settings: ['key', 'value', 'updatedAt']
 };
+
+/** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
+var SCHEMA_VERSION = 2;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -100,7 +103,7 @@ var DEFAULT_SETTINGS = {
   companyName: 'Rosier Foods',
   portalName: APP_NAME,
   allowedDomain: '',            // filled at setup from the owner's email domain
-  requireRequesterDomain: true, // requester email must belong to allowedDomain
+  requireRequesterDomain: false, // true = requester email must belong to allowedDomain
   allowEmbedding: false,        // let the form/app load inside Google Sites or another site
   publicUrl: '',                // Public deployment /exec URL
   internalUrl: '',              // Internal deployment /exec URL

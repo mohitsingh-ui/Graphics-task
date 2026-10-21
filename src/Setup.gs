@@ -89,6 +89,7 @@ function setup() {
     }
   });
 
+  PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', String(SCHEMA_VERSION));
   installTriggers();
 
   console.log('Setup complete.');

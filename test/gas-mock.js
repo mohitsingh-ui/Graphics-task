@@ -212,7 +212,7 @@ function createEnv(opts = {}) {
     },
     Date, Math, JSON, Object, Array, String, Number, Boolean, Error, RegExp, isNaN, isFinite, encodeURIComponent, decodeURIComponent, parseInt
   };
-  const SRC = path.join(__dirname, '..', 'src');
+  const SRC = process.env.GAS_SRC ? path.resolve(process.env.GAS_SRC) : path.join(__dirname, '..', 'src');
   vm.createContext(ctx);
   fs.readdirSync(SRC).filter(f => f.endsWith('.gs')).sort().forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(SRC, f), 'utf8'), ctx, { filename: f });

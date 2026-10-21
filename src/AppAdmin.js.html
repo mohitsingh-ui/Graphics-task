@@ -148,7 +148,7 @@ VIEWS.settings = function (arg, el, token) {
     el.innerHTML = '<div class="page-h"><div><h1>Settings</h1><p>Portal configuration, review links, uploads and Google Drive.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>' +
       '<div class="two-col"><div class="stack">' +
       sec('General', '<div class="grid-2">' + txt('companyName', 'Company name') + txt('portalName', 'Portal name') + '</div>' +
-        txt('allowedDomain', 'Company email domain', 'Team members must use this domain. Requesters too, if the box below is ticked.') + chk('requireRequesterDomain', 'Only accept requirements from company email addresses')) +
+        txt('allowedDomain', 'Company email domain', 'Team members must use this domain. Anyone can raise requirements and approve creatives unless you tick the box below.') + chk('requireRequesterDomain', 'Only accept requirements from company email addresses (leave unticked to allow any email)')) +
       sec('Portal links', txt('publicUrl', 'Public web app URL', 'The …/exec URL of the deployment with access “Anyone”. Used in review links and emails.', 'url') +
         txt('internalUrl', 'Internal web app URL', 'The …/exec URL of the deployment with access “Anyone within your domain”.', 'url') +
         txt('brandGuidelinesUrl', 'Brand guidelines link', 'Shown on the request form and every task.', 'url') +

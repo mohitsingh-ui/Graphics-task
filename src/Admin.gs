@@ -200,16 +200,16 @@ function hourlyMaintenance(e) {
     dbAll_('Tasks').forEach(function (t) {
       if (!t.assigneeEmail || !t.dueDate) return;
       if ([STATUS.COMPLETED, STATUS.CANCELLED, STATUS.APPROVED, STATUS.ON_HOLD].indexOf(t.status) !== -1) return;
-      var end = dueEnd_(t.dueDate);
+      var end = dueEnd_(t.dueDate, t.dueTime);
       if (!end) return;
       var left = end.getTime() - now;
       if (left < 0 && !t.overdueNotifiedAt) {
         dbUpdate_('Tasks', t.taskId, { overdueNotifiedAt: nowIso_() });
-        logActivity_(t.taskId, 'system', 'overdue', '', '', 'Past due date ' + t.dueDate, 'team');
-        notify_([t.assigneeEmail].concat(leaders), 'task_overdue', 'Overdue: ' + t.title, t.taskId + ' was due on ' + t.dueDate + '.', 'task/' + t.taskId);
+        logActivity_(t.taskId, 'system', 'overdue', '', '', 'Past due ' + dueText_(t.dueDate, t.dueTime), 'team');
+        notify_([t.assigneeEmail].concat(leaders), 'task_overdue', 'Overdue: ' + t.title, t.taskId + ' was due ' + dueText_(t.dueDate, t.dueTime) + '.', 'task/' + t.taskId);
       } else if (left >= 0 && left <= s.dueSoonHours * 3600000 && !t.dueSoonNotifiedAt) {
         dbUpdate_('Tasks', t.taskId, { dueSoonNotifiedAt: nowIso_() });
-        notify_([t.assigneeEmail], 'task_due_soon', 'Due soon: ' + t.title, t.taskId + ' is due on ' + t.dueDate + '.', 'task/' + t.taskId);
+        notify_([t.assigneeEmail], 'task_due_soon', 'Due soon: ' + t.title, t.taskId + ' is due ' + dueText_(t.dueDate, t.dueTime) + '.', 'task/' + t.taskId);
       }
     });
   });

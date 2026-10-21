@@ -207,7 +207,7 @@ function approvalRowDto_(r) {
     requestId: r.requestId, status: r.status, createdAt: r.createdAt, closedAt: r.closedAt,
     versionId: v.versionId, versionNo: v.versionNo, fileName: v.fileName, mimeType: v.mimeType,
     deliverableTitle: d.title, deliverableId: d.deliverableId, taskId: t.taskId, taskTitle: t.title, campaign: t.campaign,
-    dueDate: t.dueDate, uploadedBy: v.uploadedBy, uploadedByName: v.uploadedBy ? displayName_(v.uploadedBy) : '',
+    dueDate: t.dueDate, dueTime: t.dueTime, uploadedBy: v.uploadedBy, uploadedByName: v.uploadedBy ? displayName_(v.uploadedBy) : '',
     decision: dec ? { decision: dec.decision, comment: dec.comment, reviewerName: dec.reviewerName, reviewerEmail: dec.reviewerEmail, decidedAt: dec.decidedAt, channel: dec.channel } : null
   };
 }

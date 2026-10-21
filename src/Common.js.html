@@ -49,6 +49,14 @@ function ago(v) {
   if (s < 86400 * 7) return Math.floor(s / 86400) + 'd ago';
   return fmtDate(v);
 }
+/** "17:30" → "5:30 PM" */
+function fmtTime(t) {
+  var m = /^(\d{1,2}):(\d{2})$/.exec(t || '');
+  if (!m) return '';
+  var hh = Number(m[1]), ap = hh >= 12 ? 'PM' : 'AM';
+  return ((hh % 12) || 12) + ':' + m[2] + ' ' + ap;
+}
+function fmtDue(date, time) { return date ? fmtDate(date) + (time ? ', ' + fmtTime(time) : '') : '—'; }
 function todayIso() {
   var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
 }

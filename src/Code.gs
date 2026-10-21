@@ -34,7 +34,11 @@ function doGet(e) {
       return render_('NoAccess', { email: email, publicUrl: s.publicUrl }, s.portalName);
     }
   }
-  return render_('Form', {}, 'Request a creative · ' + s.companyName, s.allowEmbedding);
+  var formBoot = {};
+  var who = activeEmail_();
+  var tm = who ? userByEmail_(who) : null;
+  if (tm && bool_(tm.active)) formBoot = { name: tm.name, email: tm.email, backUrl: s.internalUrl || '' };
+  return render_('Form', formBoot, 'Request a creative · ' + s.companyName, s.allowEmbedding);
 }
 
 function render_(file, boot, title, embeddable) {

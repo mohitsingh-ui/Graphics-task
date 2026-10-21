@@ -16,7 +16,7 @@ function leaderOverview(el, token) {
     var k = d.kpis;
     el.innerHTML =
       '<div class="page-h"><div><h1>Good ' + greeting() + ', ' + h(APP.boot.user.name.split(' ')[0]) + '</h1><p>Here’s where the graphics team stands today.</p></div>' +
-      '<button class="btn primary" data-go="requirements">' + icon('inbox') + ' Review requirements</button></div>' +
+      '<div class="row wrap">' + newReqButton() + '<button class="btn primary" data-go="requirements">' + icon('inbox') + ' Review requirements</button></div></div>' +
       '<div class="kpis">' +
       kpiCard('New requirements', k.newRequirements, 'tasks/status=' + encodeURIComponent('New Requirement'), { color: 'var(--info)' }) +
       kpiCard('Unassigned', k.unassigned, 'tasks/status=unassigned', { color: '#5b3f8f' }) +
@@ -166,7 +166,7 @@ VIEWS.requirements = function (arg, el, token) {
     navCount('requirements', rows.filter(function (r) { return r.status === 'New Requirement'; }).length);
     var publicUrl = APP.boot.publicUrl;
     el.innerHTML = '<div class="page-h"><div><h1>Incoming requirements</h1><p>Everything raised through the request form that still needs a designer.</p></div>' +
-      (publicUrl ? '<button class="btn" id="copyForm">' + icon('link') + ' Copy request-form link</button>' : '') + '</div>' +
+      '<div class="row wrap">' + (publicUrl ? '<button class="btn" id="copyForm">' + icon('link') + ' Copy request-form link</button>' : '') + newReqButton(true) + '</div></div>' +
       '<div class="card"><div class="table-wrap">' + (rows.length ? '<table class="t"><thead><tr><th>Requirement</th><th>Requested by</th><th>Type</th><th>Qty</th><th>Wanted by</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>' +
       rows.map(function (t) {
         return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' + h(t.requirementId) + ' · ' + h(t.taskId) + ' · ' + ago(t.createdAt) + '</div></td>' +
@@ -178,6 +178,13 @@ VIEWS.requirements = function (arg, el, token) {
     if ($('#copyForm')) $('#copyForm').onclick = function () { copyText(publicUrl); };
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
 };
+
+/** Opens the request form as the signed-in leader (prefilled, in a new tab). */
+function newReqButton(primary) {
+  var base = APP.boot.internalUrl || '';
+  if (!base) return '<button class="btn' + (primary ? ' primary' : '') + '" onclick="toast(\'Add the Internal web app URL in Settings → Portal links first.\', true)">' + icon('plus') + ' New requirement</button>';
+  return '<a class="btn' + (primary ? ' primary' : '') + '" href="' + h(base) + '?p=form" target="_blank" rel="noopener">' + icon('plus') + ' New requirement</a>';
+}
 
 function copyText(text) {
   function fallback() {
@@ -283,6 +290,7 @@ function drawTasks() {
     rows.sort(function (a, b) {
       var x = a[key], y = b[key];
       if (key === 'priority') { x = PRIORITY_RANK[x]; y = PRIORITY_RANK[y]; }
+      if (key === 'dueDate') { x = x ? x + (a.dueTime || '99') : ''; y = y ? y + (b.dueTime || '99') : ''; }
       if (key === 'progress') { x = Number(x); y = Number(y); }
       if (x === y) return 0;
       if (x === '' || x === undefined) return 1; if (y === '' || y === undefined) return -1;

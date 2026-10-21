@@ -1,4 +1,5 @@
-"""Bundle src/ into paste-kit/: one Code.gs + 4 self-contained HTML pages + manifest."""
+"""Bundle src/ into paste-kit/: one Code.gs + 4 self-contained HTML pages + manifest.
+For setting the project up by hand in the Apps Script editor (no clasp needed)."""
 import os, re, glob
 src, out = 'src', 'paste-kit'
 os.makedirs(out, exist_ok=True)

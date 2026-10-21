@@ -86,6 +86,14 @@ function date_(v, field, required) {
   return s;
 }
 
+/** 24-hour "HH:MM", or "" when optional and empty. */
+function time_(v, field, required) {
+  var s = str_(v, 5, field, required);
+  if (!s) return '';
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) throw AppError_('VALIDATION', (field || 'Time') + ' must be a time like 17:30.');
+  return s;
+}
+
 /** Keep only http(s) URLs, one per line. */
 function urls_(v) {
   var list = Array.isArray(v) ? v : String(v || '').split(/[\n,\s]+/);
@@ -122,9 +130,9 @@ function isoDateOnly_(d) {
 }
 
 /** End of the due date (23:59:59 in the script time zone) as a Date. */
-function dueEnd_(dueDate) {
+function dueEnd_(dueDate, dueTime) {
   if (!dueDate) return null;
-  var d = new Date(dueDate + 'T23:59:59' + tzOffset_());
+  var d = new Date(dueDate + 'T' + (dueTime ? dueTime + ':00' : '23:59:59') + tzOffset_());
   return isNaN(d.getTime()) ? null : d;
 }
 
@@ -133,9 +141,12 @@ function tzOffset_() {
   return z.slice(0, 3) + ':' + z.slice(3);
 }
 
+/** "2026-10-24" + "17:30" → "2026-10-24 17:30" for messages. */
+function dueText_(date, time) { return date ? date + (time ? ' ' + time : '') : 'no date'; }
+
 function isOverdue_(task) {
   if (CLOSED.indexOf(task.status) !== -1 || task.status === STATUS.APPROVED || task.status === STATUS.ON_HOLD) return false;
-  var end = dueEnd_(task.dueDate);
+  var end = dueEnd_(task.dueDate, task.dueTime);
   return !!end && end.getTime() < Date.now();
 }
 

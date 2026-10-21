@@ -157,7 +157,7 @@ function sideCard(d) {
   return '<div class="card"><div class="card-h"><h3>Details</h3></div><div class="card-b"><dl class="kv">' +
     '<dt>Requested by</dt><dd>' + h(r.requesterName) + '<div class="faint small">' + h(r.department) + '</div><div class="small"><a href="mailto:' + h(r.email) + '">' + h(r.email) + '</a>' + (r.phone ? ' · ' + h(r.phone) : '') + '</div></dd>' +
     '<dt>Submitted</dt><dd>' + fmtDateTime(r.submittedAt) + '</dd>' +
-    '<dt>Wanted by</dt><dd>' + fmtDate(r.preferredDate) + ' <span class="faint small">(' + h(r.priorityRequested) + ')</span></dd>' +
+    '<dt>Wanted by</dt><dd>' + fmtDue(r.preferredDate, r.preferredTime) + ' <span class="faint small">(' + h(r.priorityRequested) + ')</span></dd>' +
     (leader ? '<dt>Designer</dt><dd>' + (t.assigneeName ? h(t.assigneeName) + '<div class="faint small">' + h(t.assigneeEmail) + '</div>' : '<span class="faint">Not assigned</span>') + '</dd>' +
       (t.assignedBy ? '<dt>Assigned by</dt><dd>' + h(t.assignedBy) + '<div class="faint small">' + fmtDateTime(t.assignedAt) + '</div></dd>' : '') : '') +
     '<dt>Start date</dt><dd>' + fmtDate(t.startDate) + '</dd>' +
@@ -183,7 +183,7 @@ function leaderSide(d) {
     '<div class="card"><div class="card-h"><h3>Assignment history</h3></div><div class="card-b">' +
     (d.assignments.length ? '<ul class="timeline">' + d.assignments.map(function (a) {
       return '<li><b>' + h(a.assigneeName) + '</b>' + (a.previousAssignee ? ' <span class="faint">(from ' + h(a.previousAssignee) + ')</span>' : '') +
-        '<div class="t-meta">by ' + h(a.assignedBy) + ' · ' + fmtDateTime(a.assignedAt) + ' · due ' + fmtDate(a.dueDate) + ' · ' + h(a.priority) + '</div>' + (a.note ? '<div class="t-note">' + h(a.note) + '</div>' : '') + '</li>';
+        '<div class="t-meta">by ' + h(a.assignedBy) + ' · ' + fmtDateTime(a.assignedAt) + ' · due ' + fmtDue(a.dueDate, a.dueTime) + ' · ' + h(a.priority) + '</div>' + (a.note ? '<div class="t-note">' + h(a.note) + '</div>' : '') + '</li>';
     }).join('') + '</ul>' : '<p class="faint small">Not assigned yet.</p>') + '</div></div>' +
     '<div class="card"><div class="card-h"><h3>Same requirement</h3><button class="btn ghost sm" id="splitBtn">' + icon('plus') + ' Add task</button></div><div class="card-b tight">' +
     (d.siblingTasks.length ? d.siblingTasks.map(function (s) {
@@ -214,15 +214,16 @@ function assignModal() {
     body: '<div class="field"><label class="req">Designer</label><select id="asg">' + '<option value="">Choose…</option>' + team.map(function (u) {
       return '<option value="' + h(u.email) + '"' + (u.email === t.assigneeEmail ? ' selected' : '') + '>' + h(u.name) + (u.role === 'leader' ? ' (leader)' : '') + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
     }).join('') + '</select></div>' +
-      '<div class="grid-2"><div class="field"><label>Start date</label><input type="date" id="asd" value="' + h(t.startDate || todayIso()) + '"></div>' +
-      '<div class="field"><label class="req">Due date</label><input type="date" id="add" value="' + h(t.dueDate) + '"></div></div>' +
+      '<div class="grid-3"><div class="field"><label>Start date</label><input type="date" id="asd" value="' + h(t.startDate || todayIso()) + '"></div>' +
+      '<div class="field"><label class="req">Due date</label><input type="date" id="add" value="' + h(t.dueDate) + '"></div>' +
+      '<div class="field"><label>Due time</label><input type="time" id="adt" step="900" value="' + h(t.dueTime || '') + '"><span class="hint">Empty = end of day</span></div></div>' +
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
       '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
       '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
-        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value };
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value };
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
@@ -239,7 +240,7 @@ function editModal() {
   modal({
     title: 'Edit task details', wide: true,
     body: f('title', 'Title', t.title) +
-      '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
+      '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
       '<div class="grid-3">' + f('campaign', 'Campaign', t.campaign) + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
@@ -248,7 +249,7 @@ function editModal() {
     actions: [{ label: 'Cancel' }, {
       label: 'Save', cls: 'primary', onClick: function (close, m) {
         var patch = {};
-        ['title', 'dueDate', 'deliverablesRequired', 'priority', 'campaign', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
+        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'campaign', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
