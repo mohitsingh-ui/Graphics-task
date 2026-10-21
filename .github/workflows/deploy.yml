@@ -2,7 +2,7 @@
 # GitHub is the source of truth - never edit code in the Apps Script editor.
 #
 # Secrets (Settings -> Environments -> production -> Environment secrets):
-#   CLASPRC_JSON            full contents of ~/.clasprc.json after `clasp login`
+#   CLASPRC_JSON            ~/.clasprc.json as JSON, or as base64 (base64 -i ~/.clasprc.json)
 #   SCRIPT_ID               Apps Script project id
 #   PUBLIC_DEPLOYMENT_ID    Deployment ID of the "Anyone" web app
 #   INTERNAL_DEPLOYMENT_ID  Deployment ID of the "Anyone within domain" web app
@@ -63,15 +63,17 @@ jobs:
         run: |
           if [ -z "$CLASPRC_JSON" ]; then echo "::error::CLASPRC_JSON secret is missing or empty (add it under Environments -> production)"; exit 1; fi
           if [ -z "$SCRIPT_ID" ]; then echo "::error::SCRIPT_ID secret is missing or empty"; exit 1; fi
-          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
-          chmod 600 ~/.clasprc.json
+          # Accepts the file pasted as plain JSON or as base64 (base64 survives copy/paste).
           node -e '
             const fs = require("fs"), os = require("os");
-            let c;
-            try { c = JSON.parse(fs.readFileSync(os.homedir() + "/.clasprc.json", "utf8")); }
-            catch (e) { console.log("::error::CLASPRC_JSON is not valid JSON. On your Mac run: cat ~/.clasprc.json | pbcopy  and paste it again."); process.exit(1); }
+            const raw = (process.env.CLASPRC_JSON || "").trim();
+            let c = null, how = "";
+            try { c = JSON.parse(raw); how = "JSON"; } catch (e) {}
+            if (!c) { try { c = JSON.parse(Buffer.from(raw.replace(/\s+/g, ""), "base64").toString("utf8")); how = "base64"; } catch (e) {} }
+            if (!c) { console.log("::error::CLASPRC_JSON is neither JSON nor base64 (length " + raw.length + "). On your Mac run: base64 -i ~/.clasprc.json | pbcopy  then paste into the secret."); process.exit(1); }
             if (!c.token || !c.token.refresh_token) { console.log("::error::CLASPRC_JSON has no token.refresh_token. Keys found: " + Object.keys(c).join(", ")); process.exit(1); }
-            console.log("Credentials look valid.");
+            fs.writeFileSync(os.homedir() + "/.clasprc.json", JSON.stringify(c), { mode: 0o600 });
+            console.log("Credentials look valid (" + how + ").");
           '
           printf '{"scriptId":"%s","rootDir":"paste-kit"}' "$SCRIPT_ID" > .clasp.json
 
