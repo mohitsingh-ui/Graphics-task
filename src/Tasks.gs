@@ -324,7 +324,19 @@ function api_getTask(taskId) {
     var activity = dbFind_('TaskActivity', function (a) { return a.taskId === t.taskId && (leader || a.visibility !== 'leader'); })
       .reverse().map(function (a) { return activityDto_(a, u, t); });
 
+    // When a request is divided between designers, every part shows the whole request's progress.
+    var parts = t.requirementId ? dbFind_('Tasks', function (x) { return x.requirementId === t.requirementId && x.status !== STATUS.CANCELLED; }) : [];
+    var requestParts = parts.length > 1 ? parts.map(function (x) {
+      var mine = x.assigneeEmail === u.email;
+      return {
+        taskId: leader || mine ? x.taskId : '', title: x.title, status: x.status, mine: mine,
+        assigneeName: x.assigneeEmail ? (leader || mine ? displayName_(x.assigneeEmail) : 'Another designer') : 'Not assigned',
+        required: Number(x.deliverablesRequired) || 0, approved: deliverableCounts_(x.taskId).deliverablesApproved
+      };
+    }) : [];
+
     var out = {
+      requestParts: requestParts,
       task: taskDto_(t, u),
       requirement: {
         requirementId: req.requirementId || '', requesterName: req.requesterName || '', department: req.department || '',

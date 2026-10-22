@@ -64,13 +64,21 @@ function computeReport_(range) {
   var uploaderByVersion = {};
   dbAll_('CreativeVersions').forEach(function (v) { uploaderByVersion[v.versionId] = String(v.uploadedBy).toLowerCase(); });
 
+  var versionsIn = dbAll_('CreativeVersions').filter(function (v) { return inRange_(v.uploadedAt, r); });
   var users = dbAll_('Users');
   var designers = users.map(function (u) {
     var mine = tasks.filter(function (t) { return t.assigneeEmail === u.email; });
     var doneIn = mine.filter(function (t) { return t.status === STATUS.COMPLETED && inRange_(t.completedAt, r); });
     var dec = decisionsIn.filter(function (d) { return uploaderByVersion[d.versionId] === u.email.toLowerCase(); });
     var approved = dec.filter(function (d) { return d.decision === 'approved'; }).length;
+    // Creatives done = distinct creatives approved in the period, credited to who uploaded the approved version.
+    var doneSet = {};
+    dec.forEach(function (d) { if (d.decision === 'approved') doneSet[d.deliverableId] = true; });
+    var uploaded = {};
+    versionsIn.forEach(function (v) { if (String(v.uploadedBy).toLowerCase() === u.email.toLowerCase()) uploaded[v.deliverableId] = true; });
     return {
+      creativesDone: Object.keys(doneSet).length,
+      creativesUploaded: Object.keys(uploaded).length,
       name: u.name, email: u.email, role: u.role, active: bool_(u.active),
       assigned: assigns.filter(function (a) { return a.assigneeEmail === u.email && inRange_(a.assignedAt, r); }).length,
       completed: doneIn.length,
@@ -80,7 +88,10 @@ function computeReport_(range) {
       revisionCycles: dec.filter(function (d) { return d.decision === 'changes'; }).length,
       approvalRate: dec.length ? Math.round(approved / dec.length * 100) : null
     };
-  }).filter(function (d) { return d.role === ROLES.DESIGNER || d.assigned || d.completed || d.activeNow; });
+  }).filter(function (d) { return d.role === ROLES.DESIGNER || d.assigned || d.completed || d.activeNow || d.creativesDone; })
+    .sort(function (a, b) { return b.creativesDone - a.creativesDone || (a.name < b.name ? -1 : 1); });
+  var creativesDoneTotal = {};
+  decisionsIn.forEach(function (d) { if (d.decision === 'approved') creativesDoneTotal[d.deliverableId] = true; });
 
   function groupCount(list, keyFn) {
     var m = {};
@@ -110,7 +121,8 @@ function computeReport_(range) {
       revisionCycles: decisionsIn.filter(function (d) { return d.decision === 'changes'; }).length,
       avgRevisionsPerCompletedTask: round1_(avg_(completedIn.map(function (t) { return changesByTask[t.taskId] || 0; }))),
       approvalRate: decisionsIn.length ? Math.round(approvedCount / decisionsIn.length * 100) : null,
-      decisions: decisionsIn.length
+      decisions: decisionsIn.length,
+      creativesDone: Object.keys(creativesDoneTotal).length
     },
     designers: designers,
     byDepartment: groupCount(tasksCreatedIn, function (t) { return (reqMap[t.requirementId] || {}).department; }),
@@ -132,8 +144,8 @@ function api_exportCsv(kind, range) {
     var rows;
     if (kind === 'designers') {
       var rep = computeReport_(r);
-      rows = [['Designer', 'Email', 'Assigned', 'Completed', 'Avg completion (days)', 'Active now', 'Overdue now', 'Revision cycles', 'Approval rate %']]
-        .concat(rep.designers.map(function (d) { return [d.name, d.email, d.assigned, d.completed, d.avgCompletionDays, d.activeNow, d.overdueNow, d.revisionCycles, d.approvalRate]; }));
+      rows = [['Designer', 'Email', 'Creatives done (approved)', 'Creatives uploaded', 'Tasks assigned', 'Tasks completed', 'Avg completion (days)', 'Active now', 'Overdue now', 'Revision cycles', 'Approval rate %']]
+        .concat(rep.designers.map(function (d) { return [d.name, d.email, d.creativesDone, d.creativesUploaded, d.assigned, d.completed, d.avgCompletionDays, d.activeNow, d.overdueNow, d.revisionCycles, d.approvalRate]; }));
     } else if (kind === 'decisions') {
       rows = [['Decided at', 'Task', 'Deliverable', 'Version', 'Decision', 'Reviewer', 'Reviewer email', 'Channel', 'Comment']];
       dbAll_('ApprovalDecisions').filter(function (d) { return inRange_(d.decidedAt, r); }).forEach(function (d) {

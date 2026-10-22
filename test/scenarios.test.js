@@ -746,6 +746,44 @@ scenario('Leader deletes a task: gone everywhere, files to Drive trash', () => {
   assert.strictEqual(ok(call('', 'api_getMyRequests', [s2.trackToken])).requests.length, 1);
 });
 
+scenario('10 creatives divided 5 + 5: one request, combined progress, creatives counted per designer', () => {
+  const rep0 = ok(call(LEADER, 'api_getReports', {}));
+  const doneOf = (rep, e) => (rep.designers.find(d => d.email === e) || { creativesDone: 0 }).creativesDone;
+  const s = ok(call('', 'api_submitRequirement', { requesterName: 'Ten', department: 'Sales', brief: 'Ten festive posts', preferredDate: future(4), quantity: 10 }));
+  const t0 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s.requirementId).taskId;
+  ok(call(LEADER, 'api_divideTask', t0, { parts: [{ assigneeEmail: A, count: 5 }, { assigneeEmail: B, count: 5 }], dueDate: future(4), priority: 'High' }));
+  const parts = ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === s.requirementId);
+  const ta = parts.find(x => x.assigneeEmail === A).taskId, tb = parts.find(x => x.assigneeEmail === B).taskId;
+  const approve = (who, tid, n) => {
+    const ids = [];
+    for (let i = 0; i < n; i++) ids.push(upload(who, { kind: 'version', taskId: tid, title: 'Post ' + i }, 'p' + i + '.png', png(800)).versionId);
+    ok(call(who, 'api_submitForApproval', tid, ids));
+    ids.forEach(id => ok(call(LEADER, 'api_leaderDecision', id, 'approved', '')));
+  };
+  approve(A, ta, 5);
+  approve(B, tb, 3);
+  const asA = ok(call(A, 'api_getTask', ta)).requestParts;
+  assert.strictEqual(asA.length, 2);
+  assert.deepStrictEqual(asA.map(p => [p.mine, p.required, p.approved]).sort(), [[false, 5, 3], [true, 5, 5]]);
+  const other = asA.find(p => !p.mine);
+  assert.strictEqual(other.assigneeName, 'Another designer');
+  assert.strictEqual(other.taskId, '', 'designer cannot open the other designer’s part');
+  const asL = ok(call(LEADER, 'api_getTask', ta)).requestParts;
+  assert.ok(asL.every(p => p.taskId && p.assigneeName !== 'Another designer'));
+  const mine = ok(call('', 'api_getMyRequests', [s.trackToken])).requests[0];
+  assert.strictEqual(mine.required, 10);
+  assert.strictEqual(mine.approved, 8);
+  assert.strictEqual(mine.status, 'In progress');
+  const rep1 = ok(call(LEADER, 'api_getReports', {}));
+  assert.strictEqual(doneOf(rep1, A) - doneOf(rep0, A), 5);
+  assert.strictEqual(doneOf(rep1, B) - doneOf(rep0, B), 3);
+  assert.strictEqual(rep1.summary.creativesDone - rep0.summary.creativesDone, 8);
+  const csv = ok(call(LEADER, 'api_exportCsv', 'designers', {}));
+  assert.ok(String(csv.csv || csv).includes('Creatives done'));
+  approve(B, tb, 2);
+  assert.strictEqual(ok(call('', 'api_getMyRequests', [s.trackToken])).requests[0].status, 'Completed');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

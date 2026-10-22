@@ -31,7 +31,7 @@ function drawTask(el) {
   if (p.canUpload) actions += '<button class="btn primary" id="aUpload">' + icon('upload') + ' Upload creative</button>';
   if (p.canUpload && drafts.length) actions += '<button class="btn ok" id="aSubmit">' + icon('send') + ' Submit for approval (' + drafts.length + ')</button>';
   if (p.canAssign) actions += '<button class="btn' + (t.assigneeEmail ? '' : ' primary') + '" id="aAssign">' + icon('users') + ' ' + (t.assigneeEmail ? 'Reassign' : 'Assign designer') + '</button>';
-  if (p.canAssign && !d.deliverables.length) actions += '<button class="btn" id="aDivide">' + icon('board') + ' Divide among team</button>';
+  if (p.canAssign && !d.deliverables.length && !(d.requestParts || []).length) actions += '<button class="btn" id="aDivide">' + icon('board') + ' Divide among team</button>';
   if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
   if (p.canResume) actions += '<button class="btn" id="aResume">Resume task</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
@@ -60,7 +60,7 @@ function drawTask(el) {
 
     '<div class="detail"><div class="stack">' +
     briefCard(d) + deliverablesCard(d) + activityTimeline(d) +
-    '</div><div class="stack">' + finalLinkCard(d) + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
+    '</div><div class="stack">' + requestCard(d) + finalLinkCard(d) + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
 
   wireGo(el);
   loadThumbs(el);
@@ -172,6 +172,24 @@ function activityTimeline(d) {
     }).join('') + '</ul>' : emptyState('No activity yet.')) + '</div></div>';
 }
 
+/** Whole-request progress when the request was divided between designers. */
+function requestCard(d) {
+  var ps = d.requestParts || [];
+  if (ps.length < 2) return '';
+  var req = 0, ok = 0;
+  ps.forEach(function (p) { req += p.required; ok += p.approved; });
+  var done = req && ok >= req;
+  return '<div class="card"><div class="card-h"><h3>Whole request</h3><span class="faint small">' + h(d.requirement.requirementId) + '</span></div><div class="card-b stack">' +
+    '<div><div class="row between small"><span><b>' + ok + ' of ' + req + '</b> creatives approved</span><span class="faint">' + ps.length + ' designers</span></div>' +
+    '<div style="margin-top:6px">' + progressBar(req ? ok / req * 100 : 0, done) + '</div></div>' +
+    ps.map(function (p) {
+      var inner = '<div class="li-main"><div class="li-title">' + h(p.assigneeName) + (p.mine ? ' <span class="faint small">(this is yours)</span>' : '') + '</div>' +
+        '<div class="li-sub">' + p.approved + ' of ' + p.required + ' approved</div></div>' + statusBadge(p.status);
+      return p.taskId && p.taskId !== d.task.taskId ? '<div class="list-item" data-go="task/' + h(p.taskId) + '">' + inner + '</div>' :
+        '<div class="list-item" style="cursor:default' + (p.taskId === d.task.taskId ? ';background:var(--accent-soft);border-radius:8px' : '') + '">' + inner + '</div>';
+    }).join('') + '</div></div>';
+}
+
 /** Google Drive (or any) link to the final files, shown to the requester on "My requests". */
 function finalLinkCard(d) {
   var t = d.task, can = d.permissions.canSetFinalLink;
@@ -217,10 +235,10 @@ function leaderSide(d) {
       return '<li><b>' + h(a.assigneeName) + '</b>' + (a.previousAssignee ? ' <span class="faint">(from ' + h(a.previousAssignee) + ')</span>' : '') +
         '<div class="t-meta">by ' + h(a.assignedBy) + ' · ' + fmtDateTime(a.assignedAt) + ' · due ' + fmtDue(a.dueDate, a.dueTime) + ' · ' + h(a.priority) + '</div>' + (a.note ? '<div class="t-note">' + h(a.note) + '</div>' : '') + '</li>';
     }).join('') + '</ul>' : '<p class="faint small">Not assigned yet.</p>') + '</div></div>' +
-    '<div class="card"><div class="card-h"><h3>Same requirement</h3><button class="btn ghost sm" id="splitBtn">' + icon('plus') + ' Add task</button></div><div class="card-b tight">' +
+    ((d.requestParts || []).length ? '' : '<div class="card"><div class="card-h"><h3>Same requirement</h3><button class="btn ghost sm" id="splitBtn">' + icon('plus') + ' Add task</button></div><div class="card-b tight">' +
     (d.siblingTasks.length ? d.siblingTasks.map(function (s) {
       return '<div class="list-item" data-go="task/' + h(s.taskId) + '"><div class="li-main"><div class="li-title">' + h(s.title) + '</div><div class="li-sub">' + h(s.taskId) + '</div></div>' + statusBadge(s.status) + '</div>';
-    }).join('') : '<p class="faint small" style="padding:8px 16px">Split a big requirement into separate tasks for different designers.</p>') + '</div></div>';
+    }).join('') : '<p class="faint small" style="padding:8px 16px">Split a big requirement into separate tasks for different designers.</p>') + '</div></div>');
 }
 
 /* ---------- actions ---------- */
@@ -241,9 +259,10 @@ function assignModal() {
   var t = TASK.task;
   var team = TASK.team.slice().sort(function (a, b) { return (a.role === 'designer' ? 0 : 1) - (b.role === 'designer' ? 0 : 1) || a.activeTasks - b.activeTasks; });
   var thr = APP.boot.workloadThreshold;
-  modal({
+  var am = modal({
     title: t.assigneeEmail ? 'Reassign task' : 'Assign to a designer',
-    body: '<div class="field"><label class="req">Designer</label><select id="asg">' + '<option value="">Choose…</option>' + team.map(function (u) {
+    body: (!TASK.deliverables.length && !(TASK.requestParts || []).length && Number(t.deliverablesRequired) > 1 ? '<div class="alert info row between" style="gap:10px"><span>' + h(t.deliverablesRequired) + ' creatives? You can split them between designers.</span><button class="btn sm" type="button" id="toDivide">' + icon('board') + ' Divide instead</button></div>' : '') +
+      '<div class="field"><label class="req">Designer</label><select id="asg">' + '<option value="">Choose…</option>' + team.map(function (u) {
       return '<option value="' + h(u.email) + '"' + (u.email === t.assigneeEmail ? ' selected' : '') + '>' + h(u.name) + (u.role === 'leader' ? ' (leader)' : '') + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
     }).join('') + '</select></div>' +
       '<div class="grid-3"><div class="field"><label>Start date</label><input type="date" id="asd" value="' + h(t.startDate || todayIso()) + '"></div>' +
@@ -261,6 +280,7 @@ function assignModal() {
       }
     }]
   });
+  if ($('#toDivide', am.el)) $('#toDivide', am.el).onclick = function () { am.close(); divideModal(); };
 }
 
 /** Split this task's creatives between several designers. */

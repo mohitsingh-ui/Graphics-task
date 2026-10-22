@@ -204,6 +204,33 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.waitForSelector('text=No requests yet');
     });
 
+    await step('Leader divides 10 creatives 5 + 5 from the Assign window; whole-request card; report counts', async () => {
+      const r = env.call('', 'api_submitRequirement', { requesterName: 'Rohit', department: 'Sales', brief: 'Ten Diwali posts for Instagram', preferredDate: future(6), quantity: 10 });
+      assert.ok(r.ok);
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="tasks"]');
+      await page.waitForSelector('text=Ten Diwali posts for Instagram');
+      await page.click('text=Ten Diwali posts for Instagram');
+      await page.waitForSelector('#aAssign');
+      await page.click('#aAssign');
+      await page.waitForSelector('#toDivide');
+      await shot('25-assign-offers-divide');
+      await page.click('#toDivide');
+      await page.waitForSelector('#dvRows select');
+      const sels = page.locator('#dvRows select');
+      await sels.nth(0).selectOption(A);
+      await sels.nth(1).selectOption('bilal@rosierfoods.com');
+      await shot('26-divide-5-5');
+      await page.click('.modal-f >> text=Divide & assign');
+      await page.waitForSelector('text=Whole request');
+      assert.ok((await page.textContent('body')).includes('0 of 10'));
+      await shot('27-whole-request-card');
+      await page.click('[data-r="reports"]');
+      await page.waitForSelector('text=Creatives done');
+      await shot('28-report-creatives-done');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {
