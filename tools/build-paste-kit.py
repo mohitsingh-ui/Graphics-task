@@ -3,7 +3,7 @@ For setting the project up by hand in the Apps Script editor (no clasp needed)."
 import os, re, glob
 src, out = 'src', 'paste-kit'
 os.makedirs(out, exist_ok=True)
-order = ['Config','Util','Db','Auth','Drive','Notifications','Setup','Requirements','Tasks','Uploads','Approvals','Review','Admin','Reports','Tracker','Code']
+order = ['Config','Util','Db','Auth','Drive','Notifications','Setup','Requirements','Tasks','Uploads','Approvals','Review','Admin','Reports','Tracker','Rewards','Code']
 assert set(order) == {os.path.basename(p)[:-3] for p in glob.glob(src + '/*.gs')}, 'update the order list'
 with open(f'{out}/Code.gs', 'w', encoding='utf-8') as f:
     for n in order:

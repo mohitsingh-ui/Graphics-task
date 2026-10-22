@@ -135,8 +135,7 @@ function api_leaderDecision(versionId, decision, comment) {
     return withLock_(function () {
       var r = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
       if (!r) throw AppError_('ALREADY_DECIDED', 'This version is no longer waiting for approval.');
-      var v = dbGet_('CreativeVersions', versionId);
-      if (v.uploadedBy === u.email) throw AppError_('FORBIDDEN', 'You uploaded this version, so someone else needs to approve it.');
+      // Team leaders may approve their own work.
       applyDecision_(r, decision, comment, { name: u.name, email: u.email }, 'portal', u);
       return { status: dbGet_('Tasks', r.taskId).status };
     });

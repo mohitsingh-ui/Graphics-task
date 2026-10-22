@@ -96,6 +96,7 @@ function activityText(a) {
     case 'reference_added': return 'added reference ' + h(a.toValue);
     case 'link_created': return 'created a review link';
     case 'link_revoked': return 'revoked review links';
+    case 'reward': return 'gave a reward: ' + h(a.toValue);
     case 'final_link': return a.toValue === 'added' ? 'shared the final files link' : 'removed the final files link';
     case 'overdue': return '<span class="overdue-flag">became overdue</span>';
     default: return h(a.action);
@@ -132,7 +133,8 @@ function designerOverview(el, token, tab) {
       '<span><span class="faint">Completed (all time)</span> <b>' + s.completedTotal + '</b></span>' +
       '<span><span class="faint">Avg. completion</span> <b>' + (s.avgCompletionDays === null ? '—' : s.avgCompletionDays + ' days') + '</b></span>' +
       '<span><span class="faint">Approval rate</span> <b>' + (s.approvalRate === null ? '—' : s.approvalRate + '%') + '</b></span>' +
-      '<span><span class="faint">Overdue now</span> <b' + (s.overdue ? ' class="overdue-flag"' : '') + '>' + s.overdue + '</b></span></div></div>' +
+      '<span><span class="faint">Overdue now</span> <b' + (s.overdue ? ' class="overdue-flag"' : '') + '>' + s.overdue + '</b></span>' +
+      '<a href="#" data-go="rewards" class="reward-pill">' + icon('award') + ' <b>' + (s.points || 0) + '</b> points' + (s.pointsMonth ? ' · ' + s.pointsMonth + ' this month' : '') + '</a></div></div>' +
       '<div class="card" style="margin-top:14px"><div class="tabs" id="dtabs" style="padding:0 8px">' +
       DESIGNER_TABS.map(function (t) { return '<button data-tab="' + t.id + '">' + h(t.label) + '<span class="count">' + d.tasks.filter(t.f).length + '</span></button>'; }).join('') +
       '</div><div id="dlist"></div></div>';

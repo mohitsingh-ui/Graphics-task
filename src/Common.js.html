@@ -94,6 +94,8 @@ var ICONS = {
   refresh: 'M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5',
   board: 'M3 3h7v18H3zM14 3h7v10h-7z',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  award: 'M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.2 13.9 7 22l5-3 5 3-1.2-8.1',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
   image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'
 };
 function icon(name) {
@@ -185,32 +187,73 @@ function readChunk(file, start, end) {
 }
 
 /**
- * Upload a File through the server into Drive in chunks.
+ * Upload a File into Drive.
+ * Fast path: bytes go straight from the browser to the Drive upload session the
+ * server opened (one request, no base64). If that's blocked, it falls back to
+ * 4 MB chunks through the server, continuing from where Drive stopped.
  * ctx is passed to api_startUpload (kind, ticket/taskId, metadata).
  * onProgress(fraction 0..1). Resolves with the final server result.
  */
+var UPLOAD_DIRECT = true;
 function uploadFile(file, ctx, onProgress) {
-  var c = Object.assign({}, ctx, { fileName: file.name, size: file.size, mimeType: file.type });
+  var c = Object.assign({}, ctx, { fileName: file.name, size: file.size, mimeType: file.type, origin: UPLOAD_DIRECT ? location.origin : '' });
+  var shown = 0;
+  function prog(p) { p = Math.max(0.01, Math.min(0.99, p)); if (onProgress && p - shown >= 0.01) { shown = p; onProgress(p); } }
   return api('api_startUpload', c).then(function (start) {
-    var chunk = start.chunkBytes, offset = 0;
-    function next() {
-      var end = Math.min(offset + chunk, file.size);
-      return readChunk(file, offset, end).then(function (b64) { return sendWithRetry(b64, 0); }).then(function (res) {
-        offset = end;
-        if (onProgress) onProgress(offset / file.size);
-        if (res.done) return res;
-        return next();
+    prog(0.02);
+    function viaServer(offset) {
+      var chunk = start.chunkBytes;
+      function next() {
+        var end = Math.min(offset + chunk, file.size);
+        return readChunk(file, offset, end).then(function (b64) { return sendWithRetry(b64, 0); }).then(function (res) {
+          offset = end;
+          prog(offset / file.size);
+          if (res.done) return res;
+          return next();
+        });
+      }
+      function sendWithRetry(b64, attempt) {
+        return api('api_uploadChunk', start.uploadId, offset, b64).catch(function (e) {
+          if (e.code === 'NETWORK' && attempt < 2) return new Promise(function (r) { setTimeout(r, 1500 * (attempt + 1)); }).then(function () { return sendWithRetry(b64, attempt + 1); });
+          throw e;
+        });
+      }
+      return next();
+    }
+    function finish() {
+      return api('api_finishUpload', start.uploadId).then(function (res) {
+        return res.done ? res : viaServer(res.received || 0);
       });
     }
-    function sendWithRetry(b64, attempt) {
-      return api('api_uploadChunk', start.uploadId, offset, b64).catch(function (e) {
-        if (e.code === 'NETWORK' && attempt < 2) return new Promise(function (r) { setTimeout(r, 1500 * (attempt + 1)); }).then(function () { return sendWithRetry(b64, attempt + 1); });
-        throw e;
-      });
-    }
-    if (onProgress) onProgress(0.01);
-    return next();
+    if (!start.direct) return viaServer(0);
+    return putDirect(start.direct, file, function (p) { prog(0.02 + p * 0.95); })
+      .then(finish, function () { UPLOAD_DIRECT = false; return finish(); });
+  }).then(function (res) { if (onProgress) onProgress(1); return res; });
+}
+
+/** One PUT of the whole file to a Drive upload session, with progress. */
+function putDirect(url, file, onProgress) {
+  return new Promise(function (resolve, reject) {
+    var x = new XMLHttpRequest();
+    x.open('PUT', url, true);
+    x.upload.onprogress = function (e) { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    x.onload = function () { (x.status === 200 || x.status === 201) ? resolve() : reject({ status: x.status }); };
+    x.onerror = x.onabort = x.ontimeout = function () { reject({ status: 0 }); };
+    x.send(file);
   });
+}
+
+/** Runs fn over items with at most n at a time. Resolves when all have settled. */
+function runPool(items, n, fn) {
+  var i = 0;
+  function worker() {
+    if (i >= items.length) return Promise.resolve();
+    var item = items[i], idx = i++;
+    return Promise.resolve().then(function () { return fn(item, idx); }).catch(function () {}).then(worker);
+  }
+  var ws = [];
+  for (var k = 0; k < Math.min(n, items.length); k++) ws.push(worker());
+  return Promise.all(ws);
 }
 
 /* ---------- lightbox with zoom ---------- */

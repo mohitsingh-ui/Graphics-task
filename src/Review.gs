@@ -121,7 +121,9 @@ function api_submitReview(token, input) {
       if (ctx.state !== 'open') throw AppError_('LINK_CLOSED', 'This review link is no longer active.');
       var v = dbGet_('CreativeVersions', ctx.req.versionId);
       var t = dbGet_('Tasks', ctx.req.taskId);
-      if (reviewer.email && (reviewer.email === String(v.uploadedBy).toLowerCase() || reviewer.email === String(t.assigneeEmail).toLowerCase())) {
+      var rv = reviewer.email ? userByEmail_(reviewer.email) : null;
+      var isLeaderReviewer = rv && bool_(rv.active) && rv.role === ROLES.LEADER;   // leaders may approve their own work
+      if (reviewer.email && !isLeaderReviewer && (reviewer.email === String(v.uploadedBy).toLowerCase() || reviewer.email === String(t.assigneeEmail).toLowerCase())) {
         throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
       }
       applyDecision_(ctx.req, decision, comment, reviewer, 'public', null);

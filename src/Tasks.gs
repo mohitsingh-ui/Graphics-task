@@ -228,7 +228,9 @@ function api_designerDashboard() {
         completedTotal: mine.filter(function (t) { return t.status === STATUS.COMPLETED; }).length,
         avgCompletionDays: avgDays === null ? null : Math.round(avgDays * 10) / 10,
         approvalRate: myDecisions.length ? Math.round(approvals / myDecisions.length * 100) : null,
-        overdue: active.filter(isOverdue_).length
+        overdue: active.filter(isOverdue_).length,
+        points: (rewardTotals_()[u.email] || { total: 0 }).total,
+        pointsMonth: (rewardTotals_()[u.email] || { month: 0 }).month
       },
       tasks: mine.sort(function (a, b) { return ((a.dueDate || '9') + (a.dueTime || '99')) > ((b.dueDate || '9') + (b.dueTime || '99')) ? 1 : -1; })
         .map(function (t) { return taskDto_(t, u, deliverableCounts_(t.taskId)); })
@@ -337,6 +339,7 @@ function api_getTask(taskId) {
       brandGuidelinesUrl: settings_().brandGuidelinesUrl
     };
     if (leader) {
+      out.siblings = dbFind_('Tasks', function (x) { return x.requirementId === t.requirementId && x.taskId !== t.taskId; }).length;
       out.assignments = dbFind_('TaskAssignments', function (a) { return a.taskId === t.taskId; }).reverse()
         .map(function (a) { return Object.assign(pick_(a, ['assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate', 'dueTime', 'priority', 'note', 'assignedAt']),
           { assigneeName: displayName_(a.assigneeEmail) }); });
@@ -665,4 +668,57 @@ function uniq_(arr) {
   var seen = {}, out = [];
   arr.forEach(function (x) { if (x && !seen[x]) { seen[x] = true; out.push(x); } });
   return out.sort();
+}
+
+/* ---------- delete (team leader) ---------- */
+
+/**
+ * Permanently deletes a task with its creatives, versions, review links,
+ * decisions and activity. If it was the only task of its requirement, the
+ * requirement (and its reference files) goes too, so it disappears from the
+ * requester's "My requests". Drive files are moved to the Drive trash
+ * (recoverable for 30 days), and nightly backups keep the old rows.
+ */
+function api_deleteTask(taskId) {
+  return respond_(function () {
+    var u = requireLeader_();
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      var id = t.taskId;
+      var files = [];
+      dbFind_('CreativeVersions', function (v) { return v.taskId === id; }).forEach(function (v) { files.push(v.fileId, v.approvedFileId); });
+      var requestIds = {};
+      dbFind_('ApprovalRequests', function (r) { return r.taskId === id; }).forEach(function (r) { requestIds[r.requestId] = true; });
+
+      var siblings = dbFind_('Tasks', function (x) { return x.requirementId === t.requirementId && x.taskId !== id; });
+      var dropReq = !!t.requirementId && !siblings.length;
+      var req = dropReq ? dbGet_('Requirements', t.requirementId) : null;
+
+      dbFind_('ReferenceFiles', function (a) { return a.taskId === id || (dropReq && a.requirementId === t.requirementId); })
+        .forEach(function (a) { files.push(a.fileId); });
+
+      dbDeleteWhere_('ReviewTokens', function (k) { return requestIds[k.requestId]; });
+      dbDeleteWhere_('ApprovalDecisions', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('ApprovalRequests', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('CreativeVersions', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('CreativeSubmissions', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('TaskAssignments', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('TaskActivity', function (x) { return x.taskId === id; });
+      dbDeleteWhere_('Notifications', function (x) { return x.route === 'task/' + id; });
+      dbDeleteWhere_('ReferenceFiles', function (a) { return a.taskId === id || (dropReq && a.requirementId === t.requirementId); });
+      dbDeleteWhere_('Tasks', function (x) { return x.taskId === id; });
+      if (dropReq) {
+        dbDeleteWhere_('Requirements', function (r) { return r.requirementId === t.requirementId; });
+      }
+
+      files.filter(Boolean).forEach(function (f) { try { DriveApp.getFileById(f).setTrashed(true); } catch (e) { /* already gone */ } });
+      if (dropReq && req && req.folderId) { try { DriveApp.getFolderById(req.folderId).setTrashed(true); } catch (e) { /* ignore */ } }
+
+      if (t.assigneeEmail && t.assigneeEmail !== u.email) {
+        notify_([t.assigneeEmail], 'task_deleted', 'Task deleted: ' + t.title, id + ' was deleted by ' + u.name + '. No further work is needed.', 'overview', false);
+      }
+      console.log('Task ' + id + ' deleted by ' + u.email + (dropReq ? ' (with requirement ' + t.requirementId + ')' : ''));
+      return { deleted: id, requirementDeleted: dropReq ? t.requirementId : '' };
+    });
+  });
 }

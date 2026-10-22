@@ -43,6 +43,17 @@
   .req-card .meta { font-size: 12.5px; color: var(--text-3); }
   .req-card .brief { font-size: 13px; color: var(--text-2); margin: 8px 0 0; white-space: pre-line; }
   .req-card .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .gal-h { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 8px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+  .cr { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface-2); display: flex; flex-direction: column; }
+  .cr .ph { aspect-ratio: 1 / 1; display: grid; place-items: center; background: var(--surface-2) center / cover no-repeat; cursor: zoom-in; border: 0; padding: 0; width: 100%;
+    font: 600 12px/1 inherit; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+  .cr .info { padding: 7px 9px 8px; background: var(--surface); }
+  .cr .t { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cr .s { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; align-items: center; gap: 4px; margin-top: 2px; }
+  .cr .s.ok { color: var(--ok); }
+  .cr .dl { border: 0; background: none; padding: 2px; color: var(--accent); cursor: pointer; display: inline-flex; }
+  .cr .dl svg { width: 16px; height: 16px; }
   .st-received, .st-on-hold { background: var(--muted-soft); color: var(--text-2); }
   .st-in-progress { background: var(--accent-soft); color: var(--accent-ink); }
   .st-ready-for-your-review { background: var(--warn-soft); color: var(--warn); }
@@ -113,9 +124,49 @@ function renderMy() {
         }).catch(function (e) { if (w) w.close(); toast(errMsg(e), true); b.disabled = false; renderMy(); });
       };
     });
+    wireCreatives(el);
   }).catch(function (e) {
     if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACKS = []; saveTracks(); return renderAskEmail(errMsg(e)); }
     el.innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
+  });
+}
+
+/** Thumbnails, full-size view and download for the requester's creatives. */
+function wireCreatives(el) {
+  var ids = $all('[data-view]', el).map(function (b) { return b.getAttribute('data-view'); });
+  for (var i = 0; i < ids.length; i += 24) {
+    (function (batch) {
+      api('api_trackThumbs', TRACKS, batch).then(function (m) {
+        batch.forEach(function (id) {
+          var b = $('[data-view="' + id + '"]', el);
+          if (b && m[id]) { b.style.backgroundImage = 'url("' + m[id] + '")'; b.textContent = ''; }
+        });
+      }).catch(function () { /* thumbnails are optional */ });
+    })(ids.slice(i, i + 24));
+  }
+  $all('[data-view]', el).forEach(function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute('data-view'), title = b.getAttribute('data-title');
+      var dlBtn = $('[data-dl="' + id + '"]', el);
+      toast('Opening…');
+      api('api_trackFile', TRACKS, id, 'preview').then(function (p) {
+        if (!p.dataUrl) {
+          if (dlBtn) return dlBtn.click();
+          return toast(p.message || 'No preview for this file type.', true);
+        }
+        var lb = lightbox(p.dataUrl, title, dlBtn ? '<button class="btn sm" data-lbdl>' + icon('download') + ' Download</button>' : '');
+        var x = $('[data-lbdl]', lb && lb.nodeType ? lb : document);
+        if (x) x.onclick = function () { dlBtn.click(); };
+      }).catch(function (e) { toast(errMsg(e), true); });
+    };
+  });
+  $all('[data-dl]', el).forEach(function (b) {
+    b.onclick = function () {
+      b.disabled = true; toast('Preparing download…');
+      api('api_trackFile', TRACKS, b.getAttribute('data-dl'), 'original').then(function (f) {
+        downloadBase64(f.fileName, f.mimeType, f.base64);
+      }).catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+    };
   });
 }
 
@@ -128,9 +179,16 @@ function reqCard(r) {
   }).concat(r.finalLinks.map(function (u, i) {
     return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
   })).join('');
+  var cr = r.creatives || [];
+  var gallery = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
+    '<div class="gallery">' + cr.map(function (c) {
+      return '<div class="cr"><button class="ph" data-view="' + h(c.versionId) + '" data-title="' + h(c.title + ' ' + c.version) + '" data-img="' + (c.isImage ? '1' : '') + '" aria-label="View ' + h(c.title) + '">' + h(c.ext || 'file') + '</button>' +
+        '<div class="info"><div class="t" title="' + h(c.title) + '">' + h(c.title) + '</div><div class="s' + (c.state === 'Approved' ? ' ok' : '') + '"><span>' + h(c.version) + ' · ' + h(c.state) + '</span>' +
+        (c.canDownload ? '<button class="dl" data-dl="' + h(c.versionId) + '" title="Download" aria-label="Download ' + h(c.title) + '">' + icon('download') + '</button>' : '') + '</div></div></div>';
+    }).join('') + '</div>' : '';
   return '<div class="req-card"><div class="top"><div><h3>' + h(r.title) + '</h3><div class="meta">' + h(r.requirementId) + ' · sent ' + fmtDate(r.submittedAt) +
     ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' +
-    progress + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
+    progress + gallery + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
 }
 
 function renderAskEmail(msg) {
@@ -262,15 +320,12 @@ function submit(e) {
   var result;
   api('api_submitRequirement', d).then(function (r) {
     result = r;
-    var chain = Promise.resolve();
-    FILES.forEach(function (x) {
-      chain = chain.then(function () {
-        x.state = 'uploading'; renderFiles();
-        return uploadFile(x.file, { kind: 'reference', ticket: r.uploadTicket }, function (p) { x.progress = p; renderFiles(); })
-          .then(function () { x.state = 'done'; renderFiles(); }, function (err) { x.state = 'error'; x.error = errMsg(err); renderFiles(); });
-      });
-    });
-    return chain.then(function () { return api('api_finalizeRequirement', r.uploadTicket); });
+    // Up to 3 files upload at the same time.
+    return runPool(FILES, 3, function (x) {
+      x.state = 'uploading'; renderFiles();
+      return uploadFile(x.file, { kind: 'reference', ticket: r.uploadTicket }, function (p) { x.progress = p; renderFiles(); })
+        .then(function () { x.state = 'done'; renderFiles(); }, function (err) { x.state = 'error'; x.error = errMsg(err); renderFiles(); });
+    }).then(function () { return api('api_finalizeRequirement', r.uploadTicket); });
   }).then(function () {
     addTrack(result.trackToken);
     showDone(result.requirementId, FILES.filter(function (x) { return x.state === 'error'; }));

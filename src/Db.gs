@@ -177,6 +177,25 @@ function settings_() {
  * writes any missing header names (new columns are only ever appended)
  * and keeps every column formatted as plain text. Caller holds the lock.
  */
+/** Deletes every row matching pred. Returns how many were removed. Caller holds the lock. */
+function dbDeleteWhere_(table, pred) {
+  if (LOCK_DEPTH_ === 0) throw new Error('dbDeleteWhere_ outside lock');
+  var rows = dbFind_(table, pred).map(function (r) { return r._row; }).sort(function (a, b) { return b - a; });
+  if (!rows.length) return 0;
+  var sh = sheet_(table);
+  // Delete bottom-up, merging neighbouring rows into one call.
+  var i = 0;
+  while (i < rows.length) {
+    var end = rows[i], start = end;
+    while (i + 1 < rows.length && rows[i + 1] === start - 1) { start--; i++; }
+    sh.deleteRows(start, end - start + 1);
+    i++;
+  }
+  DIRTY_[table] = true;
+  delete DB_CACHE_[table]; // row numbers changed; re-read next time
+  return rows.length;
+}
+
 function migrateSchema_() {
   var props = PropertiesService.getScriptProperties();
   if (Number(props.getProperty('SCHEMA_VERSION') || 1) >= SCHEMA_VERSION) return;

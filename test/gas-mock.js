@@ -40,6 +40,8 @@ function createEnv(opts = {}) {
       getMaxRows: () => sh.maxRows,
       insertColumnsAfter: (a, n) => { sh.maxCols += n; },
       setFrozenRows: () => {},
+      deleteRows: (r, n) => { state.stats.writes++; sh.data.splice(r - 1, n); },
+      deleteRow: r => { state.stats.writes++; sh.data.splice(r - 1, 1); },
       protect: () => ({ setDescription() { return this; }, getEditors: () => [], removeEditor() {}, canDomainEdit: () => false, setDomainEdit() {} }),
       getRange: (r, c, nr = 1, nc = 1) => { const rg = {
         getValues: () => { state.stats.reads++; ensure(r + nr - 1, c + nc - 1); return sh.data.slice(r - 1, r - 1 + nr).map(row => row.slice(c - 1, c - 1 + nc).map(v => v)); },
@@ -86,6 +88,7 @@ function createEnv(opts = {}) {
       getName: () => f.name,
       getUrl: () => 'https://drive.google.com/drive/folders/' + f.id,
       isTrashed: () => !!f.trashed,
+      setTrashed: v => { f.trashed = !!v; },
       getSharingAccess: () => 'PRIVATE',
       getFiles: () => iter(Object.values(state.files).filter(x => x.parent === f.id && !x.trashed).map(fileApi)),
       getFoldersByName: n => iter(Object.values(state.folders).filter(x => x.parent === f.id && x.name === n && !x.trashed).map(folderApi)),
@@ -130,12 +133,16 @@ function createEnv(opts = {}) {
       if (url.startsWith('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable') && p.method === 'post') {
         const meta = JSON.parse(p.payload);
         const sid = nid('sess');
-        state.sessions[sid] = { meta, total: Number(p.headers['X-Upload-Content-Length']), mime: p.headers['X-Upload-Content-Type'], chunks: [], received: 0 };
+        state.sessions[sid] = { meta, total: Number(p.headers['X-Upload-Content-Length']), mime: p.headers['X-Upload-Content-Type'], chunks: [], received: 0, origin: p.headers.Origin || '' };
         return resp(200, '', { Location: 'https://upload.mock/session/' + sid });
       }
       if (url.startsWith('https://upload.mock/session/') && p.method === 'put') {
         const s = state.sessions[url.split('/').pop()];
         if (!s) return resp(404, 'gone');
+        if (/^bytes \*\/\d+$/.test(p.headers['Content-Range'])) {
+          if (s.fileId) return resp(200, { id: s.fileId, name: s.meta.name, mimeType: s.mime, size: String(state.files[s.fileId].bytes.length) });
+          return s.received ? resp(308, '', { Range: 'bytes=0-' + (s.received - 1) }) : resp(308, '');
+        }
         const m = /bytes (\d+)-(\d+)\/(\d+)/.exec(p.headers['Content-Range']);
         const start = Number(m[1]), end = Number(m[2]);
         if (start !== s.received) return resp(400, 'bad offset');
@@ -145,7 +152,15 @@ function createEnv(opts = {}) {
         if (s.received < s.total) return resp(308, '', { Range: 'bytes=0-' + (s.received - 1) });
         const id = nid('fi');
         state.files[id] = { id, name: s.meta.name, mime: s.mime, bytes: Buffer.concat(s.chunks), parent: s.meta.parents[0] };
+        s.fileId = id;
         return resp(200, { id, name: s.meta.name, mimeType: s.mime, size: String(s.total) });
+      }
+      let am = /drive\/v3\/files\/([^?]+)\?alt=media/.exec(url);
+      if (am && p.method === 'get') {
+        const f = state.files[decodeURIComponent(am[1])];
+        if (!f) return resp(404, {});
+        const r = /bytes=(\d+)-(\d+)/.exec((p.headers || {}).Range || '');
+        return resp(206, '', {}, r ? f.bytes.subarray(Number(r[1]), Number(r[2]) + 1) : f.bytes);
       }
       let mm = /drive\/v3\/files\/([^?]+)\?fields=thumbnailLink/.exec(url);
       if (mm) { return state.files[mm[1]] ? resp(200, { hasThumbnail: true, thumbnailLink: 'https://thumb.mock/' + mm[1] + '=s220' }) : resp(404, {}); }

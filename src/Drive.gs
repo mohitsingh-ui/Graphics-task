@@ -6,6 +6,10 @@
  * reviewers never get Drive URLs; the server reads files with the owner's
  * authority after checking permissions, and sends bytes to the browser.
  * The owner's OAuth token is only ever used server-side (UrlFetchApp).
+ * For speed, the browser may send file bytes straight to a Drive upload
+ * session the server opened. That session URL can only write that one new
+ * file; the server checks the finished file (size + file signature) and
+ * deletes it if it doesn't match.
  */
 
 function folderIds_() {
@@ -27,6 +31,17 @@ function ensureFolder_(baseKey, parts) {
   return folder;
 }
 
+/** Like ensureFolder_ but returns just the id, cached so repeat uploads skip the Drive folder walk. */
+function ensureFolderId_(baseKey, parts) {
+  var key = 'fld_' + sha256_(baseKey + '/' + parts.join('/'));
+  var cache = CacheService.getScriptCache();
+  var id = cache.get(key);
+  if (id) return id;
+  id = ensureFolder_(baseKey, parts).getId();
+  cache.put(key, id, 21600);
+  return id;
+}
+
 function driveApi_(method, url, opts) {
   opts = opts || {};
   var params = {
@@ -43,13 +58,16 @@ function driveApi_(method, url, opts) {
 /* ---------- resumable uploads ---------- */
 
 /** Starts a Drive resumable upload session; returns the session URI (kept server-side only). */
-function startResumable_(folderId, fileName, mimeType, sizeBytes) {
+function startResumable_(folderId, fileName, mimeType, sizeBytes, origin) {
+  var headers = { 'X-Upload-Content-Type': mimeType, 'X-Upload-Content-Length': String(sizeBytes) };
+  // Opening the session with the browser's origin lets that page send the bytes directly (CORS).
+  if (origin) headers.Origin = origin;
   var res = driveApi_('post',
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,mimeType,size',
     {
       contentType: 'application/json; charset=UTF-8',
       payload: JSON.stringify({ name: fileName, parents: [folderId], mimeType: mimeType }),
-      headers: { 'X-Upload-Content-Type': mimeType, 'X-Upload-Content-Length': String(sizeBytes) }
+      headers: headers
     });
   var code = res.getResponseCode();
   if (code !== 200) {
@@ -82,6 +100,29 @@ function putChunk_(sessionUri, bytes, offset, total) {
   if (code === 200 || code === 201) return { done: true, file: JSON.parse(res.getContentText()) };
   console.error('Chunk upload failed ' + code + ' ' + res.getContentText().slice(0, 500));
   throw AppError_('DRIVE_ERROR', 'Upload to Google Drive failed (' + code + '). Please retry the file.');
+}
+
+/** Asks Drive how far an upload session got. {done:false, received:n} or {done:true, file}. */
+function sessionStatus_(sessionUri, total) {
+  var res = driveApi_('put', sessionUri, { payload: '', headers: { 'Content-Range': 'bytes */' + total }, followRedirects: false });
+  var code = res.getResponseCode();
+  if (code === 308) {
+    var range = res.getHeaders().Range || res.getHeaders().range || '';
+    var m = /bytes=0-(\d+)/.exec(range);
+    return { done: false, received: m ? Number(m[1]) + 1 : 0 };
+  }
+  if (code === 200 || code === 201) return { done: true, file: JSON.parse(res.getContentText()) };
+  console.error('Upload status failed ' + code + ' ' + res.getContentText().slice(0, 300));
+  throw AppError_('UPLOAD_EXPIRED', 'This upload session has expired. Please try the file again.');
+}
+
+/** First bytes of a Drive file (for the file-signature check). */
+function headBytes_(fileId, n) {
+  var res = driveApi_('get', 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true',
+    { headers: { Range: 'bytes=0-' + (n - 1) } });
+  var code = res.getResponseCode();
+  if (code !== 200 && code !== 206) return null;
+  return res.getBlob().getBytes().slice(0, n);
 }
 
 /* ---------- reading files for previews ---------- */

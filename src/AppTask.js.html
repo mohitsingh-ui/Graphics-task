@@ -35,6 +35,8 @@ function drawTask(el) {
   if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
   if (p.canResume) actions += '<button class="btn" id="aResume">Resume task</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
+  if (leader && t.assigneeEmail && t.assigneeEmail !== APP.boot.user.email) actions += '<button class="btn" id="aReward">' + icon('award') + ' Reward</button>';
+  if (leader) actions += '<button class="btn ghost danger" id="aDelete" title="Delete task">' + icon('trash') + ' Delete</button>';
 
   var changes = [];
   d.deliverables.forEach(function (dv) {
@@ -69,6 +71,16 @@ function drawTask(el) {
   if ($('#aEdit')) $('#aEdit').onclick = editModal;
   if ($('#aResume')) $('#aResume').onclick = function () { run(api('api_resumeTask', t.taskId), 'Task resumed'); };
   if ($('#aStatus')) $('#aStatus').onclick = statusModal;
+  if ($('#aReward')) $('#aReward').onclick = function () { rewardModal({ userEmail: t.assigneeEmail, taskId: t.taskId }, reloadTask); };
+  if ($('#aDelete')) $('#aDelete').onclick = function () {
+    confirmBox('Delete ' + t.taskId + ' permanently?',
+      'The task, its creatives, versions, review links and history are removed. ' +
+      (d.siblings ? '' : 'The request also disappears from the requester’s “My requests”. ') +
+      'Files go to the Google Drive trash (recoverable for 30 days).', 'Delete task', true).then(function (y) {
+      if (!y) return;
+      api('api_deleteTask', t.taskId).then(function () { toast('Task deleted'); go('tasks'); }).catch(function (e) { toast(errMsg(e), true); });
+    });
+  };
   $all('[data-progress]', el).forEach(function (b) { b.onclick = function () { setProgress(Number(b.getAttribute('data-progress'))); }; });
   if ($('#cmtBtn')) $('#cmtBtn').onclick = addComment;
   if ($('#flSave')) $('#flSave').onclick = function () {
@@ -396,9 +408,11 @@ function uploadRefs(files) {
   var bad = files.map(checkFile).filter(Boolean);
   if (bad.length) return toast(bad[0], true);
   toast('Uploading ' + files.length + ' file(s)…');
-  var chain = Promise.resolve();
-  files.forEach(function (f) { chain = chain.then(function () { return uploadFile(f, { kind: 'taskref', taskId: TASK.task.taskId }); }); });
-  run(chain, 'Reference files added');
+  var errs = [];
+  var all = runPool(files, 3, function (f) {
+    return uploadFile(f, { kind: 'taskref', taskId: TASK.task.taskId }).catch(function (e) { errs.push(e); throw e; });
+  }).then(function () { if (errs.length) throw errs[0]; });
+  run(all, 'Reference files added');
 }
 
 /** Upload modal. If deliverableId is given, it uploads a new version of that creative. */
@@ -473,17 +487,15 @@ function uploadModal(deliverableId) {
     var note = $('#u_note', el).value.trim(), andSubmit = $('#u_submit', el).checked;
     var finalLink = $('#u_link', el).value.trim();
     if (finalLink && !/^https:\/\/\S+$/i.test(finalLink)) return fieldErrors(el, 'The Drive link should start with https://');
-    var created = [];
-    var chain = Promise.resolve();
-    pending.forEach(function (x, i) {
-      chain = chain.then(function () {
-        x.state = 'uploading'; drawFiles();
-        var ctx = { kind: 'version', taskId: t.taskId, deliverableId: target, note: note,
-          title: target ? '' : (files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title), purpose: purpose, deliverableType: $('#u_type', el).value.trim() };
-        return uploadFile(x.file, ctx, function (p) { x.progress = p; drawFiles(); })
-          .then(function (res) { x.state = 'done'; created.push(res.versionId); drawFiles(); }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); throw e; });
-      });
-    });
+    var created = [], errs = [];
+    // A new version of one creative is a single file; new creatives upload 3 at a time.
+    var chain = runPool(pending, target ? 1 : 3, function (x) {
+      x.state = 'uploading'; drawFiles();
+      var ctx = { kind: 'version', taskId: t.taskId, deliverableId: target, note: note,
+        title: target ? '' : (files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title), purpose: purpose, deliverableType: $('#u_type', el).value.trim() };
+      return uploadFile(x.file, ctx, function (p) { x.progress = p; drawFiles(); })
+        .then(function (res) { x.state = 'done'; created.push(res.versionId); drawFiles(); }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); errs.push(e); });
+    }).then(function () { if (errs.length) throw errs[0]; });
     return chain.then(function () {
       if (finalLink !== (t.finalLink || '')) return api('api_setFinalLink', t.taskId, finalLink);
     }).then(function () {

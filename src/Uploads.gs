@@ -1,10 +1,15 @@
 /**
  * Uploads.gs — chunked uploads from the browser into Google Drive.
  *
- * The browser sends 4 MB base64 chunks to the server; the server forwards
- * them to a Drive resumable-upload session. The session URI and the owner's
- * OAuth token never leave the server. Upload state is kept in CacheService
- * under an unguessable upload id bound to the uploader.
+ * Fast path: the server opens a Drive resumable-upload session for one file
+ * and hands the browser that session URL; the browser sends the bytes
+ * straight to Drive in one request, then calls api_finishUpload, which checks
+ * the finished file's size and signature (and deletes it if wrong).
+ * Fallback: if the direct send fails (e.g. a network that blocks it), the
+ * browser sends 4 MB base64 chunks through api_uploadChunk, continuing from
+ * wherever Drive stopped. The owner's OAuth token never leaves the server.
+ * Upload state is kept in CacheService under an unguessable upload id bound
+ * to the uploader.
  *
  * kinds:
  *   reference — public requester attachments (bound to an upload ticket)
@@ -59,20 +64,26 @@ function api_startUpload(ctx) {
     ctx = ctx || {};
     var s = settings_();
     var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version'], 'Upload type');
-    var rec = { kind: kind, received: 0 };
-    var folder;
+    var rec = { kind: kind, received: 0, sigChecked: false };
+    var folderId;
 
     if (kind === 'reference') {
-      var info = readTicket_(ctx.ticket);
-      if (info.finalized) throw AppError_('INVALID_TICKET', 'This requirement is already submitted.');
-      if (info.files >= s.maxPublicFiles) throw AppError_('VALIDATION', 'You can attach up to ' + s.maxPublicFiles + ' files.');
       var f = validateFile_(ctx.fileName, ctx.size, s.publicExtensions, s.maxPublicUploadMB);
-      info.files++;
-      uploadCache_().put('tkt_' + sha256_(ctx.ticket), JSON.stringify(info), LIMITS.UPLOAD_TTL_SEC);
+      // Files upload in parallel, so the per-request file count is updated under a short lock.
+      var lk = LockService.getScriptLock();
+      if (!lk.tryLock(10000)) throw AppError_('BUSY', 'Busy — please try again.');
+      var info;
+      try {
+        info = readTicket_(ctx.ticket);
+        if (info.finalized) throw AppError_('INVALID_TICKET', 'This requirement is already submitted.');
+        if (info.files >= s.maxPublicFiles) throw AppError_('VALIDATION', 'You can attach up to ' + s.maxPublicFiles + ' files.');
+        info.files++;
+        uploadCache_().put('tkt_' + sha256_(ctx.ticket), JSON.stringify(info), LIMITS.UPLOAD_TTL_SEC);
+      } finally { lk.releaseLock(); }
       rec.owner = 'ticket:' + sha256_(ctx.ticket);
       rec.requirementId = info.requirementId;
       rec.file = f;
-      folder = DriveApp.getFolderById(info.folderId);
+      folderId = info.folderId;
     } else {
       var u = currentUser_();
       var task = requireTask_(u, ctx.taskId);
@@ -81,7 +92,7 @@ function api_startUpload(ctx) {
       rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, s.maxUploadMB);
       if (kind === 'taskref') {
         if (!isLeader_(u)) throw AppError_('FORBIDDEN', 'Only the team leader can add reference files to a task.');
-        folder = task.folderId ? DriveApp.getFolderById(task.folderId) : ensureFolder_('references', [String(new Date().getFullYear()), task.requirementId]);
+        folderId = task.folderId || ensureFolderId_('references', [String(new Date().getFullYear()), task.requirementId]);
       } else {
         if (!taskPermissions_(u, task).canUpload) throw AppError_('INVALID_STATE', 'You can’t upload creatives while the task is ' + task.status.toLowerCase() + '.');
         rec.meta = {
@@ -95,30 +106,44 @@ function api_startUpload(ctx) {
           var d = dbGet_('CreativeSubmissions', rec.meta.deliverableId);
           if (!d || d.taskId !== task.taskId) throw AppError_('NOT_FOUND', 'That deliverable doesn’t belong to this task.');
         }
-        folder = ensureFolder_('submissions', [String(new Date().getFullYear()), task.taskId]);
+        folderId = ensureFolderId_('submissions', [String(new Date().getFullYear()), task.taskId]);
       }
     }
 
-    rec.folderId = folder.getId();
-    rec.sessionUri = startResumable_(rec.folderId, rec.file.name, rec.file.mime, rec.file.size);
+    rec.folderId = folderId;
+    var origin = /^https:\/\/[a-z0-9.-]+\.(googleusercontent|google)\.com$/i.test(String(ctx.origin || '')) ? String(ctx.origin) : '';
+    rec.sessionUri = startResumable_(rec.folderId, rec.file.name, rec.file.mime, rec.file.size, origin);
     var uploadId = randomToken_();
     saveUpload_(uploadId, rec);
-    return { uploadId: uploadId, chunkBytes: LIMITS.CHUNK_BYTES };
+    return { uploadId: uploadId, chunkBytes: LIMITS.CHUNK_BYTES, direct: origin ? rec.sessionUri : '' };
+  });
+}
+
+/** Loads an upload and checks it belongs to the caller. Returns {rec, user}. */
+function ownUpload_(uploadId) {
+  var rec = loadUpload_(uploadId);
+  var user = null;
+  if (rec.owner.indexOf('ticket:') !== 0) {
+    user = currentUser_();
+    if (user.email !== rec.owner) throw AppError_('UPLOAD_EXPIRED', 'Upload session not found.');
+  }
+  return { rec: rec, user: user };
+}
+
+function signatureOk_(ext, bytes) {
+  if (!SIGNATURES[ext]) return true;
+  return SIGNATURES[ext].some(function (sig) {
+    return sig.every(function (b, i) { return ((bytes[i] + 256) % 256) === b; });
   });
 }
 
 /**
- * Upload one chunk. Chunks must arrive in order. The response for the last
- * chunk includes the created record (attachment or version).
+ * Upload one chunk (fallback path). Chunks must arrive in order. The response
+ * for the last chunk includes the created record (attachment or version).
  */
 function api_uploadChunk(uploadId, offset, base64) {
   return respond_(function () {
-    var rec = loadUpload_(uploadId);
-    var user = null;
-    if (rec.owner.indexOf('ticket:') !== 0) {
-      user = currentUser_();
-      if (user.email !== rec.owner) throw AppError_('UPLOAD_EXPIRED', 'Upload session not found.');
-    }
+    var o = ownUpload_(uploadId), rec = o.rec, user = o.user;
     offset = Number(offset);
     if (offset !== rec.received) throw AppError_('UPLOAD_ORDER', 'Upload got out of sync. Please retry the file.');
     var bytes = Utilities.base64Decode(String(base64 || ''));
@@ -127,11 +152,9 @@ function api_uploadChunk(uploadId, offset, base64) {
     var isLast = offset + bytes.length === rec.file.size;
     if (!isLast && bytes.length % (256 * 1024) !== 0) throw AppError_('VALIDATION', 'Invalid chunk size.');
 
-    if (offset === 0 && SIGNATURES[rec.file.ext]) {
-      var ok = SIGNATURES[rec.file.ext].some(function (sig) {
-        return sig.every(function (b, i) { return ((bytes[i] + 256) % 256) === b; });
-      });
-      if (!ok) throw AppError_('VALIDATION', '"' + rec.file.name + '" doesn’t look like a real .' + rec.file.ext + ' file.');
+    if (offset === 0) {
+      if (!signatureOk_(rec.file.ext, bytes)) throw AppError_('VALIDATION', '"' + rec.file.name + '" doesn’t look like a real .' + rec.file.ext + ' file.');
+      rec.sigChecked = true;
     }
 
     var res = putChunk_(rec.sessionUri, bytes, offset, rec.file.size);
@@ -140,25 +163,53 @@ function api_uploadChunk(uploadId, offset, base64) {
       saveUpload_(uploadId, rec);
       return { done: false, received: rec.received };
     }
-
-    uploadCache_().remove('upl_' + sha256_(uploadId));
-    var file = res.file;
-    if (Number(file.size) !== rec.file.size) {
-      console.warn('Size mismatch on upload ' + file.id + ': ' + file.size + ' vs ' + rec.file.size);
-    }
-    if (rec.kind === 'reference' || rec.kind === 'taskref') {
-      return withLock_(function () {
-        var att = dbInsert_('ReferenceFiles', {
-          attachmentId: 'ATT-' + uuid_(), requirementId: rec.requirementId || (dbGet_('Tasks', rec.taskId) || {}).requirementId || '',
-          taskId: rec.kind === 'taskref' ? rec.taskId : '', fileId: file.id, fileName: rec.file.name,
-          mimeType: rec.file.mime, sizeBytes: String(rec.file.size), uploadedBy: user ? user.email : 'requester', uploadedAt: nowIso_()
-        });
-        if (rec.kind === 'taskref') logActivity_(rec.taskId, user, 'reference_added', '', rec.file.name, '', 'team');
-        return { done: true, attachmentId: att.attachmentId, fileName: att.fileName };
-      });
-    }
-    return Object.assign({ done: true }, createVersion_(user, rec, file));
+    return completeUpload_(uploadId, rec, user, res.file);
   });
+}
+
+/**
+ * Where an upload stands after a direct send. If Drive has the whole file it
+ * is checked and recorded ({done:true,...}); otherwise returns
+ * {done:false, received:n} so the browser can send the rest in chunks.
+ */
+function api_finishUpload(uploadId) {
+  return respond_(function () {
+    var o = ownUpload_(uploadId), rec = o.rec, user = o.user;
+    var st = sessionStatus_(rec.sessionUri, rec.file.size);
+    if (!st.done) {
+      rec.received = st.received;
+      saveUpload_(uploadId, rec);
+      return { done: false, received: st.received };
+    }
+    return completeUpload_(uploadId, rec, user, st.file);
+  });
+}
+
+/** Verifies a finished Drive file and records it. */
+function completeUpload_(uploadId, rec, user, file) {
+  uploadCache_().remove('upl_' + sha256_(uploadId));
+  var bad = '';
+  if (Number(file.size) !== rec.file.size) bad = '"' + rec.file.name + '" didn’t arrive complete. Please try again.';
+  else if (!rec.sigChecked && SIGNATURES[rec.file.ext]) {
+    var head = headBytes_(file.id, 8);
+    if (!head || !signatureOk_(rec.file.ext, head)) bad = '"' + rec.file.name + '" doesn’t look like a real .' + rec.file.ext + ' file.';
+  }
+  if (bad) {
+    try { DriveApp.getFileById(file.id).setTrashed(true); } catch (e) { console.warn('Could not remove rejected upload ' + file.id); }
+    throw AppError_('VALIDATION', bad);
+  }
+  if (rec.kind === 'reference' || rec.kind === 'taskref') {
+    return withLock_(function () {
+      var att = dbInsert_('ReferenceFiles', {
+        attachmentId: 'ATT-' + uuid_(), requirementId: rec.requirementId || (dbGet_('Tasks', rec.taskId) || {}).requirementId || '',
+        taskId: rec.kind === 'taskref' ? rec.taskId : '', fileId: file.id, fileName: rec.file.name,
+        mimeType: rec.file.mime, sizeBytes: String(rec.file.size), uploadedBy: user ? user.email : 'requester', uploadedAt: nowIso_()
+      });
+      if (rec.kind === 'taskref') logActivity_(rec.taskId, user, 'reference_added', '', rec.file.name, '', 'team');
+      return { done: true, attachmentId: att.attachmentId, fileName: att.fileName };
+    });
+  }
+  return Object.assign({ done: true }, createVersion_(user, rec, file));
 }
 
 /** Creates a Draft version for an uploaded creative. */

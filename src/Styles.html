@@ -219,4 +219,25 @@ dl.kv dd { margin: 0; word-break: break-word; }
   .modal { border-radius: 0; min-height: 100%; }
   .bar-row { grid-template-columns: 100px 1fr 34px; }
 }
+.reward-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); text-decoration: none; }
+.reward-pill svg { width: 15px; height: 15px; }
+.reward-list { list-style: none; margin: 0; padding: 0; }
+.reward-list li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.reward-list li:first-child { border-top: 0; padding-top: 0; }
+.reward-badge { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.reward-badge svg { width: 18px; height: 18px; }
+.pts { color: var(--ok); font-weight: 700; font-size: 13px; }
+.lboard { list-style: none; margin: 0; padding: 0; }
+.lboard li { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; }
+.lboard li.me { background: var(--accent-soft); }
+.lboard .rank { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--text-2); }
+.lboard li:first-child .rank { background: var(--accent); color: #fff; }
+.lboard svg { width: 15px; height: 15px; color: var(--accent); vertical-align: -2px; }
+.badge-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.badge-pick input { position: absolute; opacity: 0; }
+.badge-pick span { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-size: 13px; }
+.badge-pick span svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
+.badge-pick small { margin-left: auto; color: var(--text-3); }
+.badge-pick input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
+.badge-pick input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 </style>

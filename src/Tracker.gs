@@ -78,6 +78,12 @@ function api_getMyRequests(token) {
         var v = dbGet_('CreativeVersions', d.latestVersionId);
         if (v && v.status === VSTATUS.AWAITING) awaiting.push({ versionId: v.versionId, title: d.title, version: 'V' + v.versionNo });
       });
+      var creatives = [];
+      dels.forEach(function (d) {
+        var v = requesterVersion_(d);
+        if (v) creatives.push({ versionId: v.versionId, title: d.title, version: 'V' + v.versionNo, state: creativeState_(d, v),
+          ext: extOf_(v.fileName), isImage: INLINE_IMAGE_TYPES.indexOf(v.mimeType) !== -1, canDownload: v.status === VSTATUS.APPROVED });
+      });
       var links = [];
       tasks.forEach(function (t) { if (t.finalLink && t.status !== STATUS.CANCELLED) links.push(t.finalLink); });
       return {
@@ -88,11 +94,72 @@ function api_getMyRequests(token) {
         approved: dels.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length,
         required: required || Number(r.quantity) || 0,
         awaiting: awaiting,
+        creatives: creatives,
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
     });
     var email = keys.filter(function (k) { return k.indexOf('req:') !== 0; })[0] || '';
     return { email: email, requests: out };
+  });
+}
+
+/**
+ * The version a requester may see for a creative: the approved one, else the
+ * one waiting for their review, else the last one they asked changes on.
+ * Unsubmitted drafts are never shown.
+ */
+function requesterVersion_(d) {
+  if (d.approvedVersionId) { var a = dbGet_('CreativeVersions', d.approvedVersionId); if (a && a.status === VSTATUS.APPROVED) return a; }
+  var vs = dbFind_('CreativeVersions', function (v) {
+    return v.deliverableId === d.deliverableId && (v.status === VSTATUS.AWAITING || v.status === VSTATUS.CHANGES || v.status === VSTATUS.APPROVED);
+  }).sort(function (x, y) { return Number(y.versionNo) - Number(x.versionNo); });
+  return vs[0] || null;
+}
+
+function creativeState_(d, v) {
+  if (v.status === VSTATUS.APPROVED) return 'Approved';
+  if (v.status === VSTATUS.AWAITING) return 'Waiting for your review';
+  return 'Being revised';
+}
+
+/** A version the requester may see, from one of their own requests. */
+function trackVersion_(keys, versionId) {
+  var v = dbGet_('CreativeVersions', str_(versionId, 60, 'Creative', true));
+  var d = v && dbGet_('CreativeSubmissions', v.deliverableId);
+  var t = v && dbGet_('Tasks', v.taskId);
+  var r = t && dbGet_('Requirements', t.requirementId);
+  if (!r || !d || !ownsRequirement_(keys, r) || t.status === STATUS.CANCELLED) throw AppError_('NOT_FOUND', 'Creative not found.');
+  var shown = requesterVersion_(d);
+  if (!shown || shown.versionId !== v.versionId) throw AppError_('NOT_FOUND', 'Creative not found.');
+  return { v: v, d: d };
+}
+
+/** Small previews for the requester's creatives. Returns { versionId: dataUrl|null }. */
+function api_trackThumbs(token, versionIds) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackthumb:' + keys.join(',').slice(0, 120), 120, 600);
+    var out = {};
+    (Array.isArray(versionIds) ? versionIds : []).slice(0, 24).forEach(function (id) {
+      try { var x = trackVersion_(keys, id); out[id] = smallThumb_({ fileId: x.v.fileId, mime: x.v.mimeType, size: x.v.sizeBytes }); }
+      catch (e) { out[id] = null; }
+    });
+    return out;
+  });
+}
+
+/** Large preview ('preview') or the full file ('original', approved creatives only). */
+function api_trackFile(token, versionId, mode) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackfile:' + keys.join(',').slice(0, 120), 60, 600);
+    var x = trackVersion_(keys, versionId);
+    if (mode === 'original') {
+      if (x.v.status !== VSTATUS.APPROVED) throw AppError_('FORBIDDEN', 'You can download a creative once it’s approved.');
+      var name = (x.d.title || 'creative').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '_V' + x.v.versionNo + '.' + (extOf_(x.v.fileName) || 'bin');
+      return originalOf_(x.v.fileId, name);
+    }
+    return previewOf_(x.v.fileId, x.v.mimeType, x.v.sizeBytes, 1600);
   });
 }
 

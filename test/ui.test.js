@@ -149,6 +149,61 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('17-board-view');
     });
 
+    await step('Requester sees the creative in My requests; leader rewards, then deletes the task', async () => {
+      await page.goto(BASE + '/page');
+      await page.waitForSelector('#f');
+      await page.click('[data-tab="my"]');
+      await page.waitForSelector('.cr .ph');
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.cr .ph')).backgroundImage.startsWith('url('));
+      assert.ok((await page.textContent('.cr')).includes('Being revised'));
+      await shot('19-my-requests-creatives');
+      await page.click('.cr .ph');
+      await page.waitForSelector('.lightbox img');
+      await shot('20-my-requests-view');
+      await page.click('.lightbox [data-close]');
+
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="tasks"]');
+      await page.waitForSelector('[data-go^="task/"]');
+      await page.click('[data-go^="task/"]');
+      await page.waitForSelector('#aReward');
+      await page.click('#aReward');
+      await page.waitForSelector('.badge-pick');
+      await page.click('.badge-pick label:nth-child(2)');
+      assert.strictEqual(await page.inputValue('#rw_p'), '30');
+      await page.fill('#rw_r', 'Quick turnaround on the Diwali banner');
+      await shot('21-give-reward');
+      await page.click('.modal-f >> text=Give reward');
+      await page.waitForSelector('text=gave a reward');
+      await page.click('[data-r="rewards"]');
+      await page.waitForSelector('.lboard');
+      await shot('22-rewards-leader');
+
+      await page.goto(BASE + '/page?as=' + A);
+      await page.waitForSelector('.reward-pill');
+      assert.ok((await page.textContent('.reward-pill')).includes('30'));
+      await page.click('[data-r="rewards"]');
+      await page.waitForSelector('.reward-list');
+      await shot('23-rewards-designer');
+
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="tasks"]');
+      await page.waitForSelector('[data-go^="task/"]');
+      await page.click('[data-go^="task/"]');
+      await page.waitForSelector('#aDelete');
+      await page.click('#aDelete');
+      await page.waitForSelector('text=Delete task');
+      await shot('24-delete-confirm');
+      await page.click('.modal-f >> text=Delete task');
+      await page.waitForSelector('text=Task deleted');
+      await page.goto(BASE + '/page');
+      await page.waitForSelector('#f');
+      await page.click('[data-tab="my"]');
+      await page.waitForSelector('text=No requests yet');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

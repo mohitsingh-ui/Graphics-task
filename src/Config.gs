@@ -36,11 +36,12 @@ var SCHEMA = {
     'reviewerName', 'reviewerEmail', 'channel', 'decidedBy', 'decidedAt'],
   Notifications: ['notificationId', 'recipientEmail', 'type', 'title', 'body', 'route', 'createdAt', 'readAt'],
   Settings: ['key', 'value', 'updatedAt'],
-  RequesterLinks: ['linkId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'lastUsedAt']
+  RequesterLinks: ['linkId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'lastUsedAt'],
+  Rewards: ['rewardId', 'userEmail', 'badge', 'points', 'reason', 'taskId', 'givenBy', 'givenAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 3;
+var SCHEMA_VERSION = 4;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 

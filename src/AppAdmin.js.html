@@ -136,6 +136,72 @@ function userModal(u, domain) {
   });
 }
 
+/* ================= REWARDS ================= */
+VIEWS.rewards = function (arg, el, token) {
+  var leader = APP.role === 'leader';
+  setCrumb(leader ? 'Rewards' : 'My rewards');
+  api('api_listRewards').then(function (d) {
+    if (stale(token)) return;
+    APP.badges = d.badges;
+    var top = d.leaderboard.filter(function (x) { return x.total > 0; })[0];
+    el.innerHTML = '<div class="page-h"><div><h1>' + (leader ? 'Rewards' : 'My rewards') + '</h1><p>' +
+      (leader ? 'Recognise great work. Designers get a notification and see it on their dashboard.' : 'Badges and points from your team leader.') + '</p></div>' +
+      (leader ? '<button class="btn primary" id="giveR">' + icon('award') + ' Give a reward</button>' : '') + '</div>' +
+      (leader ? '' : '<div class="kpis">' + kpiCard('My points', d.me.total, null, { color: 'var(--accent)' }) + kpiCard('This month', d.me.month, null, { color: 'var(--ok)' }) +
+        kpiCard('Rewards received', d.me.count, null, { color: 'var(--info)' }) + '</div>') +
+      '<div class="detail" style="margin-top:14px"><div class="stack">' +
+      '<div class="card"><div class="card-h"><h3>' + (leader ? 'All rewards' : 'History') + '</h3></div><div class="card-b">' +
+      (d.items.length ? '<ul class="reward-list">' + d.items.map(function (r) {
+        return '<li><span class="reward-badge">' + icon('award') + '</span><div class="grow"><div><b>' + h(r.badgeLabel) + '</b> <span class="pts">+' + r.points + '</span>' +
+          (leader ? ' · ' + h(r.userName) : '') + '</div>' + (r.reason ? '<div class="small muted">“' + h(r.reason) + '”</div>' : '') +
+          '<div class="faint small">' + h(r.givenBy) + ' · ' + fmtDate(r.givenAt) + (r.taskId ? ' · <a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a>' : '') + '</div></div>' +
+          (leader ? '<button class="btn ghost sm" data-delr="' + h(r.rewardId) + '" aria-label="Remove reward">' + icon('trash') + '</button>' : '') + '</li>';
+      }).join('') + '</ul>' : emptyState(leader ? 'No rewards given yet.' : 'No rewards yet.', leader ? 'Use “Give a reward” to recognise great work.' : 'Keep up the great work!', 'award')) +
+      '</div></div></div><div class="stack"><div class="card"><div class="card-h"><h3>Leaderboard</h3></div><div class="card-b">' +
+      (d.leaderboard.length ? '<ol class="lboard">' + d.leaderboard.map(function (x, i) {
+        return '<li' + (x.email === APP.boot.user.email ? ' class="me"' : '') + '><span class="rank">' + (i + 1) + '</span><span class="grow">' + h(x.name) +
+          (top && x.email === top.email ? ' ' + icon('award') : '') + '</span><b>' + x.total + '</b><span class="faint small">pts</span></li>';
+      }).join('') + '</ol>' : emptyState('No designers yet.')) + '</div></div></div></div>';
+    wireGo(el);
+    if ($('#giveR')) $('#giveR').onclick = function () { rewardModal(null, function () { render('rewards'); }); };
+    $all('[data-delr]', el).forEach(function (b) {
+      b.onclick = function () {
+        confirmBox('Remove this reward?', 'The points are taken off the leaderboard.', 'Remove', true).then(function (y) {
+          if (y) api('api_deleteReward', b.getAttribute('data-delr')).then(function () { toast('Reward removed'); render('rewards'); }).catch(function (e) { toast(errMsg(e), true); });
+        });
+      };
+    });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+/** Leader: give a reward. preset: {userEmail, taskId}. */
+function rewardModal(preset, after) {
+  preset = preset || {};
+  var badgesP = APP.badges ? Promise.resolve(APP.badges) : api('api_listRewards').then(function (d) { APP.badges = d.badges; return d.badges; });
+  Promise.all([badgesP, api('api_listTeam')]).then(function (res) {
+    var badges = res[0], people = res[1].users.filter(function (u) { return u.active && u.email !== APP.boot.user.email; });
+    if (!people.length) return toast('Add a designer in Team Management first.', true);
+    var m = modal({
+      title: 'Give a reward',
+      body: '<div class="field"><label class="req" for="rw_u">Who</label><select id="rw_u">' + people.map(function (u) {
+          return '<option value="' + h(u.email) + '"' + (u.email === preset.userEmail ? ' selected' : '') + '>' + h(u.name) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field"><label class="req">Reward</label><div class="badge-pick">' + badges.map(function (b, i) {
+          return '<label><input type="radio" name="rw_b" value="' + h(b.id) + '" data-pts="' + b.points + '"' + (i === 0 ? ' checked' : '') + '><span>' + icon('award') + h(b.label) + '<small>+' + b.points + '</small></span></label>'; }).join('') + '</div></div>' +
+        '<div class="row" style="gap:12px"><div class="field" style="width:120px"><label for="rw_p">Points</label><input type="number" id="rw_p" min="1" max="1000" value="' + badges[0].points + '"></div>' +
+        '<div class="field grow"><label for="rw_r">Message (optional)</label><input type="text" id="rw_r" maxlength="300" placeholder="e.g. Loved the Diwali banner — great colours!"></div></div>' +
+        (preset.taskId ? '<p class="faint small">For task ' + h(preset.taskId) + '</p>' : '') +
+        '<div class="alert bad hidden" data-form-error></div>',
+      actions: [{ label: 'Cancel' }, { label: 'Give reward', cls: 'primary', onClick: function (close, el) {
+        var b = $('input[name=rw_b]:checked', el);
+        return api('api_giveReward', { userEmail: $('#rw_u', el).value, badge: b.value, points: $('#rw_p', el).value, reason: $('#rw_r', el).value, taskId: preset.taskId || '' })
+          .then(function (r) { close(); toast('Reward sent to ' + r.userName); if (after) after(); }).catch(function (e) { fieldErrors(el, errMsg(e)); });
+      } }]
+    });
+    var root = m && m.el ? m.el : document;
+    $all('input[name=rw_b]', root).forEach(function (r) { r.onchange = function () { $('#rw_p', root).value = r.getAttribute('data-pts'); }; });
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+
 /* ================= SETTINGS ================= */
 VIEWS.settings = function (arg, el, token) {
   setCrumb('Settings');

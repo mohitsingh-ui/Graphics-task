@@ -583,6 +583,169 @@ scenario('My requests: private tracking link shows only your own requests and st
   assert.ok(env.ctx.doGet({ parameter: { p: 'my', t: s1.trackToken } }).html.includes('"tab":"my"'));
 });
 
+scenario('Fast uploads: browser sends straight to Drive, server verifies; falls back to chunks', () => {
+  const ORIGIN = 'https://n-abc123-0lu-script.googleusercontent.com';
+  // The browser's direct PUT to the Drive session URL (no OAuth token involved).
+  function browserPut(sessionUri, buf) {
+    const s = state.sessions[sessionUri.split('/').pop()];
+    s.chunks.push(Buffer.from(buf)); s.received += buf.length;
+    if (s.received === s.total) {
+      const id = 'fi_direct_' + Object.keys(state.files).length;
+      state.files[id] = { id, name: s.meta.name, mime: s.mime, bytes: Buffer.concat(s.chunks), parent: s.meta.parents[0] };
+      s.fileId = id;
+    }
+  }
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Fast', department: 'Sales', brief: 'Upload speed test', preferredDate: future(3), quantity: 5 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+  const base = { kind: 'version', taskId: tid, purpose: 'p' };
+
+  // 1. whole file direct → finish records the version
+  const bytes = png(6 * 1024 * 1024 + 7);
+  const st = ok(call(A, 'api_startUpload', Object.assign({ title: 'Direct one', fileName: 'direct.png', size: bytes.length, origin: ORIGIN }, base)));
+  assert.ok(st.direct.startsWith('https://upload.mock/session/'), 'session URL handed to the browser');
+  assert.strictEqual(state.sessions[st.direct.split('/').pop()].origin, ORIGIN, 'session opened for the page origin (CORS)');
+  const fetchesBefore = state.stats.fetches;
+  browserPut(st.direct, bytes);
+  const done = ok(call(A, 'api_finishUpload', st.uploadId));
+  assert.ok(done.done && done.versionId, 'version created');
+  assert.ok(state.stats.fetches - fetchesBefore <= 3, 'no bytes went through the server');
+  const f = Object.values(state.files).find(x => x.name.includes('_direct.png'));
+  assert.ok(f && Buffer.compare(f.bytes, bytes) === 0, 'bytes intact');
+  err(call(A, 'api_finishUpload', st.uploadId), 'UPLOAD_EXPIRED'); // finished once only
+
+  // 2. a fake file sent direct is caught at finish and removed
+  const fake = Buffer.from('not really a png at all');
+  const st2 = ok(call(A, 'api_startUpload', Object.assign({ title: 'Fake', fileName: 'fake2.png', size: fake.length, origin: ORIGIN }, base)));
+  browserPut(st2.direct, fake);
+  err(call(A, 'api_finishUpload', st2.uploadId), 'VALIDATION');
+  assert.ok(Object.values(state.files).find(x => x.name === 'fake2.png').trashed, 'rejected file removed from Drive');
+
+  // 3. direct send stops part-way → finish says where, browser continues through the server
+  const big = png(5 * 1024 * 1024 + 99);
+  const st3 = ok(call(A, 'api_startUpload', Object.assign({ title: 'Half', fileName: 'half.png', size: big.length, origin: ORIGIN }, base)));
+  browserPut(st3.direct, big.subarray(0, 1024 * 1024));
+  const mid = ok(call(A, 'api_finishUpload', st3.uploadId));
+  assert.deepStrictEqual(mid, { done: false, received: 1024 * 1024 });
+  let off = mid.received, res;
+  while (off < big.length) {
+    const piece = big.subarray(off, Math.min(off + st3.chunkBytes, big.length));
+    res = ok(call(A, 'api_uploadChunk', st3.uploadId, off, piece.toString('base64')));
+    off += piece.length;
+  }
+  assert.ok(res.done && res.versionId);
+  assert.ok(Buffer.compare(Object.values(state.files).find(x => x.name.includes('_half.png')).bytes, big) === 0);
+
+  // 4. direct send blocked entirely → finish says 0, full chunked upload works
+  const st4 = ok(call(A, 'api_startUpload', Object.assign({ title: 'Blocked', fileName: 'blocked.png', size: 2000, origin: ORIGIN }, base)));
+  assert.deepStrictEqual(ok(call(A, 'api_finishUpload', st4.uploadId)), { done: false, received: 0 });
+  assert.ok(ok(call(A, 'api_uploadChunk', st4.uploadId, 0, png(2000).toString('base64'))).done);
+
+  // 5. unknown origins never get a session URL; another user can't finish your upload
+  assert.strictEqual(ok(call(A, 'api_startUpload', Object.assign({ title: 'x', fileName: 'x.png', size: 10, origin: 'https://evil.example.com' }, base))).direct, '');
+  const st5 = ok(call(A, 'api_startUpload', Object.assign({ title: 'y', fileName: 'y.png', size: 10, origin: ORIGIN }, base)));
+  err(call(B, 'api_finishUpload', st5.uploadId), 'UPLOAD_EXPIRED');
+});
+
+scenario('Requester sees creatives in My requests: view any time, download approved ones', () => {
+  state.currentUser = '';
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Gallery', department: 'Sales', brief: 'Two posts', preferredDate: future(3), quantity: 2 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+  const img1 = png(3000), img2 = png(2000);
+  const v1 = upload(A, { kind: 'version', taskId: tid, title: 'Post one' }, 'one.png', img1);
+  const v2 = upload(A, { kind: 'version', taskId: tid, title: 'Post two' }, 'two.png', img2);
+  let mine = ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0];
+  assert.deepStrictEqual(mine.creatives, [], 'unsubmitted drafts are not shown');
+  ok(call(A, 'api_submitForApproval', tid, [v1.versionId, v2.versionId]));
+  ok(call(LEADER, 'api_leaderDecision', v1.versionId, 'approved', ''));
+  mine = ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0];
+  const byTitle = Object.fromEntries(mine.creatives.map(c => [c.title, c]));
+  assert.strictEqual(byTitle['Post one'].state, 'Approved');
+  assert.strictEqual(byTitle['Post one'].canDownload, true);
+  assert.strictEqual(byTitle['Post two'].state, 'Waiting for your review');
+  assert.strictEqual(byTitle['Post two'].canDownload, false);
+  const th = ok(call('', 'api_trackThumbs', [sub.trackToken], [v1.versionId, v2.versionId]));
+  assert.ok(th[v1.versionId] && th[v2.versionId]);
+  const orig = ok(call('', 'api_trackFile', [sub.trackToken], v1.versionId, 'original'));
+  assert.ok(Buffer.compare(Buffer.from(orig.base64, 'base64'), img1) === 0 && /^Post_one_V1\.png$/.test(orig.fileName));
+  assert.ok(ok(call('', 'api_trackFile', [sub.trackToken], v2.versionId, 'preview')).dataUrl);
+  err(call('', 'api_trackFile', [sub.trackToken], v2.versionId, 'original'), 'FORBIDDEN');
+  // someone else's link can't see it
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'Other', department: 'Sales', brief: 'x', preferredDate: future(3) }));
+  err(call('', 'api_trackFile', [other.trackToken], v1.versionId, 'preview'), 'NOT_FOUND');
+  assert.strictEqual(ok(call('', 'api_trackThumbs', [other.trackToken], [v1.versionId]))[v1.versionId], null);
+  // still there after the task is completed
+  ok(call(LEADER, 'api_leaderDecision', v2.versionId, 'approved', ''));
+  mine = ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0];
+  assert.strictEqual(mine.status, 'Completed');
+  assert.ok(mine.creatives.every(c => c.state === 'Approved' && c.canDownload));
+  ok(call('', 'api_trackFile', [sub.trackToken], v2.versionId, 'original'));
+  global.__galleryTask = { tid, sub, v1 };
+});
+
+scenario('Team leader can approve their own work', () => {
+  const sub = ok(call(LEADER, 'api_submitRequirement', { requesterName: 'Lead', department: 'Sales', brief: 'Own job', preferredDate: future(2) }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: LEADER, dueDate: future(2), priority: 'High' }));
+  const v = upload(LEADER, { kind: 'version', taskId: tid, title: 'My own banner' }, 'own.png', png(1500));
+  ok(call(LEADER, 'api_submitForApproval', tid, [v.versionId]));
+  ok(call(LEADER, 'api_leaderDecision', v.versionId, 'approved', ''));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tid)).deliverables[0].status, 'Approved');
+});
+
+scenario('Rewards: leader gives badges and points; designers see their own; leaderboard', () => {
+  err(call(A, 'api_giveReward', { userEmail: B, badge: 'star' }), 'FORBIDDEN');
+  err(call(LEADER, 'api_giveReward', { userEmail: LEADER, badge: 'star' }), 'VALIDATION');
+  err(call(LEADER, 'api_giveReward', { userEmail: A, badge: 'nope' }), 'VALIDATION');
+  const before = state.mail.length;
+  const r1 = ok(call(LEADER, 'api_giveReward', { userEmail: A, badge: 'star', reason: 'Lovely Diwali banner', taskId: global.__galleryTask.tid }));
+  assert.strictEqual(r1.points, 50);
+  ok(call(LEADER, 'api_giveReward', { userEmail: A, badge: 'speed', points: 15 }));
+  ok(call(LEADER, 'api_giveReward', { userEmail: B, badge: 'team' }));
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(n => /reward/i.test(n.title) && n.route === 'rewards'));
+  assert.ok(state.mail.length > before, 'emailed');
+  const a = ok(call(A, 'api_listRewards'));
+  assert.strictEqual(a.me.total, 65);
+  assert.ok(a.items.every(x => x.userEmail === A), 'designer sees only own rewards');
+  assert.strictEqual(a.leaderboard[0].email, A);
+  assert.strictEqual(ok(call(A, 'api_designerDashboard')).stats.points, 65);
+  const l = ok(call(LEADER, 'api_listRewards'));
+  assert.strictEqual(l.items.length, 3);
+  assert.ok(ok(call(LEADER, 'api_getTask', global.__galleryTask.tid)).activity.some(x => x.action === 'reward'));
+  err(call(A, 'api_deleteReward', r1.rewardId), 'FORBIDDEN');
+  ok(call(LEADER, 'api_deleteReward', r1.rewardId));
+  assert.strictEqual(ok(call(A, 'api_listRewards')).me.total, 15);
+});
+
+scenario('Leader deletes a task: gone everywhere, files to Drive trash', () => {
+  const { tid, sub, v1 } = global.__galleryTask;
+  err(call(A, 'api_deleteTask', tid), 'FORBIDDEN');
+  const fileId = Object.values(state.files).find(f => f.name.includes('_V1_one.png')).id;
+  const r = ok(call(LEADER, 'api_deleteTask', tid));
+  assert.strictEqual(r.requirementDeleted, sub.requirementId);
+  err(call(LEADER, 'api_getTask', tid), 'NOT_FOUND');
+  err(call(A, 'api_getTask', tid), 'NOT_FOUND');
+  assert.ok(!ok(call(LEADER, 'api_listTasks', {})).some(x => x.taskId === tid));
+  assert.ok(!ok(call(LEADER, 'api_listApprovals', 'all')).some(x => x.taskId === tid));
+  assert.ok(state.files[fileId].trashed, 'file in Drive trash');
+  assert.deepStrictEqual(ok(call('', 'api_getMyRequests', [sub.trackToken])).requests, []);
+  err(call('', 'api_trackFile', [sub.trackToken], v1.versionId, 'preview'));
+  ok(call(LEADER, 'api_leaderDashboard'));
+  ok(call(A, 'api_designerDashboard'));
+  ok(call(LEADER, 'api_getReports', {}));
+  // Divided requirement: deleting one part keeps the request and the other part
+  const s2 = ok(call('', 'api_submitRequirement', { requesterName: 'Split', department: 'Sales', brief: 'Four', preferredDate: future(3), quantity: 4 }));
+  const t2 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s2.requirementId).taskId;
+  ok(call(LEADER, 'api_divideTask', t2, { parts: [{ assigneeEmail: A, count: 2 }, { assigneeEmail: B, count: 2 }], dueDate: future(3), priority: 'Medium' }));
+  const parts = ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === s2.requirementId);
+  assert.strictEqual(parts.length, 2);
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', parts[0].taskId)).siblings, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_deleteTask', parts[0].taskId)).requirementDeleted, '');
+  assert.strictEqual(ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === s2.requirementId).length, 1);
+  assert.strictEqual(ok(call('', 'api_getMyRequests', [s2.trackToken])).requests.length, 1);
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

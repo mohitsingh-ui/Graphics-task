@@ -28,7 +28,6 @@ function api_submitRequirement(payload) {
     payload = payload || {};
     var s = settings_();
 
-    // Bots fill the hidden "website" field; humans never see it.
     // Spam guard: a hidden field only bots fill. It is named so browser autofill ignores it
     // (an earlier "website" field was being filled by Chrome autofill and blocked real people).
     if (payload.gfx_trap_9) throw AppError_('VALIDATION', 'Something went wrong sending this. Please reload the page and try again.');
@@ -99,7 +98,7 @@ function api_submitRequirement(payload) {
     var result = withLock_(function () {
       var reqId = nextSeqId_('REQ');
       var taskId = nextSeqId_('GFX');
-      var folder = ensureFolder_('references', [String(new Date().getFullYear()), reqId]);
+      var folder = DriveApp.getFolderById(ensureFolderId_('references', [String(new Date().getFullYear())])).createFolder(reqId);
       var now = nowIso_();
       dbInsert_('Requirements', Object.assign({}, r, {
         requirementId: reqId, referenceUrls: r.referenceUrls.join('\n'), typeFields: JSON.stringify(tf),
