@@ -180,6 +180,36 @@ function api_trackReview(token, versionId) {
   });
 }
 
+/** Requester approves several of their own creatives at once from "My requests". */
+function api_trackApproveMany(token, versionIds) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackapprove:' + keys.join(',').slice(0, 120), 20, 600);
+    var ids = (Array.isArray(versionIds) ? versionIds : []).map(String).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+    if (!ids.length) throw AppError_('VALIDATION', 'Nothing to approve.');
+    if (ids.length > 60) throw AppError_('VALIDATION', 'Approve up to 60 at a time.');
+    return withLock_(function () {
+      var reviewer = { name: '', email: '' };
+      var named = settings_().reviewerIdentity !== 'anonymous';
+      return approveMany_(ids, '', reviewer, 'public', null, function (id) {
+        var v = dbGet_('CreativeVersions', str_(id, 60, 'Creative', true));
+        var t = v && dbGet_('Tasks', v.taskId);
+        var r = t && dbGet_('Requirements', t.requirementId);
+        if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
+        var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
+        if (!rq) throw AppError_('ALREADY_DECIDED', 'No longer waiting for review.');
+        var em = String(r.email || '').toLowerCase();
+        if (em && (em === String(v.uploadedBy).toLowerCase() || em === String(t.assigneeEmail).toLowerCase())) {
+          var me = userByEmail_(em);
+          if (!(me && bool_(me.active) && me.role === ROLES.LEADER)) throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
+        }
+        if (named) { reviewer.name = r.requesterName || ''; reviewer.email = r.email || ''; }
+        return rq;
+      });
+    });
+  });
+}
+
 /** Emails a fresh tracking link. Same answer whether or not the email has requests. */
 function api_sendTrackLink(email) {
   return respond_(function () {

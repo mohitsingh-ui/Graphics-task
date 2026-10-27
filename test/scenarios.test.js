@@ -784,6 +784,65 @@ scenario('10 creatives divided 5 + 5: one request, combined progress, creatives 
   assert.strictEqual(ok(call('', 'api_getMyRequests', [s.trackToken])).requests[0].status, 'Completed');
 });
 
+scenario('Approve many in one go: leader (portal) and requester (My requests)', () => {
+  const mk = (qty) => {
+    const s = ok(call('', 'api_submitRequirement', { requesterName: 'Bulk', department: 'Sales', email: 'bulk@example.org', brief: 'Bulk ' + qty, preferredDate: future(3), quantity: qty }));
+    const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s.requirementId).taskId;
+    ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+    const ids = [];
+    for (let i = 0; i < qty; i++) ids.push(upload(A, { kind: 'version', taskId: tid, title: 'B' + i }, 'b' + i + '.png', png(700)).versionId);
+    ok(call(A, 'api_submitForApproval', tid, ids));
+    return { s, tid, ids };
+  };
+  const x = mk(3), y = mk(2);
+  ok(call(LEADER, 'api_leaderDecision', y.ids[0], 'approved', ''));        // already decided → skipped
+  const notifBefore = ok(call(A, 'api_getNotifications')).items.length;
+  err(call(A, 'api_leaderApproveMany', x.ids, ''), 'FORBIDDEN');
+  err(call(LEADER, 'api_leaderApproveMany', [], ''), 'VALIDATION');
+  const r = ok(call(LEADER, 'api_leaderApproveMany', x.ids.concat(y.ids), 'All good'));
+  assert.strictEqual(r.approved, 4);
+  assert.strictEqual(r.skipped.length, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', x.tid)).task.status, 'Completed');
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', y.tid)).task.status, 'Completed');
+  const notifs = ok(call(A, 'api_getNotifications')).items.slice(0, ok(call(A, 'api_getNotifications')).items.length - notifBefore);
+  assert.strictEqual(notifs.filter(n => /^Approved \d+ creative/.test(n.title)).length, 2, 'one summary per task, not one per creative');
+  assert.ok(!notifs.some(n => /^Approved: /.test(n.title)), 'no per-creative notifications');
+  assert.ok(notifs.some(n => /Approved 3 creatives/.test(n.title)));
+  // requester approves all from My requests
+  const z = mk(3);
+  ok(call(LEADER, 'api_leaderDecision', z.ids[2], 'changes', 'Fix the logo please'));
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'Other', department: 'Sales', brief: 'x', preferredDate: future(3) }));
+  const bad = ok(call('', 'api_trackApproveMany', [other.trackToken], z.ids.slice(0, 2)));
+  assert.strictEqual(bad.approved, 0, 'someone else cannot approve');
+  const mine = ok(call('', 'api_getMyRequests', [z.s.trackToken])).requests.find(q => q.requirementId === z.s.requirementId);
+  assert.strictEqual(mine.awaiting.length, 2);
+  const rr = ok(call('', 'api_trackApproveMany', [z.s.trackToken], mine.awaiting.map(a => a.versionId)));
+  assert.strictEqual(rr.approved, 2);
+  const dec = ok(call(LEADER, 'api_getTask', z.tid)).deliverables.find(d => d.title === 'B0').versions[0].decisions[0];
+  assert.strictEqual(dec.channel, 'public');
+  assert.strictEqual(dec.reviewerName, 'Bulk');
+  assert.strictEqual(ok(call('', 'api_getMyRequests', [z.s.trackToken])).requests.find(q => q.requirementId === z.s.requirementId).status, 'Being revised');
+});
+
+scenario('Approval / changes emails go only to the designer (leaders get a bell notification, no email)', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Mail', department: 'Sales', email: 'mail@example.org', brief: 'Mail test', preferredDate: future(3), quantity: 2 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+  const v1 = upload(A, { kind: 'version', taskId: tid, title: 'M1' }, 'm1.png', png(600)).versionId;
+  const v2 = upload(A, { kind: 'version', taskId: tid, title: 'M2' }, 'm2.png', png(600)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v1, v2]));
+  const reviewMails = (who) => state.mail.filter(m => m.to === who && /^\[[^\]]*\] (Approved|Changes requested|Completed)/.test(m.subject));
+  const leaderBefore = reviewMails(LEADER).length, aBefore = reviewMails(A).length, n0 = ok(call(LEADER, 'api_getNotifications')).items.length;
+  // requester asks for changes via their link, then approves the other one
+  const toks = reviewTokensFromMail('Please review');
+  ok(call('', 'api_submitReview', toks[toks.length - 1], { decision: 'changes', comment: 'Make the text bigger', reviewerName: 'Mail', reviewerEmail: 'mail@example.org' }));
+  ok(call(LEADER, 'api_leaderDecision', v1, 'approved', ''));
+  assert.strictEqual(reviewMails(LEADER).length, leaderBefore, 'no approval/changes emails to the leader');
+  assert.strictEqual(reviewMails(A).length - aBefore, 2, 'designer gets both emails');
+  assert.ok(state.mail.filter(m => m.to === 'mail@example.org' && /^\[[^\]]*\] (Approved|Changes requested)/.test(m.subject)).length === 0, 'requester not emailed about decisions');
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(n => /^Changes requested: M2/.test(n.title)), 'leader still sees it in the bell');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

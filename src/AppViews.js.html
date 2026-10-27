@@ -327,9 +327,12 @@ VIEWS.approvals = function (arg, el, token) {
     el.innerHTML = '<div class="page-h"><div><h1>Creative approvals</h1><p>Creatives sent for review, and the decisions on them.</p></div></div>' +
       '<div class="card"><div class="tabs" style="padding:0 8px"><button data-go="approvals" class="' + (scope === 'open' ? 'on' : '') + '">Waiting for a decision</button>' +
       '<button data-go="approvals/history" class="' + (scope === 'all' ? 'on' : '') + '">History</button></div>' +
+      (scope === 'open' && rows.length > 1 ? '<div class="bulkbar"><label class="check"><input type="checkbox" id="selAll"> Select all</label>' +
+        '<button class="btn sm ok" id="bulkOk" disabled>' + icon('check') + ' Approve selected</button></div>' : '') +
       (rows.length ? rows.map(function (r) {
         var dec = r.decision;
         return '<div class="ver" data-req="' + h(r.requestId) + '">' +
+          (scope === 'open' && rows.length > 1 ? '<input type="checkbox" class="pick" data-pick="' + h(r.versionId) + '" aria-label="Select ' + h(r.deliverableTitle) + '">' : '') +
           '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.fileName) + '">' + ext(r.fileName) + '</div>' +
           '<div class="grow"><div class="row wrap"><b>' + h(r.deliverableTitle) + '</b><span class="badge plain">V' + h(r.versionNo) + '</span>' +
           (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
@@ -346,8 +349,47 @@ VIEWS.approvals = function (arg, el, token) {
     $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved'); }; });
     $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes'); }; });
     $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
+    if ($('#selAll')) {
+      var picks = $all('[data-pick]', el), sync = function () {
+        var n = picks.filter(function (p) { return p.checked; }).length;
+        $('#bulkOk').disabled = !n;
+        $('#bulkOk').innerHTML = icon('check') + ' Approve selected' + (n ? ' (' + n + ')' : '');
+        $('#selAll').checked = n === picks.length; $('#selAll').indeterminate = n > 0 && n < picks.length;
+      };
+      picks.forEach(function (p) { p.onchange = sync; });
+      $('#selAll').onchange = function () { var on = this.checked; picks.forEach(function (p) { p.checked = on; }); sync(); };
+      $('#bulkOk').onclick = function () {
+        bulkApprove(picks.filter(function (p) { return p.checked; }).map(function (p) { return p.getAttribute('data-pick'); }));
+      };
+    }
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
 };
+
+/** Leader: approve several creatives in one go (sent in batches of 25). */
+function bulkApprove(versionIds, after) {
+  var n = versionIds.length;
+  modal({
+    title: 'Approve ' + n + ' creative' + (n > 1 ? 's' : '') + '?',
+    body: '<p class="muted">Each approval is recorded under your name, and open review links for these versions stop working. Designers get one notification per task.</p>' +
+      '<div class="field"><label>Note for the designers (optional)</label><textarea id="bkc" rows="3" maxlength="4000" placeholder="e.g. Great set — all good to go"></textarea></div>' +
+      '<div class="small faint" id="bkp"></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Approve all ' + n, cls: 'ok', onClick: function (close, m) {
+      var c = $('#bkc', m).value.trim(), done = 0, skipped = [], i = 0;
+      function next() {
+        if (i >= versionIds.length) return Promise.resolve();
+        var batch = versionIds.slice(i, i + 25); i += 25;
+        $('#bkp', m).textContent = 'Approving… ' + done + ' of ' + n;
+        return api('api_leaderApproveMany', batch, c).then(function (r) { done += r.approved; skipped = skipped.concat(r.skipped); return next(); });
+      }
+      return next().then(function () {
+        close();
+        toast('Approved ' + done + ' creative' + (done === 1 ? '' : 's') + (skipped.length ? ' · ' + skipped.length + ' skipped (already decided)' : ''));
+        loadNotifications();
+        if (after) after(); else render(APP.route);
+      }).catch(function (e) { fieldErrors(m, errMsg(e) + (done ? ' (' + done + ' were approved)' : '')); });
+    } }]
+  });
+}
 
 /** Lazy-load small previews for [data-thumb] elements; click opens a larger one. */
 var THUMB_MEMO = {};

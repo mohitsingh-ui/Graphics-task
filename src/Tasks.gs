@@ -60,9 +60,10 @@ function setStatus_(task, to, actor, note) {
 function completeTask_(task, actor, note) {
   dbUpdate_('Tasks', task.taskId, { status: STATUS.COMPLETED, completedAt: nowIso_(), progress: '100', updatedAt: nowIso_() });
   logActivity_(task.taskId, actor, 'status', task.status, STATUS.COMPLETED, note || '', 'team');
-  var to = leaderEmails_();
-  if (task.assigneeEmail) to.push(task.assigneeEmail);
-  notify_(to, 'task_completed', 'Completed: ' + task.title, task.taskId + ' is complete. ' + (note || ''), 'task/' + task.taskId);
+  // Email the designer; leaders see it in the portal's bell only.
+  var done = task.assigneeEmail ? [String(task.assigneeEmail).toLowerCase()] : [];
+  notify_(done, 'task_completed', 'Completed: ' + task.title, task.taskId + ' is complete. ' + (note || ''), 'task/' + task.taskId, true);
+  notify_(leaderEmails_().filter(function (e) { return done.indexOf(e) === -1; }), 'task_completed', 'Completed: ' + task.title, task.taskId + ' is complete. ' + (note || ''), 'task/' + task.taskId, false);
   var req = dbGet_('Requirements', task.requirementId);
   if (req) {
     var open = dbFind_('Tasks', function (t) {

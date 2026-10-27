@@ -125,6 +125,17 @@ function renderMy() {
       };
     });
     wireCreatives(el);
+    $all('[data-approveall]', el).forEach(function (b) {
+      b.onclick = function () {
+        var ids = b.getAttribute('data-approveall').split(',');
+        modal({ title: 'Approve all ' + ids.length + ' creatives?', body: '<p class="muted">Only do this if you’ve looked at every one — tap the previews to check them. To ask for changes on any creative, use its own Review button instead.</p><div class="alert bad hidden" data-form-error></div>',
+          actions: [{ label: 'Cancel' }, { label: 'Approve all ' + ids.length, cls: 'ok', onClick: function (close, m) {
+            return api('api_trackApproveMany', TRACKS, ids).then(function (r) {
+              close(); toast('Approved ' + r.approved + ' creative' + (r.approved === 1 ? '' : 's') + (r.skipped.length ? ' · ' + r.skipped.length + ' already decided' : '')); renderMy();
+            }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+          } }] });
+      };
+    });
   }).catch(function (e) {
     if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACKS = []; saveTracks(); return renderAskEmail(errMsg(e)); }
     el.innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
@@ -174,11 +185,13 @@ function reqCard(r) {
   var st = '<span class="badge st-' + slug(r.status) + '">' + h(r.status) + '</span>';
   var progress = r.required ? '<div class="row" style="margin-top:10px"><div class="grow">' + progressBar(r.approved / r.required * 100, r.status === 'Completed') +
     '</div><span class="faint small">' + r.approved + ' of ' + r.required + ' approved</span></div>' : '';
+  var all = r.awaiting.length > 1 ? '<button class="btn ok sm" data-approveall="' + h(r.awaiting.map(function (a) { return a.versionId; }).join(',')) + '">' + icon('check') + ' Approve all ' + r.awaiting.length + '</button>' : '';
   var acts = r.awaiting.map(function (a) {
     return '<button class="btn primary sm" data-review="' + h(a.versionId) + '">' + icon('check') + ' Review ' + h(a.title) + ' ' + h(a.version) + '</button>';
   }).concat(r.finalLinks.map(function (u, i) {
     return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
   })).join('');
+  acts = all + acts;
   var cr = r.creatives || [];
   var gallery = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
     '<div class="gallery">' + cr.map(function (c) {

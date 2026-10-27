@@ -231,6 +231,45 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('28-report-creatives-done');
     });
 
+    await step('Bulk approve: leader selects several on Approvals; requester approves all in My requests', async () => {
+      const crypto = require('crypto');
+      const mk = (qty, name) => {
+        const s = env.call('', 'api_submitRequirement', { requesterName: name, department: 'Sales', brief: name + ' set of ' + qty, preferredDate: future(4), quantity: qty }).data;
+        const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+        env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' });
+        const ids = [];
+        for (let i = 0; i < qty; i++) {
+          const b = crypto.randomBytes(600); b[0] = 0x89; b[1] = 0x50; b[2] = 0x4E; b[3] = 0x47;
+          const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: name + ' post ' + (i + 1), fileName: 'p.png', size: b.length }).data;
+          ids.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+        }
+        env.call(A, 'api_submitForApproval', tid, ids);
+        return s;
+      };
+      mk(3, 'Leader bulk');
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="approvals"]');
+      await page.waitForSelector('#selAll');
+      await page.check('#selAll');
+      assert.ok((await page.textContent('#bulkOk')).includes('(3)'));
+      await shot('29-approvals-select-all');
+      await page.click('#bulkOk');
+      await page.waitForSelector('text=Approve all 3');
+      await page.click('.modal-f >> text=Approve all 3');
+      await page.waitForSelector('text=Approved 3 creatives');
+      await page.waitForSelector('text=Nothing waiting for a decision.');
+
+      const s = mk(2, 'Requester bulk');
+      await page.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await page.waitForSelector('[data-approveall]');
+      await shot('30-requester-approve-all');
+      await page.click('[data-approveall]');
+      await page.click('.modal-f >> text=Approve all 2');
+      await page.waitForSelector('text=Approved 2 creatives');
+      await page.waitForSelector('.req-card >> text=Completed');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

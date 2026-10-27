@@ -94,6 +94,7 @@ function drawTask(el) {
   if ($('#refUpload')) $('#refUpload').onclick = function () { pickFiles(true, function (files) { uploadRefs(files); }); };
   $all('[data-cmp]', el).forEach(function (b) { b.onclick = function () { compareModal(b.getAttribute('data-cmp')); }; });
   $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved', reloadTask); }; });
+  if ($('#approveAll')) $('#approveAll').onclick = function () { bulkApprove(this.getAttribute('data-ids').split(','), reloadTask); };
   $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes', reloadTask); }; });
   $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
   $all('[data-revoke]', el).forEach(function (b) {
@@ -158,7 +159,10 @@ function deliverablesCard(d) {
           '</div></div>';
       }).join('') + '</div>';
   }).join('') : emptyState('No creatives uploaded yet.', p.canUpload ? 'Use “Upload creative” to add your first version.' : '', 'image');
-  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><span class="faint small">' + d.deliverables.length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div><div class="card-b">' + body + '</div></div>';
+  var waiting = [];
+  d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.request && v.request.status === 'Open') waiting.push(v.versionId); }); });
+  var bulk = leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '';
+  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div></div><div class="card-b">' + body + '</div></div>';
 }
 
 function activityTimeline(d) {

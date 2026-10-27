@@ -142,8 +142,15 @@ function api_leaderDecision(versionId, decision, comment) {
   });
 }
 
+/** Who gets the approval / changes email: the designer who made the version and the current assignee (not whoever decided). */
+function designerRecipients_(task, v, actor) {
+  var me = actor && actor.email ? String(actor.email).toLowerCase() : '';
+  return [v.uploadedBy, task.assigneeEmail].map(function (e) { return String(e || '').toLowerCase(); })
+    .filter(function (e, i, a) { return e && e !== me && a.indexOf(e) === i; });
+}
+
 /** Records a decision. Caller holds the lock and has verified the request is Open. */
-function applyDecision_(request, decision, comment, reviewer, channel, actor) {
+function applyDecision_(request, decision, comment, reviewer, channel, actor, opts) {
   var now = nowIso_();
   var v = dbGet_('CreativeVersions', request.versionId);
   var d = dbGet_('CreativeSubmissions', request.deliverableId);
@@ -160,7 +167,7 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor) {
   if (decision === 'approved') {
     var copyId = '';
     try {
-      var folder = ensureFolder_('approved', [String(new Date().getFullYear()), task.taskId]);
+      var folder = DriveApp.getFolderById(ensureFolderId_('approved', [String(new Date().getFullYear()), task.taskId]));
       copyId = DriveApp.getFileById(v.fileId).makeCopy('APPROVED_' + v.fileName, folder).getId();
     } catch (e) { console.warn('Approved copy failed for ' + v.versionId + ': ' + e); }
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.APPROVED, approvedFileId: copyId });
@@ -174,16 +181,63 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor) {
   logActivity_(task.taskId, channel === 'public' ? 'reviewer' : actor, decision === 'approved' ? 'approved' : 'changes_requested',
     '', d.title + ' · V' + v.versionNo, comment || '', 'team');
 
+  if (opts && opts.quiet) { recomputeTaskStatus_(task.taskId, 'system'); return { task: task, d: d, v: v }; }
   var who = reviewer.name ? reviewer.name + (reviewer.email ? ' (' + reviewer.email + ')' : '') : 'An anonymous reviewer';
-  notify_(leaderEmails_(), decision === 'approved' ? 'creative_approved' : 'changes_requested',
-    label + ': ' + d.title + ' V' + v.versionNo,
-    who + ' — ' + task.taskId + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + task.taskId);
-  if (task.assigneeEmail && leaderEmails_().indexOf(task.assigneeEmail) === -1) {
-    notify_([task.assigneeEmail], decision === 'approved' ? 'creative_approved' : 'changes_requested',
-      label + ': ' + d.title + ' V' + v.versionNo,
-      (decision === 'approved' ? 'Nice work — this creative is approved.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId);
-  }
+  var title = label + ': ' + d.title + ' V' + v.versionNo;
+  var mail = designerRecipients_(task, v, actor);
+  // Email goes only to the designer. Leaders just see it in the portal's bell.
+  notify_(mail, decision === 'approved' ? 'creative_approved' : 'changes_requested', title,
+    (decision === 'approved' ? 'Nice work — this creative is approved.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId, true);
+  notify_(leaderEmails_().filter(function (e) { return mail.indexOf(e) === -1; }), decision === 'approved' ? 'creative_approved' : 'changes_requested',
+    title, who + ' — ' + task.taskId + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + task.taskId, false);
   recomputeTaskStatus_(task.taskId, 'system');
+  return { task: task, d: d, v: v };
+}
+
+/**
+ * Approves many creatives in one go. pick(versionId) returns the open request
+ * or throws; skips anything already decided. One summary notification per task.
+ * Caller holds the lock.
+ */
+function approveMany_(versionIds, comment, reviewer, channel, actor, pick) {
+  var byTask = {}, approved = 0, skipped = [];
+  versionIds.forEach(function (id) {
+    var r;
+    try { r = pick(id); } catch (e) { skipped.push({ versionId: id, reason: e.message || 'Skipped' }); return; }
+    var res = applyDecision_(r, 'approved', comment, reviewer, channel, actor, { quiet: true });
+    approved++;
+    var g = (byTask[res.task.taskId] = byTask[res.task.taskId] || { task: res.task, titles: [], versions: [] });
+    g.titles.push(res.d.title + ' V' + res.v.versionNo); g.versions.push(res.v);
+  });
+  var who = reviewer.name ? reviewer.name + (reviewer.email ? ' (' + reviewer.email + ')' : '') : 'An anonymous reviewer';
+  Object.keys(byTask).forEach(function (tid) {
+    var g = byTask[tid], n = g.titles.length, list = g.titles.join('\n');
+    var title = 'Approved ' + n + ' creative' + (n > 1 ? 's' : '') + ': ' + g.task.title;
+    var mail = [];
+    g.versions.forEach(function (v) { designerRecipients_(g.task, v, actor).forEach(function (e) { if (mail.indexOf(e) === -1) mail.push(e); }); });
+    notify_(mail, 'creative_approved', title, 'Nice work — these are approved:\n' + list + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + tid, true);
+    notify_(leaderEmails_().filter(function (e) { return mail.indexOf(e) === -1 && (!actor || e !== actor.email); }), 'creative_approved',
+      title, who + ' — ' + tid + '\n\n' + list + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + tid, false);
+  });
+  return { approved: approved, skipped: skipped };
+}
+
+/** Leader approves many creatives at once (max 60 per call). */
+function api_leaderApproveMany(versionIds, comment) {
+  return respond_(function () {
+    var u = requireLeader_();
+    var ids = (Array.isArray(versionIds) ? versionIds : []).map(String).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+    if (!ids.length) throw AppError_('VALIDATION', 'Select at least one creative.');
+    if (ids.length > 60) throw AppError_('VALIDATION', 'Approve up to 60 at a time.');
+    comment = str_(comment, 4000, 'Feedback', false);
+    return withLock_(function () {
+      return approveMany_(ids, comment, { name: u.name, email: u.email }, 'portal', u, function (id) {
+        var r = dbFind_('ApprovalRequests', function (x) { return x.versionId === id && x.status === 'Open'; })[0];
+        if (!r) throw AppError_('ALREADY_DECIDED', 'No longer waiting for approval.');
+        return r;
+      });
+    });
+  });
 }
 
 /** Leader: open approval requests with context, for the Approvals page. */
