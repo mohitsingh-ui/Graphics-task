@@ -24,6 +24,11 @@ function doGet(e) {
     return render_('Review', { token: TOKEN_RE.test(String(p.t || '')) ? String(p.t) : '' }, 'Review creative · ' + s.companyName, false);
   }
 
+  if (page === 'batch') {
+    // Never embeddable, so its Approve buttons can't be clickjacked.
+    return render_('Batch', { token: TOKEN_RE.test(String(p.t || '')) ? String(p.t) : '' }, 'Review creatives · ' + s.companyName, false);
+  }
+
   if (page === 'app' || page === '') {
     var email = activeEmail_();
     var member = email ? userByEmail_(email) : null;

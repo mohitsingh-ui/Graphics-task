@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<?!= include_('Styles') ?>
+<style>
+  .pub-head { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .pub-head .in { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 110px; }
+  .intro h1 { font-size: 22px; margin: 0 0 4px; }
+  .counts { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 16px; }
+  .counts span { padding: 4px 12px; border-radius: 999px; font-size: 13px; background: var(--surface); border: 1px solid var(--line); }
+  .counts b { margin-right: 4px; }
+  .who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 16px; }
+  .who input { flex: 1 1 180px; min-width: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+  .it { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+  .it .ph { aspect-ratio: 1 / 1; border: 0; padding: 0; width: 100%; cursor: zoom-in; background: var(--surface-2) center / cover no-repeat;
+    display: grid; place-items: center; font: 600 13px/1 inherit; color: var(--text-3); text-transform: uppercase; }
+  .it .bd { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .it .t { font-weight: 600; font-size: 14px; }
+  .it .s { font-size: 12px; color: var(--text-3); }
+  .it .fb { font-size: 12.5px; color: var(--bad); white-space: pre-line; }
+  .it .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: auto; padding-top: 4px; }
+  .it .acts .btn { height: 36px; padding: 0 8px; font-size: 13px; }
+  .chip { align-self: flex-start; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+  .chip.open { background: var(--warn-soft); color: #7a4f00; } .chip.approved { background: var(--ok-soft); color: var(--ok); }
+  .chip.changes { background: var(--bad-soft); color: var(--bad); } .chip.closed { background: var(--muted-soft); color: var(--text-3); }
+  .dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0,0,0,.06); z-index: 20; }
+  .dock .in { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+  .dock .btn { height: 44px; padding: 0 18px; }
+  .state { max-width: 520px; margin: 60px auto; text-align: center; padding: 40px 28px; }
+  .state .ic { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 14px; background: var(--muted-soft); color: var(--text-3); }
+  .state .ic svg { width: 26px; height: 26px; }
+  .state.ok .ic { background: var(--ok-soft); color: var(--ok); }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr 1fr; gap: 10px; } .it .acts { grid-template-columns: 1fr; } .dock .in { flex-direction: column; align-items: stretch; } .dock .btn { width: 100%; } }
+</style>
+</head>
+<body>
+<header class="pub-head"><div class="in">
+  <div class="brand"><div class="mark" id="brandMark">G</div><span id="brandName">Creative review</span></div>
+  <span class="faint small">No login needed</span>
+</div></header>
+<main id="main"><div class="loading-page"><span class="spinner"></span> Loading creatives…</div></main>
+<div class="dock hidden" id="dock"><div class="in"><span class="small muted" id="dockTxt"></span><button class="btn ok solid" id="allBtn"></button></div></div>
+
+<?!= include_('Common.js') ?>
+<script>
+var BOOT = <?!= bootJson ?>;
+var TOKEN = BOOT.token, DATA = null, THUMBS = {};
+var WHO = (function () { try { return JSON.parse(localStorage.getItem('gfxReviewer') || '{}'); } catch (e) { return {}; } })();
+
+if (!TOKEN) fail('This link isn’t valid. Please check you copied the full link.'); else load();
+
+function fail(m) {
+  $('#dock').classList.add('hidden');
+  $('#main').innerHTML = '<div class="card state"><div class="ic">' + icon('alert') + '</div><h2>Can’t open this review</h2><p class="muted">' + h(m) + '</p></div>';
+}
+
+function load() {
+  api('api_getBatch', TOKEN).then(function (d) {
+    DATA = d;
+    if (d.companyName) { $('#brandName').textContent = d.companyName + ' · Creative review'; $('#brandMark').textContent = d.companyName.charAt(0); }
+    draw();
+    loadThumbs();
+  }).catch(function (e) { fail(errMsg(e)); });
+}
+
+var LABEL = { open: 'Waiting for you', approved: 'Approved', changes: 'Changes requested', closed: 'No longer open' };
+var GLABEL = { open: 'Waiting for your review', approved: 'Approved', changes: 'Changes requested', closed: 'No longer open' };
+
+function draw() {
+  var items = DATA.items, n = { open: 0, approved: 0, changes: 0, closed: 0 };
+  items.forEach(function (x) { n[x.state]++; });
+  var askName = DATA.reviewerIdentity !== 'anonymous';
+  $('#main').innerHTML =
+    '<div class="intro"><h1>' + h(DATA.title) + '</h1><p class="muted">Tap a creative to see it full screen and swipe through them all. Approve each one, or tell the team what to change.</p></div>' +
+    '<div class="counts"><span><b>' + n.open + '</b>waiting</span><span><b>' + n.approved + '</b>approved</span>' + (n.changes ? '<span><b>' + n.changes + '</b>changes requested</span>' : '') + '</div>' +
+    (askName && n.open ? '<div class="card who"><span class="small"><b>Your name</b></span><input type="text" id="whoName" maxlength="100" placeholder="e.g. Gaurav" autocomplete="name" value="' + h(WHO.name || '') + '">' +
+      '<input type="email" id="whoEmail" maxlength="254" placeholder="Email (optional)" autocomplete="email" value="' + h(WHO.email || '') + '"></div>' : '') +
+    (n.open === 0 && items.length ? '<div class="card state ok" style="margin:10px auto 20px"><div class="ic">' + icon('check') + '</div><h2>All done — thank you!</h2><p class="muted">The graphics team has your decisions.</p></div>' : '') +
+    '<div class="grid">' + items.map(function (x, i) {
+      return '<div class="it"><button class="ph" data-i="' + i + '" aria-label="View ' + h(x.title) + '"' + (THUMBS[x.versionId] ? ' style="background-image:url(&quot;' + THUMBS[x.versionId] + '&quot;)"' : '') + '>' + (THUMBS[x.versionId] ? '' : h(x.ext || 'file')) + '</button>' +
+        '<div class="bd"><span class="chip ' + x.state + '">' + LABEL[x.state] + '</span><div class="t">' + h(x.title) + ' <span class="faint small">' + h(x.version) + '</span></div>' +
+        (x.purpose ? '<div class="s">' + h(x.purpose) + '</div>' : '') + (x.comment ? '<div class="fb">“' + h(x.comment) + '”</div>' : '') +
+        (x.state === 'open' ? '<div class="acts"><button class="btn danger sm" data-chg="' + i + '">Changes</button><button class="btn ok sm" data-ok="' + i + '">' + icon('check') + ' Approve</button></div>' : '') +
+        '</div></div>';
+    }).join('') + '</div>';
+  if ($('#whoName')) {
+    $('#whoName').oninput = $('#whoEmail').oninput = function () { WHO = { name: $('#whoName').value.trim(), email: $('#whoEmail').value.trim() }; try { localStorage.setItem('gfxReviewer', JSON.stringify(WHO)); } catch (e) {} };
+  }
+  $all('[data-i]').forEach(function (b) { b.onclick = function () { openGal(Number(b.getAttribute('data-i'))); }; });
+  $all('[data-ok]').forEach(function (b) { b.onclick = function () { decideOne(Number(b.getAttribute('data-ok')), 'approved', ''); }; });
+  $all('[data-chg]').forEach(function (b) { b.onclick = function () { askChanges(Number(b.getAttribute('data-chg'))); }; });
+  $('#dock').classList.toggle('hidden', n.open < 2);
+  $('#dockTxt').textContent = n.open + ' creatives waiting for you';
+  $('#allBtn').innerHTML = icon('check') + ' Approve all ' + n.open;
+  $('#allBtn').onclick = approveAll;
+}
+
+function loadThumbs() {
+  var ids = DATA.items.map(function (x) { return x.versionId; }).filter(function (id) { return THUMBS[id] === undefined; });
+  for (var i = 0; i < ids.length; i += 24) {
+    api('api_batchThumbs', TOKEN, ids.slice(i, i + 24)).then(function (m) {
+      Object.keys(m).forEach(function (id) {
+        THUMBS[id] = m[id] || null;
+        if (!m[id]) return;
+        DATA.items.forEach(function (x, k) {
+          if (x.versionId !== id) return;
+          var b = $('[data-i="' + k + '"]'); if (b) { b.style.backgroundImage = 'url("' + m[id] + '")'; b.textContent = ''; }
+        });
+      });
+    }).catch(function () {});
+  }
+}
+
+function who() { return { reviewerName: WHO.name || '', reviewerEmail: WHO.email || '' }; }
+function needName() {
+  if (DATA.reviewerIdentity !== 'required' || (WHO.name || '').length >= 2) return Promise.resolve();
+  return new Promise(function (resolve, reject) {
+    modal({ title: 'Your name', body: '<p class="muted" style="margin-top:0">So the team knows who reviewed these.</p><div class="field"><input type="text" id="nmIn" maxlength="100" placeholder="Your name" value="' + h(WHO.name || '') + '"></div><div class="alert bad hidden" data-form-error></div>',
+      onClose: function () { reject({ message: 'Enter your name to continue.', quiet: true }); },
+      actions: [{ label: 'Cancel' }, { label: 'Continue', cls: 'primary', onClick: function (close, m) {
+        var v = $('#nmIn', m).value.trim();
+        if (v.length < 2) return fieldErrors(m, 'Please enter your name.');
+        WHO.name = v; try { localStorage.setItem('gfxReviewer', JSON.stringify(WHO)); } catch (e) {}
+        if ($('#whoName')) $('#whoName').value = v;
+        resolve(); close();
+      } }] });
+  });
+}
+
+function decide(i, decision, comment) {
+  return needName().then(function () {
+    return api('api_batchDecide', TOKEN, DATA.items[i].versionId, decision, comment, who());
+  }).then(function (r) {
+    DATA.items[i].state = r.state;
+    if (decision === 'changes') DATA.items[i].comment = comment;
+  });
+}
+
+function decideOne(i, decision, comment) {
+  decide(i, decision, comment).then(function () { toast(decision === 'approved' ? 'Approved' : 'Feedback sent'); draw(); })
+    .catch(function (e) { if (!e.quiet) toast(errMsg(e), true); if (e.code === 'ALREADY_DECIDED') load(); });
+}
+
+function askChanges(i) {
+  modal({ title: 'What should change?', body: '<p class="muted" style="margin-top:0">' + h(DATA.items[i].title + ' ' + DATA.items[i].version) + '</p><div class="field"><textarea id="chIn" rows="4" maxlength="4000" placeholder="e.g. Make the price bigger, use the 1L jar"></textarea></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Send feedback', cls: 'danger solid', onClick: function (close, m) {
+      var c = $('#chIn', m).value.trim();
+      if (c.length < 5) return fieldErrors(m, 'Tell the team what to change.');
+      close(); decideOne(i, 'changes', c);
+    } }] });
+}
+
+function approveAll() {
+  var open = DATA.items.filter(function (x) { return x.state === 'open'; });
+  confirmBox('Approve all ' + open.length + ' creatives?', 'Only if you’ve looked at each one. To ask for changes on any creative, use its own Changes button first.', 'Approve all ' + open.length)
+    .then(function (y) {
+      if (!y) return;
+      return needName().then(function () {
+        $('#allBtn').disabled = true;
+        return api('api_batchApproveAll', TOKEN, open.map(function (x) { return x.versionId; }), who());
+      }).then(function (r) {
+        toast('Approved ' + r.approved + ' creative' + (r.approved === 1 ? '' : 's'));
+        $('#allBtn').disabled = false; load();
+      });
+    }).catch(function (e) { $('#allBtn').disabled = false; if (!e.quiet) toast(errMsg(e), true); });
+}
+
+function openGal(start) {
+  var items = DATA.items.map(function (x, i) {
+    return {
+      idx: i, title: x.title + ' · ' + x.version, sub: x.purpose || x.task, status: GLABEL[x.state], canDecide: x.state === 'open',
+      load: function () { return api('api_batchFile', TOKEN, x.versionId, 'preview'); },
+      download: DATA.allowDownload ? function () { return api('api_batchFile', TOKEN, x.versionId, 'original'); } : null
+    };
+  });
+  gallery(items, {
+    start: start,
+    decide: function (it, decision, comment) { return decide(it.idx, decision, comment); },
+    onClose: function (changed) { if (changed) draw(); }
+  });
+}
+</script>
+</body>
+</html>

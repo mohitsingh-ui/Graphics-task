@@ -321,6 +321,60 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await mob.close();
     });
 
+    await step('Share for review: leader makes one link; founder reviews on phone without login', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Share', department: 'Marketing', brief: 'Biggest Diwali sale meta creatives', preferredDate: future(5), quantity: 4 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(5), priority: 'High' });
+      const ids = [];
+      for (const [i, txt] of ['Biggest Diwali Sale', 'Up to 30% off', 'Freebies above Rs 2,499', 'Gir A2 Bilona Ghee'].entries()) {
+        const b = await bannerPng(txt, 18 + i * 6);
+        const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: 'Biggest Diwali sale meta creatives — ' + (i + 1), fileName: 'meta' + i + '.png', size: b.length }).data;
+        ids.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+      }
+      env.call(A, 'api_submitForApproval', tid, ids);
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="approvals"]');
+      await page.waitForSelector('#shareSel');
+      await page.check('#selAll');
+      await page.locator('[data-pick]').last().uncheck();          // an older creative from another task
+      assert.ok((await page.textContent('#shareSel')).includes('Share 4'));
+      await page.click('#shareSel');
+      await page.fill('#shT', 'Biggest Diwali Sale — Meta creatives');
+      await page.click('.modal-f >> text=Create link');
+      await page.waitForSelector('#shUrl');
+      await shot('34-share-link-modal');
+      const url = await page.inputValue('#shUrl');
+      const tok = /t=([A-Za-z0-9_-]+)/.exec(url)[1];
+      await page.click('.modal-f >> text=Close');
+
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+      mob.on('pageerror', e => errors.push('batch pageerror: ' + e.message));
+      await mob.goto(BASE + '/page?p=batch&t=' + tok);
+      await mob.waitForSelector('.it .ph');
+      await mob.waitForFunction(() => [...document.querySelectorAll('.it .ph')].some(b => b.style.backgroundImage));
+      await mob.fill('#whoName', 'Gaurav');
+      await mob.waitForTimeout(200);
+      await mob.screenshot({ path: path.join(OUT, '35-founder-link-mobile.png') });
+      const ov = await mob.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(ov <= 1, 'founder page overflows on phone by ' + ov);
+      await mob.locator('.it .ph').first().click();
+      await mob.waitForSelector('.gal .lb-stage img:not(.hidden)');
+      await mob.screenshot({ path: path.join(OUT, '36-founder-gallery-mobile.png') });
+      await mob.click('.gal [data-okk]');
+      await mob.waitForFunction(() => document.querySelector('.gal [data-c]').textContent.trim() === '2 / 4');
+      await mob.click('.gal [data-close]');
+      await mob.waitForSelector('#allBtn');
+      assert.ok((await mob.textContent('#allBtn')).includes('3'));
+      await mob.click('#allBtn');
+      await mob.click('.modal-f >> text=Approve all 3');
+      await mob.waitForSelector('text=All done');
+      await mob.screenshot({ path: path.join(OUT, '37-founder-all-done.png') });
+      await mob.close();
+      const t = env.call(LEADER, 'api_getTask', tid).data;
+      assert.strictEqual(t.task.status, 'Completed');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

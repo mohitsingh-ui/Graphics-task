@@ -862,6 +862,53 @@ scenario('Requester decides one creative at a time from the gallery (approve / r
   assert.strictEqual(fb.reviewerName, 'Gal');
 });
 
+scenario('Shared review link: founder reviews many creatives without login (approve, changes, approve all)', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Share', department: 'Sales', email: 'share@example.org', brief: 'Diwali Meta set', preferredDate: future(4), quantity: 5 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' }));
+  const ids = [0, 1, 2, 3, 4].map(i => upload(A, { kind: 'version', taskId: tid, title: 'Meta ' + (i + 1) }, 'm' + i + '.png', png(600)).versionId);
+  ok(call(A, 'api_submitForApproval', tid, ids.slice(0, 4)));        // #5 stays a draft
+  err(call(A, 'api_createBatchLink', ids, 'x'), 'FORBIDDEN');
+  const link = ok(call(LEADER, 'api_createBatchLink', ids, 'Diwali Meta creatives'));
+  assert.strictEqual(link.count, 4); assert.strictEqual(link.skipped, 1);
+  assert.match(link.url, /\?p=batch&t=[A-Za-z0-9_-]{40,}$/);
+  const tok = /t=([A-Za-z0-9_-]+)/.exec(link.url)[1];
+  state.currentUser = '';
+  const b = ok(call('', 'api_getBatch', tok));
+  assert.strictEqual(b.title, 'Diwali Meta creatives');
+  assert.strictEqual(b.items.length, 4);
+  assert.ok(b.items.every(x => x.state === 'open'));
+  const json = JSON.stringify(b);
+  assert.ok(!/asha|Asha/.test(json) && !json.includes('fileId') && !json.includes('drive.google'), 'no designer identity or Drive ids leak');
+  const th = ok(call('', 'api_batchThumbs', tok, [ids[0], ids[4]]));
+  assert.ok(th[ids[0]]); assert.strictEqual(th[ids[4]], null, 'creative outside the link is not served');
+  assert.ok(ok(call('', 'api_batchFile', tok, ids[1], 'preview')).dataUrl);
+  err(call('', 'api_batchFile', tok, ids[4], 'preview'), 'NOT_FOUND');
+  err(call('', 'api_batchDecide', tok, ids[0], 'approved', '', { reviewerName: 'Asha', reviewerEmail: A }), 'FORBIDDEN');
+  ok(call('', 'api_batchDecide', tok, ids[0], 'approved', '', { reviewerName: 'Gaurav' }));
+  err(call('', 'api_batchDecide', tok, ids[0], 'approved', '', { reviewerName: 'Gaurav' }), 'ALREADY_DECIDED');
+  err(call('', 'api_batchDecide', tok, ids[1], 'changes', 'no', { reviewerName: 'Gaurav' }), 'VALIDATION');
+  ok(call('', 'api_batchDecide', tok, ids[1], 'changes', 'Price should be bigger', { reviewerName: 'Gaurav' }));
+  const all = ok(call('', 'api_batchApproveAll', tok, ids, { reviewerName: 'Gaurav' }));
+  assert.strictEqual(all.approved, 2);
+  const after = ok(call('', 'api_getBatch', tok)).items;
+  assert.deepStrictEqual(after.map(x => x.state), ['approved', 'changes', 'approved', 'approved']);
+  assert.strictEqual(after[1].comment, 'Price should be bigger');
+  const dec = ok(call(LEADER, 'api_getTask', tid)).deliverables.find(d => d.title === 'Meta 1').versions[0].decisions[0];
+  assert.strictEqual(dec.reviewerName, 'Gaurav');
+  assert.strictEqual(dec.channel, 'public');
+  // withdraw + expiry
+  const l2 = ok(call(LEADER, 'api_listBatchLinks'))[0];
+  assert.strictEqual(l2.count, 4); assert.ok(l2.lastOpenedAt);
+  ok(call(LEADER, 'api_revokeBatchLink', l2.batchId));
+  err(call('', 'api_getBatch', tok), 'LINK_CLOSED');
+  err(call('', 'api_getBatch', 'x'.repeat(43)), 'LINK_INVALID');
+  // page renders and is not embeddable
+  state.currentUser = '';
+  const page = env.ctx.doGet({ parameter: { p: 'batch', t: tok } });
+  assert.ok(page.html.includes('api_getBatch') && page.xframe !== env.ctx.HtmlService.XFrameOptionsMode.ALLOWALL);
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';
@@ -878,8 +925,8 @@ scenario('Pages render: public form, review, app shell, no-access', () => {
   env.ctx.DB_CACHE_ = {};
   const no = env.ctx.doGet({ parameter: { p: 'app' } });
   assert.ok(no.html.includes('stranger@rosierfoods.com'));
-  ['Form', 'Review', 'App', 'NoAccess'].forEach(n => {
-    const html = env.ctx.doGet({ parameter: n === 'Review' ? { p: 'review' } : n === 'NoAccess' ? { p: 'app' } : {} }).html;
+  ['Form', 'Review', 'Batch', 'App', 'NoAccess'].forEach(n => {
+    const html = env.ctx.doGet({ parameter: n === 'Review' ? { p: 'review' } : n === 'Batch' ? { p: 'batch' } : n === 'NoAccess' ? { p: 'app' } : {} }).html;
     const scripts = html.match(/<script>([\s\S]*?)<\/script>/g) || [];
     scripts.forEach(s => { new Function(s.replace(/^<script>|<\/script>$/g, '')); }); // syntax check every inline script
   });

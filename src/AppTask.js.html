@@ -94,6 +94,7 @@ function drawTask(el) {
   if ($('#refUpload')) $('#refUpload').onclick = function () { pickFiles(true, function (files) { uploadRefs(files); }); };
   $all('[data-cmp]', el).forEach(function (b) { b.onclick = function () { compareModal(b.getAttribute('data-cmp')); }; });
   $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved', reloadTask); }; });
+  if ($('#shareAll')) $('#shareAll').onclick = function () { shareForReview(this.getAttribute('data-ids').split(','), t.title); };
   if ($('#approveAll')) $('#approveAll').onclick = function () { bulkApprove(this.getAttribute('data-ids').split(','), reloadTask); };
   $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes', reloadTask); }; });
   $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
@@ -161,7 +162,8 @@ function deliverablesCard(d) {
   }).join('') : emptyState('No creatives uploaded yet.', p.canUpload ? 'Use “Upload creative” to add your first version.' : '', 'image');
   var waiting = [];
   d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.request && v.request.status === 'Open') waiting.push(v.versionId); }); });
-  var bulk = leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '';
+  var bulk = (leader && waiting.length ? '<button class="btn sm" id="shareAll" data-ids="' + h(waiting.join(',')) + '">' + icon('link') + ' Share for review</button>' : '') +
+    (leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '');
   return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div></div><div class="card-b">' + body + '</div></div>';
 }
 
