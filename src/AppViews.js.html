@@ -333,7 +333,8 @@ VIEWS.approvals = function (arg, el, token) {
         var dec = r.decision;
         return '<div class="ver" data-req="' + h(r.requestId) + '">' +
           (scope === 'open' && rows.length > 1 ? '<input type="checkbox" class="pick" data-pick="' + h(r.versionId) + '" aria-label="Select ' + h(r.deliverableTitle) + '">' : '') +
-          '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.fileName) + '">' + ext(r.fileName) + '</div>' +
+          '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.deliverableTitle + ' · V' + r.versionNo) + '" data-sub="' + h(r.taskId + ' · ' + r.taskTitle + ' · by ' + r.uploadedByName) + '"' +
+            ' data-status="' + h(r.status === 'Open' ? 'Awaiting approval' : r.decision ? (r.decision.decision === 'approved' ? 'Approved' : 'Changes requested') : '') + '">' + ext(r.fileName) + '</div>' +
           '<div class="grow"><div class="row wrap"><b>' + h(r.deliverableTitle) + '</b><span class="badge plain">V' + h(r.versionNo) + '</span>' +
           (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
           '<div class="faint small"><a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a> · ' + h(r.taskTitle) + ' · by <b>' + h(r.uploadedByName) + '</b> · sent ' + fmtDateTime(r.createdAt) + '</div>' +
@@ -397,7 +398,7 @@ function loadThumbs(root) {
   var nodes = $all('[data-thumb]', root), need = [];
   nodes.forEach(function (t) {
     var id = t.getAttribute('data-thumb'), kind = t.getAttribute('data-kind') || 'version', key = kind + ':' + id;
-    t.onclick = function () { openAsset(kind, id, t.getAttribute('data-name')); };
+    t.onclick = function () { openGallery(root, t); };
     if (THUMB_MEMO[key] !== undefined) { if (THUMB_MEMO[key]) t.innerHTML = '<img src="' + h(THUMB_MEMO[key]) + '" alt="">'; }
     else if (!need.some(function (n) { return n.kind + ':' + n.id === key; })) need.push({ kind: kind, id: id });
   });
@@ -410,6 +411,40 @@ function loadThumbs(root) {
       });
     }).catch(function () { /* keep the extension labels */ });
   }
+}
+
+/**
+ * Opens every preview on this screen as one gallery, starting at the one clicked.
+ * Leaders get Approve / Request changes for creatives that are waiting.
+ */
+function openGallery(root, start) {
+  var kind = start.getAttribute('data-kind') || 'version', seen = {};
+  var nodes = $all('[data-thumb]', root).filter(function (n) {
+    var id = n.getAttribute('data-thumb');
+    if ((n.getAttribute('data-kind') || 'version') !== kind || seen[id]) return false;
+    seen[id] = true; return true;
+  });
+  var leader = APP.role === 'leader';
+  var items = nodes.map(function (n) {
+    var id = n.getAttribute('data-thumb');
+    var waiting = kind === 'version' && !!$('[data-ok="' + id + '"]', root);
+    return {
+      id: id, title: n.getAttribute('data-name') || '', sub: n.getAttribute('data-sub') || '',
+      status: n.getAttribute('data-status') || (waiting ? 'Awaiting approval' : ''),
+      canDecide: leader && waiting,
+      load: function () { return api('api_getAsset', kind, id, 'preview'); },
+      download: function () { return api('api_getAsset', kind, id, 'original'); }
+    };
+  });
+  gallery(items, {
+    start: Math.max(0, nodes.indexOf(start)),
+    decide: function (it, decision, comment) { return api('api_leaderDecision', it.id, decision, comment); },
+    onClose: function (changed) {
+      if (!changed) return;
+      loadNotifications();
+      if (APP.route.indexOf('task/') === 0 && typeof reloadTask === 'function') reloadTask(); else render(APP.route);
+    }
+  });
 }
 
 function openAsset(kind, id, name) {

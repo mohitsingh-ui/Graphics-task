@@ -270,6 +270,57 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.waitForSelector('.req-card >> text=Completed');
     });
 
+    await step('Gallery: arrows/keys move between creatives; approve & request changes below the image', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Gallery', department: 'Marketing', brief: 'Diwali sale set', preferredDate: future(5), quantity: 3 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(5), priority: 'High' });
+      const ids = [];
+      for (const [i, txt] of ['Biggest Diwali Sale', 'Up to 30% off', 'Freebies above Rs 2,499'].entries()) {
+        const b = await bannerPng(txt, 22);
+        const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: 'Diwali post ' + (i + 1), fileName: 'post' + i + '.png', size: b.length }).data;
+        ids.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+      }
+      env.call(A, 'api_submitForApproval', tid, ids);
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="approvals"]');
+      await page.waitForSelector('[data-thumb]');
+      await page.locator('[data-thumb]').first().click();
+      await page.waitForSelector('.gal .lb-stage img:not(.hidden)');
+      assert.strictEqual((await page.textContent('.gal [data-c]')).trim(), '1 / 3');
+      // decision bar is below the image, not on top of it
+      const imgBox = await page.locator('.gal .lb-stage').boundingBox(), barBox = await page.locator('.gal .lb-actions').boundingBox();
+      assert.ok(imgBox.y + imgBox.height <= barBox.y + 1, 'actions do not cover the image');
+      await shot('31-gallery-leader');
+      await page.keyboard.press('ArrowRight');
+      assert.strictEqual((await page.textContent('.gal [data-c]')).trim(), '2 / 3');
+      await page.click('.gal [data-prev]');
+      assert.strictEqual((await page.textContent('.gal [data-c]')).trim(), '1 / 3');
+      await page.click('.gal [data-okk]');
+      await page.waitForFunction(() => document.querySelector('.gal [data-c]').textContent.trim() === '2 / 3');
+      await page.click('.gal [data-chg]');
+      await page.fill('#lbFb', 'Make the 30% badge bigger');
+      await shot('32-gallery-request-changes');
+      await page.click('.gal [data-send]');
+      await page.waitForFunction(() => document.querySelector('.gal [data-c]').textContent.trim() === '3 / 3');
+      await page.click('.gal [data-close]');
+      await page.waitForSelector('.gal', { state: 'detached' });
+      await page.waitForFunction(() => document.querySelectorAll('[data-ok]').length === 1);
+
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+      await mob.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await mob.waitForSelector('.cr .ph');
+      await mob.locator('.cr .ph').first().click();
+      await mob.waitForSelector('.gal .lb-stage img:not(.hidden)');
+      await mob.waitForTimeout(150);
+      await mob.screenshot({ path: path.join(OUT, '33-gallery-requester-mobile.png') });
+      const ib = await mob.locator('.gal .lb-stage img').boundingBox();
+      assert.ok(ib.x >= 0 && ib.x + ib.width <= 391, 'image fits the phone screen');
+      const ov = await mob.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(ov <= 1, 'gallery overflows on phone by ' + ov);
+      await mob.close();
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

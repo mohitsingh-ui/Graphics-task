@@ -180,6 +180,23 @@ function api_trackReview(token, versionId) {
   });
 }
 
+/** Open review request for one of the requester's own creatives; fills reviewer from the request. Caller holds the lock. */
+function trackOpenRequest_(keys, id, reviewer, named) {
+  var v = dbGet_('CreativeVersions', str_(id, 60, 'Creative', true));
+  var t = v && dbGet_('Tasks', v.taskId);
+  var r = t && dbGet_('Requirements', t.requirementId);
+  if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
+  var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
+  if (!rq) throw AppError_('ALREADY_DECIDED', 'This creative is no longer waiting for review.');
+  var em = String(r.email || '').toLowerCase();
+  if (em && (em === String(v.uploadedBy).toLowerCase() || em === String(t.assigneeEmail).toLowerCase())) {
+    var me = userByEmail_(em);
+    if (!(me && bool_(me.active) && me.role === ROLES.LEADER)) throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
+  }
+  if (named) { reviewer.name = r.requesterName || ''; reviewer.email = r.email || ''; }
+  return rq;
+}
+
 /** Requester approves several of their own creatives at once from "My requests". */
 function api_trackApproveMany(token, versionIds) {
   return respond_(function () {
@@ -189,23 +206,25 @@ function api_trackApproveMany(token, versionIds) {
     if (!ids.length) throw AppError_('VALIDATION', 'Nothing to approve.');
     if (ids.length > 60) throw AppError_('VALIDATION', 'Approve up to 60 at a time.');
     return withLock_(function () {
+      var reviewer = { name: '', email: '' }, named = settings_().reviewerIdentity !== 'anonymous';
+      return approveMany_(ids, '', reviewer, 'public', null, function (id) { return trackOpenRequest_(keys, id, reviewer, named); });
+    });
+  });
+}
+
+/** Requester approves or asks for changes on one creative, from the gallery in "My requests". */
+function api_trackDecide(token, versionId, decision, comment) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackdecide:' + keys.join(',').slice(0, 120), 60, 600);
+    decision = oneOf_(String(decision || ''), ['approved', 'changes'], 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision === 'changes');
+    if (decision === 'changes' && comment.length < 5) throw AppError_('VALIDATION', 'Please tell the team what to change.');
+    return withLock_(function () {
       var reviewer = { name: '', email: '' };
-      var named = settings_().reviewerIdentity !== 'anonymous';
-      return approveMany_(ids, '', reviewer, 'public', null, function (id) {
-        var v = dbGet_('CreativeVersions', str_(id, 60, 'Creative', true));
-        var t = v && dbGet_('Tasks', v.taskId);
-        var r = t && dbGet_('Requirements', t.requirementId);
-        if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
-        var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
-        if (!rq) throw AppError_('ALREADY_DECIDED', 'No longer waiting for review.');
-        var em = String(r.email || '').toLowerCase();
-        if (em && (em === String(v.uploadedBy).toLowerCase() || em === String(t.assigneeEmail).toLowerCase())) {
-          var me = userByEmail_(em);
-          if (!(me && bool_(me.active) && me.role === ROLES.LEADER)) throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
-        }
-        if (named) { reviewer.name = r.requesterName || ''; reviewer.email = r.email || ''; }
-        return rq;
-      });
+      var rq = trackOpenRequest_(keys, versionId, reviewer, settings_().reviewerIdentity !== 'anonymous');
+      applyDecision_(rq, decision, comment, reviewer, 'public', null);
+      return { decision: decision };
     });
   });
 }

@@ -155,20 +155,24 @@ function wireCreatives(el) {
       }).catch(function () { /* thumbnails are optional */ });
     })(ids.slice(i, i + 24));
   }
-  $all('[data-view]', el).forEach(function (b) {
+  // Tap any creative: a gallery of all of them (arrows / swipe), with Approve / Request changes below the image.
+  var views = $all('[data-view]', el);
+  views.forEach(function (b, idx) {
     b.onclick = function () {
-      var id = b.getAttribute('data-view'), title = b.getAttribute('data-title');
-      var dlBtn = $('[data-dl="' + id + '"]', el);
-      toast('Opening…');
-      api('api_trackFile', TRACKS, id, 'preview').then(function (p) {
-        if (!p.dataUrl) {
-          if (dlBtn) return dlBtn.click();
-          return toast(p.message || 'No preview for this file type.', true);
-        }
-        var lb = lightbox(p.dataUrl, title, dlBtn ? '<button class="btn sm" data-lbdl>' + icon('download') + ' Download</button>' : '');
-        var x = $('[data-lbdl]', lb && lb.nodeType ? lb : document);
-        if (x) x.onclick = function () { dlBtn.click(); };
-      }).catch(function (e) { toast(errMsg(e), true); });
+      var items = views.map(function (v) {
+        var id = v.getAttribute('data-view'), st = v.getAttribute('data-state');
+        return {
+          id: id, title: v.getAttribute('data-title'), sub: v.getAttribute('data-sub'), status: st,
+          canDecide: st === 'Waiting for your review',
+          load: function () { return api('api_trackFile', TRACKS, id, 'preview'); },
+          download: $('[data-dl="' + id + '"]', el) ? function () { return api('api_trackFile', TRACKS, id, 'original'); } : null
+        };
+      });
+      gallery(items, {
+        start: idx,
+        decide: function (it, decision, comment) { return api('api_trackDecide', TRACKS, it.id, decision, comment); },
+        onClose: function (changed) { if (changed) renderMy(); }
+      });
     };
   });
   $all('[data-dl]', el).forEach(function (b) {
@@ -193,15 +197,15 @@ function reqCard(r) {
   })).join('');
   acts = all + acts;
   var cr = r.creatives || [];
-  var gallery = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
+  var galleryHtml = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
     '<div class="gallery">' + cr.map(function (c) {
-      return '<div class="cr"><button class="ph" data-view="' + h(c.versionId) + '" data-title="' + h(c.title + ' ' + c.version) + '" data-img="' + (c.isImage ? '1' : '') + '" aria-label="View ' + h(c.title) + '">' + h(c.ext || 'file') + '</button>' +
+      return '<div class="cr"><button class="ph" data-view="' + h(c.versionId) + '" data-title="' + h(c.title + ' · ' + c.version) + '" data-state="' + h(c.state) + '" data-sub="' + h(r.title + ' · ' + r.requirementId) + '" data-img="' + (c.isImage ? '1' : '') + '" aria-label="View ' + h(c.title) + '">' + h(c.ext || 'file') + '</button>' +
         '<div class="info"><div class="t" title="' + h(c.title) + '">' + h(c.title) + '</div><div class="s' + (c.state === 'Approved' ? ' ok' : '') + '"><span>' + h(c.version) + ' · ' + h(c.state) + '</span>' +
         (c.canDownload ? '<button class="dl" data-dl="' + h(c.versionId) + '" title="Download" aria-label="Download ' + h(c.title) + '">' + icon('download') + '</button>' : '') + '</div></div></div>';
     }).join('') + '</div>' : '';
   return '<div class="req-card"><div class="top"><div><h3>' + h(r.title) + '</h3><div class="meta">' + h(r.requirementId) + ' · sent ' + fmtDate(r.submittedAt) +
     ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' +
-    progress + gallery + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
+    progress + galleryHtml + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
 }
 
 function renderAskEmail(msg) {

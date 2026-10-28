@@ -843,6 +843,25 @@ scenario('Approval / changes emails go only to the designer (leaders get a bell 
   assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(n => /^Changes requested: M2/.test(n.title)), 'leader still sees it in the bell');
 });
 
+scenario('Requester decides one creative at a time from the gallery (approve / request changes)', () => {
+  const s = ok(call('', 'api_submitRequirement', { requesterName: 'Gal', department: 'Sales', email: 'gal@example.org', brief: 'Gallery decide', preferredDate: future(3), quantity: 2 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+  const ids = [0, 1].map(i => upload(A, { kind: 'version', taskId: tid, title: 'G' + i }, 'g' + i + '.png', png(500)).versionId);
+  ok(call(A, 'api_submitForApproval', tid, ids));
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'X', department: 'Sales', brief: 'x', preferredDate: future(3) }));
+  err(call('', 'api_trackDecide', [other.trackToken], ids[0], 'approved', ''), 'NOT_FOUND');
+  err(call('', 'api_trackDecide', [s.trackToken], ids[1], 'changes', 'no'), 'VALIDATION');
+  ok(call('', 'api_trackDecide', [s.trackToken], ids[0], 'approved', ''));
+  ok(call('', 'api_trackDecide', [s.trackToken], ids[1], 'changes', 'Make the logo bigger'));
+  err(call('', 'api_trackDecide', [s.trackToken], ids[0], 'approved', ''), 'ALREADY_DECIDED');
+  const t = ok(call(A, 'api_getTask', tid));
+  assert.strictEqual(t.task.status, 'Changes Requested');
+  const fb = ok(call(LEADER, 'api_getTask', tid)).deliverables.find(d => d.title === 'G1').versions[0].decisions[0];
+  assert.strictEqual(fb.comment, 'Make the logo bigger');
+  assert.strictEqual(fb.reviewerName, 'Gal');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

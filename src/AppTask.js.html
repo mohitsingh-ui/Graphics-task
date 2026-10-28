@@ -144,7 +144,7 @@ function deliverablesCard(d) {
       (leader && dv.versions.length > 1 ? '<button class="btn sm ghost" data-cmp="' + h(dv.deliverableId) + '">' + icon('compare') + ' Compare</button>' : '') + '</div>' +
       dv.versions.map(function (v) {
         var isFinal = dv.approvedVersionId === v.versionId;
-        return '<div class="ver"><div class="thumb" data-thumb="' + h(v.versionId) + '" data-name="' + h(dv.title + ' V' + v.versionNo) + '">' + ext(v.fileName) + '</div>' +
+        return '<div class="ver"><div class="thumb" data-thumb="' + h(v.versionId) + '" data-name="' + h(dv.title + ' · V' + v.versionNo) + '" data-sub="' + h((v.uploadedByName || v.uploadedBy || '') + ' · ' + fmtDateTime(v.uploadedAt)) + '" data-status="' + h(v.status === 'Awaiting Approval' ? 'Awaiting approval' : v.status === 'Superseded' ? 'Older version' : v.status) + '">' + ext(v.fileName) + '</div>' +
           '<div class="grow"><div class="row wrap"><b>V' + h(v.versionNo) + '</b>' + statusBadge(v.status) + (isFinal ? '<span class="badge s-approved plain">★ Final approved</span>' : '') + '</div>' +
           '<div class="faint small">' + h(v.uploadedByName || v.uploadedBy) + ' · uploaded ' + fmtDateTime(v.uploadedAt) + ' · ' + fileSize(v.sizeBytes) + (v.submittedAt ? ' · sent ' + fmtDateTime(v.submittedAt) : '') + '</div>' +
           (v.note ? '<div class="small pre muted" style="margin-top:4px">“' + h(v.note) + '”</div>' : '') +
