@@ -21,6 +21,15 @@ function taskDeliverables_(taskId) {
 function recomputeTaskStatus_(taskId, actor) {
   var task = dbGet_('Tasks', taskId);
   if (!task) return null;
+  if (task.status === STATUS.ON_HOLD) {
+    // On hold (e.g. waiting for the NI table): once every creative is approved, the hold ends and the task completes.
+    var hd = taskDeliverables_(taskId), need = Math.max(1, Number(task.deliverablesRequired) || 1);
+    var allOk = hd.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length >= need &&
+      !hd.some(function (d) { return d.status === DSTATUS.CHANGES || d.status === DSTATUS.AWAITING; });
+    if (!allOk) return task.status;
+    endHold_(task, actor || 'system', 'All creatives approved', true);
+    task = dbGet_('Tasks', taskId);
+  }
   if ([STATUS.ON_HOLD, STATUS.CANCELLED, STATUS.COMPLETED].indexOf(task.status) !== -1) return task.status;
   if (PRE_ASSIGN.indexOf(task.status) !== -1) return task.status;
 
@@ -95,6 +104,10 @@ function taskDto_(t, user, extra) {
   var o = pick_(t, TASK_FIELDS_ALL);
   o.overdue = isOverdue_(t);
   o.referenceUrls = t.referenceUrls ? t.referenceUrls.split('\n') : [];
+  o.hold = t.status === STATUS.ON_HOLD ? { reason: t.holdReason || '', party: t.holdParty || 'internal', partyLabel: HOLD_PARTIES[t.holdParty] || HOLD_PARTIES.internal,
+    dept: t.holdDept || '', since: t.holdSince || '' } : null;
+  o.heldDays = Math.round((Number(t.heldMs) || 0) / 864e5 * 10) / 10;
+  o.reopenedAt = t.reopenedAt || ''; o.reopenReason = t.reopenReason || ''; o.reopenCount = Number(t.reopenCount) || 0;
   if (isLeader_(user)) {
     o.assigneeEmail = t.assigneeEmail;
     o.assigneeName = t.assigneeEmail ? displayName_(t.assigneeEmail) : '';
@@ -124,6 +137,7 @@ function api_bootstrap() {
       user: { email: u.email, name: u.name, role: u.role },
       companyName: s.companyName, portalName: s.portalName,
       priorities: s.priorities, statuses: STATUS_ORDER, progressSteps: PROGRESS_STEPS,
+      departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
       creativeTypes: s.creativeTypes.map(function (t) { return { id: t.id, label: t.label }; }),
       chunkBytes: LIMITS.CHUNK_BYTES, maxUploadMB: s.maxUploadMB, extensions: s.allowedExtensions,
       workloadThreshold: s.workloadThreshold, brandGuidelinesUrl: s.brandGuidelinesUrl,
@@ -146,7 +160,9 @@ function api_leaderDashboard() {
       revisions: count(function (t) { return t.status === STATUS.CHANGES; }),
       completed: count(function (t) { return t.status === STATUS.COMPLETED; }),
       completedThisMonth: count(function (t) { return t.status === STATUS.COMPLETED && String(t.completedAt).slice(0, 7) === monthStart; }),
-      overdue: count(isOverdue_)
+      overdue: count(isOverdue_),
+      onHoldOthers: count(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; }),
+      onHoldInternal: count(function (t) { return t.status === STATUS.ON_HOLD && (!t.holdParty || t.holdParty === 'internal'); })
     };
     var byNewest = function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; };
     var reqs = dbAll_('Requirements');
@@ -370,7 +386,9 @@ function api_getTask(taskId) {
 function taskPermissions_(u, t) {
   var leader = isLeader_(u);
   var isAssignee = t.assigneeEmail === u.email;
-  var uploadable = [STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.SUBMITTED, STATUS.CHANGES, STATUS.RESUBMITTED, STATUS.APPROVED];
+  // Uploads continue while a task is on hold (e.g. waiting for the NI table), as long as someone is assigned.
+  var uploadable = [STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.SUBMITTED, STATUS.CHANGES, STATUS.RESUBMITTED, STATUS.APPROVED]
+    .concat(t.assigneeEmail ? [STATUS.ON_HOLD] : []);
   var manual = Object.keys(MANUAL_TRANSITIONS[t.status] || {}).filter(function (to) {
     return MANUAL_TRANSITIONS[t.status][to].indexOf(u.role) !== -1;
   });
@@ -382,7 +400,10 @@ function taskPermissions_(u, t) {
     canEdit: leader,
     canDecide: leader,
     canOverrideComplete: leader && [STATUS.COMPLETED, STATUS.CANCELLED].indexOf(t.status) === -1,
-    canResume: leader && t.status === STATUS.ON_HOLD,
+    canResume: (leader || isAssignee) && t.status === STATUS.ON_HOLD,
+    canHold: (leader || isAssignee) && CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.ON_HOLD,
+    canReopen: leader && t.status === STATUS.COMPLETED,
+    canShare: leader || isAssignee,
     transitions: manual
   };
 }
@@ -392,6 +413,7 @@ function activityDto_(a, u, task) {
   var actor;
   if (a.actorRole === 'reviewer') actor = 'Reviewer';
   else if (a.actorRole === 'requester') actor = 'Requester';
+  else if (a.actorRole === 'external') actor = a.toValue || 'Shared link';
   else if (a.actorRole === 'system' || a.actorEmail === 'system') actor = 'System';
   else if (leader) actor = displayName_(a.actorEmail);
   else if (a.actorEmail === u.email) actor = 'You';
@@ -486,6 +508,11 @@ function api_setTaskStatus(taskId, to, options) {
         completeTask_(t, u, 'Leader override: ' + reason);
         return { status: STATUS.COMPLETED };
       }
+      if (to === STATUS.ON_HOLD) {
+        if (!reason) throw AppError_('VALIDATION', 'Say why the task is on hold.');
+        holdTask_(t, u, { reason: reason, party: 'internal' });
+        return { status: STATUS.ON_HOLD };
+      }
       var rules = MANUAL_TRANSITIONS[t.status] || {};
       if (!rules[to] || rules[to].indexOf(u.role) === -1) {
         throw AppError_('INVALID_TRANSITION', 'A task can’t move from "' + t.status + '" to "' + to + '"' + (isLeader_(u) ? '.' : ' by you.'));
@@ -505,17 +532,133 @@ function api_setTaskStatus(taskId, to, options) {
   });
 }
 
-function api_resumeTask(taskId) {
+/* ---------- hold / resume / reopen ---------- */
+
+/**
+ * Puts a task on hold with a reason and who it's waiting on.
+ * While on hold: no deadline, no overdue alerts, files stay viewable, uploads
+ * and approvals can continue. Time on hold is not counted against the team
+ * when it's waiting on the requester or another department.
+ */
+function holdTask_(t, u, o) {
+  var party = HOLD_PARTIES[o.party] ? o.party : 'internal';
+  setStatus_(t, STATUS.ON_HOLD, u, '');   // the reason is logged once, in the 'hold' entry below
+  dbUpdate_('Tasks', t.taskId, { holdReason: o.reason, holdParty: party, holdDept: o.dept || '', holdSince: nowIso_(), updatedAt: nowIso_() });
+  logActivity_(t.taskId, u, 'hold', '', HOLD_PARTIES[party] + (o.dept ? ' · ' + o.dept : ''), o.reason, 'team');
+  var who = (u && u.name) || 'The team';
+  var body = t.taskId + ' is on hold.\n\nReason: ' + o.reason + (party !== 'internal' ? '\nWaiting on: ' + (o.dept || HOLD_PARTIES[party]) + '\n\nThe deadline is paused until it resumes.' : '');
+  var mail = [t.assigneeEmail].filter(function (e) { return e && e !== (u && u.email); });
+  notify_(mail, 'task_status', 'On hold: ' + t.title, body, 'task/' + t.taskId, true);
+  notify_(leaderEmails_().filter(function (e) { return e !== (u && u.email) && mail.indexOf(e) === -1; }), 'task_status', 'On hold: ' + t.title, body + '\n\nPut on hold by ' + who + '.', 'task/' + t.taskId, false);
+  var req = dbGet_('Requirements', t.requirementId);
+  if (o.notifyRequester && party !== 'internal' && req && req.email) {
+    var link = trackUrl_(issueTrackToken_(req.email));
+    sendMail_(req.email, 'We need something from you: ' + req.title + ' (' + req.requirementId + ')',
+      'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" is on hold until we get this:\n\n' + o.reason +
+      (o.dept ? '\n\nFrom: ' + o.dept : '') + '\n\nThe design work so far is ready for you to see. Send the details from your requests page:\n' + link, { label: 'Send the details', url: link });
+  }
+}
+
+/** Ends a hold: adds the held time to heldMs and, unless the hold was ours, moves the deadline out by the same amount. */
+function endHold_(t, actor, note, silent, newDue) {
+  var since = t.holdSince ? new Date(t.holdSince).getTime() : Date.now();
+  var held = Math.max(0, Date.now() - since);
+  var patch = { heldMs: String((Number(t.heldMs) || 0) + held), holdSince: '', holdReason: '', holdParty: '', holdDept: '',
+    overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: nowIso_() };
+  if (newDue && newDue.dueDate) { patch.dueDate = newDue.dueDate; patch.dueTime = newDue.dueTime || ''; }
+  else if (t.holdParty && t.holdParty !== 'internal' && t.dueDate) {
+    var end = dueEnd_(t.dueDate, t.dueTime);
+    // Deadline was paused: whatever time was left when the hold began is given back.
+    if (end && end.getTime() > since) {
+      var shifted = new Date(end.getTime() + held);
+      patch.dueDate = Utilities.formatDate(shifted, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      if (t.dueTime) patch.dueTime = Utilities.formatDate(shifted, Session.getScriptTimeZone(), 'HH:mm');
+    } else if (end) {
+      // It was already late when put on hold — give one day after resuming.
+      var d1 = new Date(Date.now() + 864e5);
+      patch.dueDate = Utilities.formatDate(d1, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    }
+  }
+  dbUpdate_('Tasks', t.taskId, patch);
+  var back = t.prevStatus && t.prevStatus !== STATUS.ON_HOLD ? t.prevStatus : (t.assigneeEmail ? STATUS.ASSIGNED : STATUS.NEW);
+  if (back === STATUS.COMPLETED || back === STATUS.CANCELLED) back = t.assigneeEmail ? STATUS.IN_PROGRESS : STATUS.NEW;
+  setStatus_(dbGet_('Tasks', t.taskId), back, actor, note || 'Resumed');
+  logActivity_(t.taskId, actor, 'resume', '', '', (note || 'Resumed') + ' · on hold ' + Math.max(1, Math.round(held / 864e5 * 10) / 10) + ' day(s)' +
+    (patch.dueDate && patch.dueDate !== t.dueDate ? ' · new due ' + dueText_(patch.dueDate, patch.dueTime !== undefined ? patch.dueTime : t.dueTime) : ''), 'team');
+  if (!silent && t.assigneeEmail && (!actor || actor.email !== t.assigneeEmail)) {
+    notify_([t.assigneeEmail], 'task_status', 'Resumed: ' + t.title, t.taskId + ' is active again.' + (patch.dueDate ? ' Due ' + dueText_(patch.dueDate, patch.dueTime || '') + '.' : ''), 'task/' + t.taskId, true);
+  }
+}
+
+function api_holdTask(taskId, input) {
   return respond_(function () {
-    var u = requireLeader_();
+    var u = currentUser_();
+    input = input || {};
+    var reason = str_(input.reason, 1000, 'Reason', true);
+    if (reason.length < 4) throw AppError_('VALIDATION', 'Say why the task is on hold, e.g. “Waiting for NI table and barcode”.');
+    var party = oneOf_(String(input.party || 'internal'), Object.keys(HOLD_PARTIES), 'Waiting on');
+    var dept = str_(input.dept, 100, 'Department', false);
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      if (!taskPermissions_(u, t).canHold) throw AppError_('INVALID_STATE', 'This task can’t be put on hold now.');
+      holdTask_(t, u, { reason: reason, party: party, dept: dept, notifyRequester: input.notifyRequester !== false });
+      return { status: STATUS.ON_HOLD };
+    });
+  });
+}
+
+/** Resume a held task. input.dueDate/dueTime (optional) set a new deadline; otherwise it is moved out by the time held. */
+function api_resumeTask(taskId, input) {
+  return respond_(function () {
+    var u = currentUser_();
+    input = input || {};
+    var due = input.dueDate ? { dueDate: date_(input.dueDate, 'Due date', true), dueTime: time_(input.dueTime, 'Due time', false) } : null;
     return withLock_(function () {
       var t = requireTask_(u, taskId);
       if (t.status !== STATUS.ON_HOLD) throw AppError_('INVALID_STATE', 'This task is not on hold.');
-      var back = t.prevStatus && t.prevStatus !== STATUS.ON_HOLD ? t.prevStatus : (t.assigneeEmail ? STATUS.ASSIGNED : STATUS.NEW);
-      if (back === STATUS.COMPLETED || back === STATUS.CANCELLED) back = t.assigneeEmail ? STATUS.IN_PROGRESS : STATUS.NEW;
-      setStatus_(t, back, u, 'Resumed');
+      if (!taskPermissions_(u, t).canResume) throw AppError_('FORBIDDEN', 'Only the team leader or the assigned designer can resume this task.');
+      endHold_(t, u, 'Resumed', false, due);
       recomputeTaskStatus_(t.taskId, u);
-      return { status: dbGet_('Tasks', t.taskId).status };
+      return { status: dbGet_('Tasks', t.taskId).status, dueDate: dbGet_('Tasks', t.taskId).dueDate };
+    });
+  });
+}
+
+/**
+ * Leader reopens a completed task for new changes. The approved files stay as
+ * the "final" versions until new ones are approved. input: { reason, deliverableIds?, dueDate, dueTime }
+ */
+function api_reopenTask(taskId, input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    var reason = str_(input.reason, 2000, 'What needs to change', true);
+    if (reason.length < 5) throw AppError_('VALIDATION', 'Describe the changes needed.');
+    var dueDate = date_(input.dueDate, 'New due date', true), dueTime = time_(input.dueTime, 'Due time', false);
+    if (dueDate < isoDateOnly_()) throw AppError_('VALIDATION', 'The new due date can’t be in the past.');
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      if (t.status !== STATUS.COMPLETED && t.status !== STATUS.APPROVED) throw AppError_('INVALID_STATE', 'Only a completed task can be reopened.');
+      var dels = taskDeliverables_(t.taskId);
+      var pick = Array.isArray(input.deliverableIds) && input.deliverableIds.length ? input.deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
+      var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
+      if (!chosen.length && dels.length) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
+      var now = nowIso_();
+      chosen.forEach(function (d) { dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now }); });
+      dbUpdate_('Tasks', t.taskId, {
+        status: STATUS.CHANGES, prevStatus: t.status, completedAt: '', progress: '50', dueDate: dueDate, dueTime: dueTime,
+        reopenedAt: now, reopenReason: reason, reopenCount: String((Number(t.reopenCount) || 0) + 1),
+        overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: now
+      });
+      logActivity_(t.taskId, u, 'reopened', t.status, STATUS.CHANGES, reason + ' · ' + chosen.length + ' creative(s) · due ' + dueText_(dueDate, dueTime), 'team');
+      var req = dbGet_('Requirements', t.requirementId);
+      if (req && req.status === 'Completed') dbUpdate_('Requirements', req.requirementId, { status: 'Received', updatedAt: now });
+      if (t.assigneeEmail && t.assigneeEmail !== u.email) {
+        notify_([t.assigneeEmail], 'task_reopened', 'Reopened for changes: ' + t.title,
+          'What needs to change:\n\n' + reason + '\n\nCreatives: ' + chosen.map(function (d) { return d.title; }).join(', ') + '\nDue ' + dueText_(dueDate, dueTime) +
+          '\n\nThe approved files stay as the final versions until the new ones are approved.', 'task/' + t.taskId, true);
+      }
+      return { status: STATUS.CHANGES, reopened: chosen.length };
     });
   });
 }

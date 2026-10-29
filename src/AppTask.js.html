@@ -33,7 +33,10 @@ function drawTask(el) {
   if (p.canAssign) actions += '<button class="btn' + (t.assigneeEmail ? '' : ' primary') + '" id="aAssign">' + icon('users') + ' ' + (t.assigneeEmail ? 'Reassign' : 'Assign designer') + '</button>';
   if (p.canAssign && !d.deliverables.length && !(d.requestParts || []).length) actions += '<button class="btn" id="aDivide">' + icon('board') + ' Divide among team</button>';
   if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
-  if (p.canResume) actions += '<button class="btn" id="aResume">Resume task</button>';
+  if (p.canResume) actions += '<button class="btn primary" id="aResume">' + icon('refresh') + ' Resume task</button>';
+  if (p.canHold) actions += '<button class="btn" id="aHold">' + icon('clock') + ' Put on hold</button>';
+  if (p.canReopen) actions += '<button class="btn primary" id="aReopen">' + icon('refresh') + ' Reopen for changes</button>';
+  if (p.canShare) actions += '<button class="btn" id="aShare">' + icon('link') + ' Share</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
   if (leader && t.assigneeEmail && t.assigneeEmail !== APP.boot.user.email) actions += '<button class="btn" id="aReward">' + icon('award') + ' Reward</button>';
   if (leader) actions += '<button class="btn ghost danger" id="aDelete" title="Delete task">' + icon('trash') + ' Delete</button>';
@@ -55,7 +58,14 @@ function drawTask(el) {
     (changes.length ? '<div class="alert bad" style="margin-bottom:16px"><b>Changes requested</b>' + changes.map(function (c) {
       return '<div style="margin-top:6px"><b>' + h(c.title) + ' · V' + h(c.v) + '</b> <span class="small">(' + fmtDate(c.at) + ')</span><div class="pre">' + h(c.comment) + '</div></div>';
     }).join('') + '<div class="small" style="margin-top:8px">Upload a new version of each creative, then submit it for approval again.</div></div>' : '') +
-    (t.status === 'On Hold' ? '<div class="alert warn" style="margin-bottom:16px">This task is on hold.</div>' : '') +
+    (t.hold ? '<div class="alert warn hold-banner" style="margin-bottom:16px"><b>On hold' + (t.hold.party !== 'internal' ? ' — waiting on ' + h(t.hold.dept || t.hold.partyLabel) : '') + '</b>' +
+      '<span class="small"> · since ' + fmtDateTime(t.hold.since) + '</span><div class="pre" style="margin-top:4px">' + h(t.hold.reason) + '</div>' +
+      '<div class="small" style="margin-top:6px">' + (t.hold.party !== 'internal' ? 'The deadline is paused and this time isn’t counted against the graphics team. ' : '') +
+      'Files can still be viewed, uploaded and approved — once every creative is approved, the task completes automatically.</div></div>' :
+      (t.status === 'On Hold' ? '<div class="alert warn" style="margin-bottom:16px">This task is on hold.</div>' : '')) +
+    (t.reopenedAt && t.status !== 'Completed' ? '<div class="alert info" style="margin-bottom:16px"><b>Reopened for changes</b> <span class="small">· ' + fmtDateTime(t.reopenedAt) +
+      (t.reopenCount > 1 ? ' · reopened ' + t.reopenCount + ' times' : '') + '</span><div class="pre" style="margin-top:4px">' + h(t.reopenReason) + '</div>' +
+      '<div class="small" style="margin-top:6px">The ★ Final approved files stay available until the new versions are approved.</div></div>' : '') +
     (t.status === 'Cancelled' ? '<div class="alert warn" style="margin-bottom:16px">This task was cancelled.</div>' : '') +
 
     '<div class="detail"><div class="stack">' +
@@ -69,7 +79,10 @@ function drawTask(el) {
   if ($('#aAssign')) $('#aAssign').onclick = assignModal;
   if ($('#aDivide')) $('#aDivide').onclick = divideModal;
   if ($('#aEdit')) $('#aEdit').onclick = editModal;
-  if ($('#aResume')) $('#aResume').onclick = function () { run(api('api_resumeTask', t.taskId), 'Task resumed'); };
+  if ($('#aResume')) $('#aResume').onclick = resumeModal;
+  if ($('#aHold')) $('#aHold').onclick = holdModal;
+  if ($('#aReopen')) $('#aReopen').onclick = reopenModal;
+  if ($('#aShare')) $('#aShare').onclick = shareTaskModal;
   if ($('#aStatus')) $('#aStatus').onclick = statusModal;
   if ($('#aReward')) $('#aReward').onclick = function () { rewardModal({ userEmail: t.assigneeEmail, taskId: t.taskId }, reloadTask); };
   if ($('#aDelete')) $('#aDelete').onclick = function () {
@@ -374,7 +387,7 @@ function editModal() {
 
 function statusModal() {
   var t = TASK.task, p = TASK.permissions;
-  var opts = p.transitions.slice();
+  var opts = p.transitions.filter(function (x) { return x !== 'On Hold'; });   // hold has its own button (needs a reason)
   var canForce = p.canOverrideComplete && opts.indexOf('Completed') === -1;
   modal({
     title: 'Change status',
@@ -394,6 +407,104 @@ function statusModal() {
       }
     }]
   });
+}
+
+/* ---------- hold / resume / reopen / share ---------- */
+
+function holdModal() {
+  var t = TASK.task, r = TASK.requirement, depts = (APP.boot.departments || []);
+  modal({
+    title: 'Put on hold',
+    body: '<div class="field"><label class="req" for="hdR">Why is it on hold?</label><textarea id="hdR" rows="3" maxlength="1000" placeholder="e.g. Design done. Waiting for NI table and barcode."></textarea></div>' +
+      '<div class="field"><label class="req">Waiting on</label><div class="seg-choice">' +
+      '<label><input type="radio" name="hdP" value="other" checked><span><b>Another department</b><small>Not counted against us</small></span></label>' +
+      '<label><input type="radio" name="hdP" value="requester"><span><b>The requester</b><small>' + h(r.requesterName || 'who raised it') + ' · not counted against us</small></span></label>' +
+      '<label><input type="radio" name="hdP" value="internal"><span><b>Our team</b><small>Internal hold</small></span></label></div></div>' +
+      '<div class="field" id="hdDeptF"><label for="hdD">Which department?</label><input type="text" id="hdD" list="hdDL" maxlength="100" placeholder="e.g. Quality" value="' + h(r.department || '') + '">' +
+      '<datalist id="hdDL">' + depts.map(function (d) { return '<option value="' + h(d) + '">'; }).join('') + '</datalist></div>' +
+      (r.email ? '<label class="check" id="hdNF"><input type="checkbox" id="hdN" checked> Email ' + h(r.requesterName || 'the requester') + ' what we need</label>' : '') +
+      '<p class="faint small">While on hold the deadline is paused. Files stay visible and downloadable; uploads and approvals continue. When every creative is approved, the task completes.</p>' +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Put on hold', cls: 'primary', onClick: function (close, m) {
+      var party = $('input[name=hdP]:checked', m).value, reason = $('#hdR', m).value.trim();
+      if (reason.length < 4) return fieldErrors(m, 'Say why it’s on hold.');
+      return api('api_holdTask', t.taskId, { reason: reason, party: party, dept: party === 'internal' ? '' : $('#hdD', m).value.trim(), notifyRequester: $('#hdN', m) ? $('#hdN', m).checked : false })
+        .then(function () { close(); toast('Task on hold'); loadNotifications(); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }]
+  });
+  $all('input[name=hdP]').forEach(function (x) { x.onchange = function () {
+    var v = $('input[name=hdP]:checked').value;
+    $('#hdDeptF').classList.toggle('hidden', v === 'internal');
+    if ($('#hdNF')) $('#hdNF').classList.toggle('hidden', v === 'internal');
+  }; });
+}
+
+function resumeModal() {
+  var t = TASK.task, ext = t.hold && t.hold.party !== 'internal';
+  modal({
+    title: 'Resume task',
+    body: '<p class="muted" style="margin-top:0">' + (ext ? 'The deadline was paused. Leave the date empty to move it out by the time the task was on hold, or set a new one.' : 'Set a new deadline if needed.') + '</p>' +
+      '<div class="grid-2"><div class="field"><label for="rsD">New due date</label><input type="date" id="rsD" min="' + todayIso() + '"></div>' +
+      '<div class="field"><label for="rsT">Time</label><input type="time" id="rsT" step="900"></div></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Resume', cls: 'primary', onClick: function (close, m) {
+      return api('api_resumeTask', t.taskId, { dueDate: $('#rsD', m).value, dueTime: $('#rsT', m).value })
+        .then(function (r) { close(); toast('Resumed · due ' + fmtDate(r.dueDate)); loadNotifications(); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }]
+  });
+}
+
+function reopenModal() {
+  var t = TASK.task, dels = TASK.deliverables;
+  modal({
+    title: 'Reopen for changes', wide: true,
+    body: '<div class="field"><label class="req" for="roR">What needs to change?</label><textarea id="roR" rows="3" maxlength="2000" placeholder="e.g. Change MRP to ₹899 on the back panel"></textarea></div>' +
+      (dels.length ? '<div class="field"><label>Which creatives?</label><div class="stack" style="gap:6px">' + dels.map(function (d) {
+        return '<label class="check"><input type="checkbox" data-ro="' + h(d.deliverableId) + '" checked> ' + h(d.title) + ' <span class="faint small">V' + h(d.latestVersionNo) + '</span></label>';
+      }).join('') + '</div></div>' : '') +
+      '<div class="grid-2"><div class="field"><label class="req" for="roD">New due date</label><input type="date" id="roD" min="' + todayIso() + '"></div>' +
+      '<div class="field"><label for="roT">Time</label><input type="time" id="roT" step="900"></div></div>' +
+      '<p class="faint small">The ★ Final approved files stay available (and downloadable for the requester) until the new versions are approved.</p><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Reopen task', cls: 'primary', onClick: function (close, m) {
+      var ids = $all('[data-ro]', m).filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-ro'); });
+      if (dels.length && !ids.length) return fieldErrors(m, 'Choose at least one creative.');
+      if (!$('#roD', m).value) return fieldErrors(m, 'Pick a new due date.');
+      return api('api_reopenTask', t.taskId, { reason: $('#roR', m).value.trim(), deliverableIds: ids, dueDate: $('#roD', m).value, dueTime: $('#roT', m).value })
+        .then(function () { close(); toast('Task reopened — the designer has been told'); loadNotifications(); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }]
+  });
+}
+
+function shareTaskModal() {
+  var t = TASK.task;
+  var m = modal({
+    title: 'Share this task',
+    body: '<p class="muted" style="margin-top:0">Anyone with the link can see the brief, the designs so far (and download them), and send back details and files — e.g. the NI table and barcode. No login needed.</p>' +
+      '<div class="field"><label for="shN">Who is it for? <span class="faint">(optional)</span></label><input type="text" id="shN" maxlength="200" placeholder="e.g. Quality team"></div>' +
+      '<div id="shOut"></div><div id="shList"></div><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Close' }, { label: 'Create link', cls: 'primary', onClick: function (close, el) {
+      var b = $('.modal-f .btn.primary', el); if (b) b.disabled = true;
+      return api('api_createTaskShare', t.taskId, $('#shN', el).value.trim()).then(function (r) {
+        if (b) b.classList.add('hidden');
+        var msg = t.title + ' (' + t.taskId + ') — see the designs and send the details here: ' + r.url;
+        $('#shOut', el).innerHTML = '<div class="field"><label>Link (valid ' + r.expiresInDays + ' days)</label><div class="row" style="gap:8px"><input type="text" readonly id="shUrl" value="' + h(r.url) + '"><button class="btn primary" id="shCopy">Copy</button></div></div>' +
+          '<div class="row wrap" style="gap:8px"><a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/?text=' + encodeURIComponent(msg) + '">Send on WhatsApp</a>' +
+          '<a class="btn" href="mailto:?subject=' + encodeURIComponent(t.title + ' — details needed') + '&body=' + encodeURIComponent(msg) + '">Email</a></div>';
+        $('#shCopy', el).onclick = function () { copyText(r.url); $('#shUrl', el).select(); };
+        listShares();
+      }).catch(function (e) { if (b) b.disabled = false; fieldErrors(el, errMsg(e)); });
+    } }]
+  });
+  function listShares() {
+    api('api_listTaskShares', t.taskId).then(function (list) {
+      var box = $('#shList', m.el); if (!box) return;
+      box.innerHTML = list.length ? '<div class="section-title" style="margin-top:14px">Active links</div>' + list.map(function (x) {
+        return '<div class="row between small" style="padding:6px 0;border-top:1px solid var(--line)"><span>' + h(x.note || 'Link') + ' · made ' + fmtDate(x.createdAt) + ' · ' + (x.lastOpenedAt ? 'opened ' + fmtDateTime(x.lastOpenedAt) : 'not opened yet') + '</span>' +
+          '<button class="btn sm ghost danger" data-unshare="' + h(x.shareId) + '">Withdraw</button></div>';
+      }).join('') : '';
+      $all('[data-unshare]', box).forEach(function (b) { b.onclick = function () { api('api_revokeTaskShare', b.getAttribute('data-unshare')).then(function () { toast('Link withdrawn'); listShares(); }).catch(function (e) { toast(errMsg(e), true); }); }; });
+    }).catch(function () {});
+  }
+  listShares();
 }
 
 function splitModal() {

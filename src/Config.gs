@@ -19,7 +19,8 @@ var SCHEMA = {
     'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'assigneeEmail',
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
-    'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink'],
+    'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink',
+    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -38,11 +39,12 @@ var SCHEMA = {
   Settings: ['key', 'value', 'updatedAt'],
   RequesterLinks: ['linkId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'lastUsedAt'],
   Rewards: ['rewardId', 'userEmail', 'badge', 'points', 'reason', 'taskId', 'givenBy', 'givenAt'],
-  ReviewBatches: ['batchId', 'tokenHash', 'title', 'versionIds', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt']
+  ReviewBatches: ['batchId', 'tokenHash', 'title', 'versionIds', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
+  TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 5;
+var SCHEMA_VERSION = 6;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -64,6 +66,9 @@ var STATUS = {
 var STATUS_ORDER = [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY, STATUS.ASSIGNED, STATUS.IN_PROGRESS,
   STATUS.SUBMITTED, STATUS.CHANGES, STATUS.RESUBMITTED, STATUS.APPROVED, STATUS.COMPLETED, STATUS.ON_HOLD,
   STATUS.CANCELLED];
+
+/** Who a task is waiting on while it is on hold. Only 'internal' counts against the graphics team. */
+var HOLD_PARTIES = { requester: 'The requester', other: 'Another department', internal: 'Our team' };
 
 /** Statuses where the task still needs an owner. */
 var PRE_ASSIGN = [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY];
@@ -92,7 +97,7 @@ var MANUAL_TRANSITIONS = (function () {
   t[STATUS.CHANGES] = mk([[STATUS.ON_HOLD, L], [STATUS.CANCELLED, L]]);
   t[STATUS.RESUBMITTED] = mk([[STATUS.ON_HOLD, L], [STATUS.CANCELLED, L]]);
   t[STATUS.APPROVED] = mk([[STATUS.COMPLETED, L], [STATUS.IN_PROGRESS, L]]);
-  t[STATUS.COMPLETED] = mk([[STATUS.IN_PROGRESS, L]]);              // reopen
+  t[STATUS.COMPLETED] = mk([]);                                      // reopen: api_reopenTask
   t[STATUS.ON_HOLD] = mk([[STATUS.CANCELLED, L]]);                   // resume handled separately
   t[STATUS.CANCELLED] = mk([[STATUS.NEW, L]]);                       // restore
   function mk(pairs) { var o = {}; pairs.forEach(function (p) { o[p[0]] = p[1]; }); return o; }

@@ -170,7 +170,15 @@ function wireGo(el) {
   });
 }
 
+/** "Waiting on Quality" chip for tasks on hold because of someone else. */
+function holdChip(t) {
+  if (!t || !t.hold) return '';
+  return ' <span class="hold-chip" title="' + h(t.hold.reason) + '">' + icon('clock').replace('<svg', '<svg style="width:12px;height:12px"') + ' ' +
+    (t.hold.party === 'internal' ? 'On hold' : 'Waiting on ' + h(t.hold.dept || (t.hold.party === 'requester' ? 'requester' : 'other dept'))) + '</span>';
+}
+
 function dueLabel(t) {
+  if (t.hold) return '<span class="faint" title="Deadline paused while on hold">Paused</span>';
   if (!t.dueDate) return '<span class="faint">No date</span>';
   var tm = t.dueTime ? ', ' + fmtTime(t.dueTime) : '';
   if (t.overdue) return '<span class="overdue-flag">' + icon('alert').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + fmtDate(t.dueDate) + tm + '</span>';

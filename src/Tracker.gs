@@ -53,6 +53,7 @@ function requesterStatus_(tasks) {
   if (!live.length) return tasks.length ? 'Cancelled' : 'Received';
   var has = function (list) { return live.some(function (t) { return list.indexOf(t.status) !== -1; }); };
   if (live.every(function (t) { return t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED; })) return 'Completed';
+  if (live.some(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; })) return 'Waiting for your input';
   if (has([STATUS.SUBMITTED, STATUS.RESUBMITTED])) return 'Ready for your review';
   if (has([STATUS.CHANGES])) return 'Being revised';
   if (has([STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.APPROVED, STATUS.COMPLETED])) return 'In progress';
@@ -81,7 +82,7 @@ function api_getMyRequests(token) {
       var creatives = [];
       dels.forEach(function (d) {
         var v = requesterVersion_(d);
-        if (v) creatives.push({ versionId: v.versionId, title: d.title, version: 'V' + v.versionNo, state: creativeState_(d, v),
+        if (v) creatives.push({ versionId: v.versionId, title: d.title, version: 'V' + v.versionNo, state: creativeState_(d, v), isFinal: d.approvedVersionId === v.versionId,
           ext: extOf_(v.fileName), isImage: INLINE_IMAGE_TYPES.indexOf(v.mimeType) !== -1, canDownload: v.status === VSTATUS.APPROVED });
       });
       var links = [];
@@ -95,6 +96,11 @@ function api_getMyRequests(token) {
         required: required || Number(r.quantity) || 0,
         awaiting: awaiting,
         creatives: creatives,
+        hold: (function () {
+          var h = tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; })[0];
+          return h ? { reason: h.holdReason, dept: h.holdDept, since: h.holdSince } : null;
+        })(),
+        reopened: tasks.some(function (t) { return t.reopenedAt && CLOSED.indexOf(t.status) === -1; }),
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
     });
@@ -225,6 +231,46 @@ function api_trackDecide(token, versionId, decision, comment) {
       var rq = trackOpenRequest_(keys, versionId, reviewer, settings_().reviewerIdentity !== 'anonymous');
       applyDecision_(rq, decision, comment, reviewer, 'public', null);
       return { decision: decision };
+    });
+  });
+}
+
+/** The requester's request + its tasks, if this device/link owns it. */
+function trackRequirement_(keys, requirementId) {
+  var r = dbGet_('Requirements', str_(requirementId, 40, 'Request', true));
+  if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Request not found.');
+  return { r: r, tasks: dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId && t.status !== STATUS.CANCELLED; }) };
+}
+
+/** Link where the requester can send the missing details / files (e.g. NI table, barcode) for a request on hold. */
+function api_trackShareLink(token, requirementId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackshare:' + keys.join(',').slice(0, 120), 20, 600);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      var t = x.tasks.filter(function (t) { return t.status === STATUS.ON_HOLD; })[0] || x.tasks[0];
+      if (!t) throw AppError_('NOT_FOUND', 'Nothing to send details for yet.');
+      return { url: shareUrl_(issueShare_(t.taskId, 'requester', 'Requester link')) };
+    });
+  });
+}
+
+/** Requester asks for changes on a completed request; the team leader decides whether to reopen it. */
+function api_trackAskChanges(token, requirementId, message) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackask:' + keys.join(',').slice(0, 120), 5, 3600);
+    message = str_(message, 3000, 'What needs to change', true);
+    if (message.length < 5) throw AppError_('VALIDATION', 'Describe what needs to change.');
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      x.tasks.forEach(function (t) { logActivity_(t.taskId, { email: x.r.email || 'requester', role: 'requester' }, 'change_request', '', '', message, 'team'); });
+      var t0 = x.tasks[0];
+      notify_(leaderEmails_(), 'change_request', 'Changes asked on a finished request: ' + x.r.title,
+        x.r.requesterName + ' (' + x.r.department + ') asks:\n\n“' + message + '”\n\n' + x.r.requirementId + ' — reopen the task if the changes should be made.',
+        t0 ? 'task/' + t0.taskId : 'requirements', true);
+      return { message: 'Sent to the graphics team. They’ll reopen the task and let you know.' };
     });
   });
 }

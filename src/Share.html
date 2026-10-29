@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<?!= include_('Styles') ?>
+<style>
+  .pub-head { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .pub-head .in { max-width: 1000px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 60px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 22px; margin: 4px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .it { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); display: flex; flex-direction: column; }
+  .it .ph { aspect-ratio: 1 / 1; border: 0; padding: 0; width: 100%; cursor: zoom-in; background: var(--surface-2) center / cover no-repeat;
+    display: grid; place-items: center; font: 600 13px/1 inherit; color: var(--text-3); text-transform: uppercase; }
+  .it .bd { padding: 8px 10px 10px; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .it .t { font-weight: 600; font-size: 13px; } .it .s { font-size: 11.5px; color: var(--text-3); }
+  .it .s.fin { color: var(--ok); font-weight: 600; }
+  .dlb { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px; } .dlb svg { width: 18px; height: 18px; }
+  .files .row { padding: 8px 0; border-top: 1px solid var(--line); } .files .row:first-child { border-top: 0; }
+  .drop { border: 1.5px dashed var(--line-strong, #cfc8bc); border-radius: 10px; padding: 14px; text-align: center; color: var(--text-3); cursor: pointer; font-size: 13px; }
+  .drop.on { border-color: var(--accent); background: var(--accent-soft); }
+  .fl { font-size: 13px; display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; }
+  .upd { border-left: 2px solid var(--line); padding-left: 12px; margin: 0 0 10px; font-size: 13px; }
+  .state { max-width: 520px; margin: 60px auto; text-align: center; padding: 40px 28px; }
+  .state .ic { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 14px; background: var(--muted-soft); color: var(--text-3); }
+  .state .ic svg { width: 26px; height: 26px; }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<header class="pub-head"><div class="in">
+  <div class="brand"><div class="mark" id="brandMark">G</div><span id="brandName">Graphics team</span></div>
+  <span class="faint small">No login needed</span>
+</div></header>
+<main id="main"><div class="loading-page"><span class="spinner"></span> Loading…</div></main>
+
+<?!= include_('Common.js') ?>
+<script>
+var BOOT = <?!= bootJson ?>;
+var TOKEN = BOOT.token, DATA = null, FILES = [], THUMBS = {};
+var ME = (function () { try { return JSON.parse(localStorage.getItem('gfxShareMe') || '{}'); } catch (e) { return {}; } })();
+
+if (!TOKEN) fail('This link isn’t valid. Please check you copied the full link.'); else load();
+
+function fail(m) { $('#main').innerHTML = '<div class="card state"><div class="ic">' + icon('alert') + '</div><h2>Can’t open this link</h2><p class="muted">' + h(m) + '</p></div>'; }
+
+function load() {
+  api('api_getShare', TOKEN).then(function (d) { DATA = d; draw(); }).catch(function (e) { fail(errMsg(e)); });
+}
+
+function draw() {
+  var d = DATA;
+  if (d.companyName) { $('#brandName').textContent = d.companyName + ' · Graphics team'; $('#brandMark').textContent = d.companyName.charAt(0); }
+  $('#main').innerHTML =
+    '<div><span class="faint small mono">' + h(d.taskId) + ' · ' + h(d.requirementId) + '</span><h1>' + h(d.title) + '</h1>' +
+    '<p class="muted" style="margin:0">' + h(d.status) + (d.dueText ? ' · due ' + h(d.dueText) : '') + (d.department ? ' · requested by ' + h(d.requesterName) + ' (' + h(d.department) + ')' : '') + '</p></div>' +
+    (d.hold ? '<div class="alert warn"><b>The graphics team is waiting for this' + (d.hold.dept ? ' from ' + h(d.hold.dept) : '') + ':</b><div class="pre" style="margin-top:4px;font-size:15px">' + h(d.hold.reason) + '</div>' +
+      '<div class="small" style="margin-top:6px">Send it below — the design work is paused until it arrives.</div></div>' : '') +
+
+    '<div class="card"><div class="card-h"><h3>Send details or files</h3></div><div class="card-b stack">' +
+    '<div class="grid-2"><div class="field"><label class="req" for="nm">Your name</label><input type="text" id="nm" maxlength="100" autocomplete="name" value="' + h(ME.name || '') + '"></div>' +
+    '<div class="field"><label for="dp">Department</label><input type="text" id="dp" maxlength="100" value="' + h(ME.dept || '') + '" placeholder="e.g. Quality"></div></div>' +
+    '<div class="field"><label for="msg">Message</label><textarea id="msg" rows="3" maxlength="4000" placeholder="e.g. NI table attached. Barcode: 8901234567890"></textarea></div>' +
+    '<div class="drop" id="drop" tabindex="0">' + icon('upload').replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-4px"') + ' Attach files (NI table, barcode, label text…) — tap or drop here</div>' +
+    '<input type="file" id="fin" multiple class="hidden"><div id="flist"></div>' +
+    '<div><button class="btn primary" id="sendBtn">' + icon('send') + ' Send to the graphics team</button></div><div id="sendOut"></div></div></div>' +
+
+    '<div class="card"><div class="card-h"><h3>Designs</h3><span class="faint small">Tap to view · download any time</span></div><div class="card-b">' +
+    (d.creatives.length ? '<div class="grid">' + d.creatives.map(function (c, i) {
+      return '<div class="it"><button class="ph" data-i="' + i + '" aria-label="View ' + h(c.title) + '">' + h(c.ext || 'file') + '</button>' +
+        '<div class="bd"><div><div class="t">' + h(c.title) + ' <span class="faint">' + h(c.version) + '</span></div><div class="s' + (c.isFinal ? ' fin' : '') + '">' + (c.isFinal ? '★ ' : '') + h(c.state) + '</div></div>' +
+        '<button class="dlb" data-dl="' + i + '" title="Download" aria-label="Download ' + h(c.title) + '">' + icon('download') + '</button></div></div>';
+    }).join('') + '</div>' : '<p class="faint">No designs uploaded yet.</p>') + '</div></div>' +
+
+    (d.files.length ? '<div class="card"><div class="card-h"><h3>Files on this task</h3></div><div class="card-b files">' + d.files.map(function (f, i) {
+      return '<div class="row between"><div class="ellipsis"><b>' + h(f.title) + '</b><div class="faint small">' + h(f.from) + ' · ' + fileSize(f.size) + (f.uploadedAt ? ' · ' + fmtDateTime(f.uploadedAt) : '') + '</div></div>' +
+        '<button class="btn sm" data-fdl="' + i + '">' + icon('download') + ' Download</button></div>';
+    }).join('') + '</div></div>' : '') +
+
+    (d.updates.length ? '<div class="card"><div class="card-h"><h3>Updates</h3></div><div class="card-b">' + d.updates.map(function (u) {
+      var label = { hold: 'Put on hold', resume: 'Work resumed', shared_info: 'Details sent by ' + u.from, reopened: 'Reopened for changes' }[u.kind] || u.kind;
+      return '<div class="upd"><b>' + h(label) + '</b> <span class="faint small">' + fmtDateTime(u.at) + '</span>' + (u.text ? '<div class="pre muted">' + h(u.text) + '</div>' : '') + '</div>';
+    }).join('') + '</div></div>' : '');
+
+  wire();
+  thumbs();
+}
+
+function wire() {
+  var drop = $('#drop'), fin = $('#fin');
+  drop.onclick = function () { fin.click(); };
+  drop.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fin.click(); } };
+  fin.onchange = function () { addFiles(fin.files); fin.value = ''; };
+  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('on'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('on'); }); });
+  drop.addEventListener('drop', function (e) { addFiles(e.dataTransfer.files); });
+  $('#sendBtn').onclick = send;
+  $all('[data-i]').forEach(function (b) { b.onclick = function () { openGal(Number(b.getAttribute('data-i'))); }; });
+  $all('[data-dl]').forEach(function (b) { b.onclick = function () { dl('version', DATA.creatives[Number(b.getAttribute('data-dl'))].id, b); }; });
+  $all('[data-fdl]').forEach(function (b) { b.onclick = function () { dl('attachment', DATA.files[Number(b.getAttribute('data-fdl'))].id, b); }; });
+  drawFiles();
+}
+
+function addFiles(list) {
+  var ext = DATA.upload.extensions, max = DATA.upload.maxMB;
+  Array.prototype.forEach.call(list, function (f) {
+    var e = (f.name.split('.').pop() || '').toLowerCase();
+    if (ext.indexOf(e) === -1) return toast(f.name + ': this file type isn’t allowed (' + ext.join(', ') + ').', true);
+    if (f.size > max * 1048576) return toast(f.name + ' is larger than ' + max + ' MB.', true);
+    FILES.push({ file: f, state: 'ready', progress: 0 });
+  });
+  drawFiles();
+}
+
+function drawFiles() {
+  $('#flist').innerHTML = FILES.map(function (x, i) {
+    return '<div class="fl"><span class="ellipsis">' + h(x.file.name) + ' <span class="faint">' + fileSize(x.file.size) + '</span></span><span class="small">' +
+      (x.state === 'uploading' ? Math.round(x.progress * 100) + '%' : x.state === 'done' ? '✓' : x.state === 'error' ? '<span style="color:var(--bad)">' + h(x.error || 'Failed') + '</span>' :
+        '<button class="btn ghost sm" data-rm="' + i + '">Remove</button>') + '</span></div>';
+  }).join('');
+  $all('[data-rm]').forEach(function (b) { b.onclick = function () { FILES.splice(Number(b.getAttribute('data-rm')), 1); drawFiles(); }; });
+}
+
+function send() {
+  var name = $('#nm').value.trim(), dept = $('#dp').value.trim(), msg = $('#msg').value.trim();
+  if (name.length < 2) { toast('Enter your name.', true); return $('#nm').focus(); }
+  if (!msg && !FILES.length) return toast('Write a message or attach a file.', true);
+  ME = { name: name, dept: dept }; try { localStorage.setItem('gfxShareMe', JSON.stringify(ME)); } catch (e) {}
+  var btn = $('#sendBtn'); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:15px;height:15px"></span> Sending…';
+  var ok = 0;
+  runPool(FILES.filter(function (x) { return x.state !== 'done'; }), 3, function (x) {
+    x.state = 'uploading'; drawFiles();
+    return uploadFile(x.file, { kind: 'share', share: TOKEN, uploaderName: name + (dept ? ' (' + dept + ')' : '') }, function (p) { x.progress = p; drawFiles(); })
+      .then(function () { x.state = 'done'; ok++; drawFiles(); }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); });
+  }).then(function () {
+    return api('api_shareMessage', TOKEN, { name: name, dept: dept, message: msg, files: ok });
+  }).then(function (r) {
+    toast(r.message);
+    FILES = FILES.filter(function (x) { return x.state === 'error'; });
+    load();
+  }).catch(function (e) {
+    toast(errMsg(e), true);
+    btn.disabled = false; btn.innerHTML = icon('send') + ' Send to the graphics team';
+  });
+}
+
+function thumbs() {
+  var items = DATA.creatives.map(function (c) { return { kind: 'version', id: c.id }; });
+  for (var i = 0; i < items.length; i += 24) {
+    api('api_shareThumbs', TOKEN, items.slice(i, i + 24)).then(function (m) {
+      DATA.creatives.forEach(function (c, k) {
+        var u = m['version:' + c.id]; if (!u) return;
+        THUMBS[c.id] = u;
+        var b = $('[data-i="' + k + '"]'); if (b) { b.style.backgroundImage = 'url("' + u + '")'; b.textContent = ''; }
+      });
+    }).catch(function () {});
+  }
+}
+
+function dl(kind, id, b) {
+  b.disabled = true; toast('Preparing download…');
+  api('api_shareFile', TOKEN, kind, id, 'original').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); })
+    .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+}
+
+function openGal(start) {
+  gallery(DATA.creatives.map(function (c) {
+    return { title: c.title + ' · ' + c.version, status: c.isFinal ? 'Final (approved)' : c.state, sub: DATA.title,
+      load: function () { return api('api_shareFile', TOKEN, 'version', c.id, 'preview'); },
+      download: function () { return api('api_shareFile', TOKEN, 'version', c.id, 'original'); } };
+  }), { start: start });
+}
+</script>
+</body>
+</html>

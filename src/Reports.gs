@@ -54,7 +54,7 @@ function computeReport_(range) {
   }).filter(function (x) { return x !== null && x >= 0; });
 
   var completionDays = completedIn.filter(function (t) { return t.assignedAt; })
-    .map(function (t) { return hoursBetween_(t.assignedAt, t.completedAt) / 24; });
+    .map(function (t) { return workDays_(t); });
 
   // Revision cycles: "changes" decisions per completed task
   var changesByTask = {};
@@ -82,7 +82,7 @@ function computeReport_(range) {
       name: u.name, email: u.email, role: u.role, active: bool_(u.active),
       assigned: assigns.filter(function (a) { return a.assigneeEmail === u.email && inRange_(a.assignedAt, r); }).length,
       completed: doneIn.length,
-      avgCompletionDays: round1_(avg_(doneIn.filter(function (t) { return t.assignedAt; }).map(function (t) { return hoursBetween_(t.assignedAt, t.completedAt) / 24; }))),
+      avgCompletionDays: round1_(avg_(doneIn.filter(function (t) { return t.assignedAt; }).map(function (t) { return workDays_(t); }))),
       activeNow: mine.filter(function (t) { return CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.APPROVED; }).length,
       overdueNow: mine.filter(isOverdue_).length,
       revisionCycles: dec.filter(function (d) { return d.decision === 'changes'; }).length,
@@ -122,6 +122,8 @@ function computeReport_(range) {
       avgRevisionsPerCompletedTask: round1_(avg_(completedIn.map(function (t) { return changesByTask[t.taskId] || 0; }))),
       approvalRate: decisionsIn.length ? Math.round(approvedCount / decisionsIn.length * 100) : null,
       decisions: decisionsIn.length,
+      onHoldOthers: tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; }).length,
+      onHoldInternal: tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && (!t.holdParty || t.holdParty === 'internal'); }).length,
       creativesDone: Object.keys(creativesDoneTotal).length
     },
     designers: designers,
@@ -134,6 +136,11 @@ function computeReport_(range) {
 
 function api_getReports(range) {
   return respond_(function () { requireLeader_(); return computeReport_(range); });
+}
+
+/** Days from assignment to completion, minus time spent on hold. */
+function workDays_(t) {
+  return Math.max(0, hoursBetween_(t.assignedAt, t.completedAt) / 24 - (Number(t.heldMs) || 0) / 864e5);
 }
 
 /** CSV text for download. kind: tasks | designers | decisions */

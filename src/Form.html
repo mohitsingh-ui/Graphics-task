@@ -55,6 +55,7 @@
   .cr .dl { border: 0; background: none; padding: 2px; color: var(--accent); cursor: pointer; display: inline-flex; }
   .cr .dl svg { width: 16px; height: 16px; }
   .st-received, .st-on-hold { background: var(--muted-soft); color: var(--text-2); }
+  .st-waiting-for-your-input { background: var(--warn-soft); color: #7a4f00; }
   .st-in-progress { background: var(--accent-soft); color: var(--accent-ink); }
   .st-ready-for-your-review { background: var(--warn-soft); color: var(--warn); }
   .st-being-revised { background: var(--info-soft); color: var(--info); }
@@ -125,6 +126,27 @@ function renderMy() {
       };
     });
     wireCreatives(el);
+    $all('[data-sendinfo]', el).forEach(function (b) {
+      b.onclick = function () {
+        var w = null; try { w = window.open('', '_blank'); } catch (x) { w = null; }
+        b.disabled = true;
+        api('api_trackShareLink', TRACKS, b.getAttribute('data-sendinfo')).then(function (r) {
+          if (w) w.location = r.url; else location.href = r.url;
+          b.disabled = false;
+        }).catch(function (e) { if (w) w.close(); toast(errMsg(e), true); b.disabled = false; });
+      };
+    });
+    $all('[data-askchg]', el).forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-askchg');
+        modal({ title: 'What needs to change?', body: '<p class="muted" style="margin-top:0">We’ll send this to the graphics team lead, who will reopen the request.</p><div class="field"><textarea id="akM" rows="4" maxlength="3000" placeholder="e.g. Change the MRP to ₹899"></textarea></div><div class="alert bad hidden" data-form-error></div>',
+          actions: [{ label: 'Cancel' }, { label: 'Send', cls: 'primary', onClick: function (close, m) {
+            var v = $('#akM', m).value.trim();
+            if (v.length < 5) return fieldErrors(m, 'Describe what needs to change.');
+            return api('api_trackAskChanges', TRACKS, id, v).then(function (r) { close(); toast(r.message); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+          } }] });
+      };
+    });
     $all('[data-approveall]', el).forEach(function (b) {
       b.onclick = function () {
         var ids = b.getAttribute('data-approveall').split(',');
@@ -195,16 +217,20 @@ function reqCard(r) {
   }).concat(r.finalLinks.map(function (u, i) {
     return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
   })).join('');
-  acts = all + acts;
+  acts = (r.hold ? '<button class="btn primary sm" data-sendinfo="' + h(r.requirementId) + '">' + icon('send') + ' Send the details</button>' : '') + all + acts +
+    (r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '');
   var cr = r.creatives || [];
   var galleryHtml = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
     '<div class="gallery">' + cr.map(function (c) {
       return '<div class="cr"><button class="ph" data-view="' + h(c.versionId) + '" data-title="' + h(c.title + ' · ' + c.version) + '" data-state="' + h(c.state) + '" data-sub="' + h(r.title + ' · ' + r.requirementId) + '" data-img="' + (c.isImage ? '1' : '') + '" aria-label="View ' + h(c.title) + '">' + h(c.ext || 'file') + '</button>' +
-        '<div class="info"><div class="t" title="' + h(c.title) + '">' + h(c.title) + '</div><div class="s' + (c.state === 'Approved' ? ' ok' : '') + '"><span>' + h(c.version) + ' · ' + h(c.state) + '</span>' +
+        '<div class="info"><div class="t" title="' + h(c.title) + '">' + (c.isFinal ? '★ ' : '') + h(c.title) + '</div><div class="s' + (c.state === 'Approved' ? ' ok' : '') + '"><span>' + h(c.version) + ' · ' + h(c.state) + '</span>' +
         (c.canDownload ? '<button class="dl" data-dl="' + h(c.versionId) + '" title="Download" aria-label="Download ' + h(c.title) + '">' + icon('download') + '</button>' : '') + '</div></div></div>';
     }).join('') + '</div>' : '';
   return '<div class="req-card"><div class="top"><div><h3>' + h(r.title) + '</h3><div class="meta">' + h(r.requirementId) + ' · sent ' + fmtDate(r.submittedAt) +
     ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' +
+    (r.hold ? '<div class="alert warn" style="margin-top:12px"><b>We need something from you' + (r.hold.dept ? ' (' + h(r.hold.dept) + ')' : '') + '</b><div class="pre" style="margin-top:4px">' + h(r.hold.reason) +
+      '</div><div class="small" style="margin-top:6px">The design is ready to see below. The work is paused until we get this.</div></div>' : '') +
+    (r.reopened ? '<div class="alert info" style="margin-top:12px">Reopened for changes — the ★ final files stay available until the new ones are approved.</div>' : '') +
     progress + galleryHtml + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
 }
 

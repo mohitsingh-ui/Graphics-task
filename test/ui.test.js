@@ -375,6 +375,65 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.strictEqual(t.task.status, 'Completed');
     });
 
+    await step('Packaging: hold waiting on Quality, share link, Quality sends NI table, approve closes, reopen', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Rahul', department: 'Quality', email: 'rahul@example.org', brief: 'A2 Ghee 1L packaging — front and back', preferredDate: future(3), quantity: 1 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' });
+      const b = await bannerPng('Gir A2 Bilona Ghee 1L', 30);
+      const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: 'Ghee 1L pack', fileName: 'pack.png', size: b.length }).data;
+      const v1 = env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId;
+      env.call(A, 'api_submitForApproval', tid, [v1]);
+
+      await page.goto(BASE + '/page?as=' + A + '&r=task/' + tid);
+      await page.waitForSelector('#aHold');
+      await page.click('#aHold');
+      await page.fill('#hdR', 'Design done. Waiting for NI table and barcode.');
+      await page.fill('#hdD', 'Quality');
+      await shot('38-hold-modal');
+      await page.click('.modal-f >> text=Put on hold');
+      await page.waitForSelector('.hold-banner');
+      assert.ok((await page.textContent('.hold-banner')).includes('waiting on Quality'));
+      await shot('39-task-on-hold');
+      await page.click('#aShare');
+      await page.fill('#shN', 'Quality team');
+      await page.click('.modal-f >> text=Create link');
+      await page.waitForSelector('#shUrl');
+      const url = await page.inputValue('#shUrl');
+      const tok = /t=([A-Za-z0-9_-]+)/.exec(url)[1];
+      await page.click('.modal-f >> text=Close');
+
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+      mob.on('pageerror', e => errors.push('share pageerror: ' + e.message));
+      await mob.goto(BASE + '/page?p=share&t=' + tok);
+      await mob.waitForSelector('#sendBtn');
+      assert.ok((await mob.textContent('main')).includes('Waiting for NI table and barcode'));
+      await mob.fill('#nm', 'Rahul');
+      await mob.fill('#dp', 'Quality');
+      await mob.fill('#msg', 'NI table attached. Barcode: 8901234567890');
+      await mob.setInputFiles('#fin', { name: 'NI-table.png', mimeType: 'image/png', buffer: await bannerPng('NI table', 120) });
+      await mob.waitForTimeout(200);
+      await mob.screenshot({ path: path.join(OUT, '40-share-page-mobile.png'), fullPage: true });
+      const ov = await mob.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(ov <= 1, 'share page overflows on phone by ' + ov);
+      await mob.click('#sendBtn');
+      await mob.waitForSelector('text=Details sent by Rahul (Quality)', { timeout: 20000 });
+      await mob.close();
+
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('.hold-banner');
+      assert.ok((await page.textContent('body')).includes('NI-table.png'));
+      await page.click('[data-ok]');
+      await page.click('.modal-f >> text=Approve');
+      await page.waitForSelector('#aReopen');
+      await shot('41-completed-after-hold');
+      await page.click('#aReopen');
+      await page.fill('#roR', 'Change MRP to Rs 899 on the back panel');
+      await page.fill('#roD', future(2));
+      await page.click('.modal-f >> text=Reopen task');
+      await page.waitForSelector('text=Reopened for changes');
+      await shot('42-reopened-task');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

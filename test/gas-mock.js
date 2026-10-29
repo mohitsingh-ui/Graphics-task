@@ -186,6 +186,7 @@ function createEnv(opts = {}) {
       const shifted = new Date(d.getTime() + 330 * 60000); // Asia/Kolkata
       if (fmt === 'yyyy-MM-dd') return shifted.toISOString().slice(0, 10);
       if (fmt === 'Z') return '+0530';
+      if (fmt === 'HH:mm') return shifted.toISOString().slice(11, 16);
       if (fmt === 'yyyy-MM-dd_HHmm') return shifted.toISOString().slice(0, 16).replace('T', '_').replace(':', '');
       throw new Error('fmt ' + fmt);
     }

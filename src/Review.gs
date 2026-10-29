@@ -23,7 +23,8 @@ function lookupToken_(token) {
   if (tok.revokedAt) return Object.assign(ctx, { state: 'revoked' });
   if (new Date(tok.expiresAt).getTime() < Date.now()) return Object.assign(ctx, { state: 'expired' });
   var task = dbGet_('Tasks', req.taskId);
-  if (!task || task.status === STATUS.CANCELLED || task.status === STATUS.ON_HOLD) return Object.assign(ctx, { state: 'revoked' });
+  // A task on hold (e.g. waiting for the NI table) can still be reviewed.
+  if (!task || task.status === STATUS.CANCELLED) return Object.assign(ctx, { state: 'revoked' });
   return Object.assign(ctx, { state: 'open' });
 }
 

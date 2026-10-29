@@ -35,10 +35,11 @@ VIEWS.reports = function (arg, el, token) {
       '<button class="btn" id="rApply">Apply</button></div></div>' +
       '<div class="kpis">' +
       kpiCard('Requirements received', s.requirements) + kpiCard('Creatives done', s.creativesDone, null, { sub: 'approved in this period', color: 'var(--ok)' }) + kpiCard('Tasks completed', s.tasksCompleted) + kpiCard('Overdue now', s.overdueNow, null, { alert: true }) +
-      kpiCard('Avg. completion', s.avgCompletionDays === null ? '—' : s.avgCompletionDays + 'd', null, { sub: 'assignment → completion' }) +
+      kpiCard('Avg. completion', s.avgCompletionDays === null ? '—' : s.avgCompletionDays + 'd', null, { sub: 'assignment → completion, hold time excluded' }) +
       kpiCard('Avg. approval time', s.avgApprovalHours === null ? '—' : (s.avgApprovalHours >= 48 ? Math.round(s.avgApprovalHours / 24 * 10) / 10 + 'd' : s.avgApprovalHours + 'h'), null, { sub: 'link sent → decision' }) +
       kpiCard('Revision cycles', s.revisionCycles, null, { sub: (s.avgRevisionsPerCompletedTask === null ? '—' : s.avgRevisionsPerCompletedTask) + ' per completed task' }) +
       kpiCard('Approval rate', s.approvalRate === null ? '—' : s.approvalRate + '%', null, { sub: s.decisions + ' decisions' }) +
+      kpiCard('On hold now', (s.onHoldOthers || 0) + (s.onHoldInternal || 0), null, { sub: (s.onHoldOthers || 0) + ' waiting on other teams · not counted as late' }) +
       '</div>' +
       '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Designers</h3><button class="btn sm" data-csv="designers">' + icon('download') + ' CSV</button></div><div class="table-wrap">' +
       (r.designers.length ? '<table class="t"><thead><tr><th>Designer</th><th title="Creatives approved in this period">Creatives done</th><th title="Creatives uploaded in this period">Uploaded</th><th>Tasks assigned</th><th>Tasks completed</th><th>Avg. completion</th><th>Active now</th><th>Overdue now</th><th>Revision cycles</th><th>Approval rate</th></tr></thead><tbody>' +

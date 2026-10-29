@@ -89,7 +89,7 @@ function batchItem_(versionId) {
   if (!t) return null;
   var openReq = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
   var dec = dbFind_('ApprovalDecisions', function (x) { return x.versionId === versionId; }).pop();
-  var state = openReq && [STATUS.CANCELLED, STATUS.ON_HOLD].indexOf(t.status) === -1 ? 'open'
+  var state = openReq && t.status !== STATUS.CANCELLED ? 'open'
     : v.status === VSTATUS.APPROVED ? 'approved' : v.status === VSTATUS.CHANGES ? 'changes' : 'closed';
   return {
     versionId: v.versionId, title: d.title || 'Creative', version: 'V' + v.versionNo, task: t.title, purpose: d.purpose || '',

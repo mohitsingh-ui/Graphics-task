@@ -63,7 +63,7 @@ function api_startUpload(ctx) {
   return respond_(function () {
     ctx = ctx || {};
     var s = settings_();
-    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version'], 'Upload type');
+    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version', 'share'], 'Upload type');
     var rec = { kind: kind, received: 0, sigChecked: false };
     var folderId;
 
@@ -84,6 +84,16 @@ function api_startUpload(ctx) {
       rec.requirementId = info.requirementId;
       rec.file = f;
       folderId = info.folderId;
+    } else if (kind === 'share') {
+      // Another department sending files through a shared task link (no login).
+      var sx = shareFromToken_(ctx.share);
+      rateLimit_('shareupload:' + String(ctx.share).slice(0, 60), 30, 600);
+      rec.owner = 'share:' + sha256_(ctx.share);
+      rec.taskId = sx.task.taskId;
+      rec.requirementId = sx.task.requirementId;
+      rec.from = str_(ctx.uploaderName, 100, 'Your name', false);
+      rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, s.maxPublicUploadMB);
+      folderId = sx.task.folderId || ensureFolderId_('references', [String(new Date().getFullYear()), sx.task.requirementId]);
     } else {
       var u = currentUser_();
       var task = requireTask_(u, ctx.taskId);
@@ -123,7 +133,7 @@ function api_startUpload(ctx) {
 function ownUpload_(uploadId) {
   var rec = loadUpload_(uploadId);
   var user = null;
-  if (rec.owner.indexOf('ticket:') !== 0) {
+  if (rec.owner.indexOf('ticket:') !== 0 && rec.owner.indexOf('share:') !== 0) {
     user = currentUser_();
     if (user.email !== rec.owner) throw AppError_('UPLOAD_EXPIRED', 'Upload session not found.');
   }
@@ -197,6 +207,15 @@ function completeUpload_(uploadId, rec, user, file) {
   if (bad) {
     try { DriveApp.getFileById(file.id).setTrashed(true); } catch (e) { console.warn('Could not remove rejected upload ' + file.id); }
     throw AppError_('VALIDATION', bad);
+  }
+  if (rec.kind === 'share') {
+    return withLock_(function () {
+      var att = dbInsert_('ReferenceFiles', {
+        attachmentId: 'ATT-' + uuid_(), requirementId: rec.requirementId || '', taskId: rec.taskId, fileId: file.id, fileName: rec.file.name,
+        mimeType: rec.file.mime, sizeBytes: String(rec.file.size), uploadedBy: 'shared link: ' + (rec.from || ''), uploadedAt: nowIso_()
+      });
+      return { done: true, attachmentId: att.attachmentId, fileName: att.fileName };
+    });
   }
   if (rec.kind === 'reference' || rec.kind === 'taskref') {
     return withLock_(function () {

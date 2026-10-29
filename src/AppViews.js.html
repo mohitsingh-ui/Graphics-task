@@ -25,6 +25,7 @@ function leaderOverview(el, token) {
       kpiCard('Revisions required', k.revisions, 'tasks/status=' + encodeURIComponent('Changes Requested'), { color: 'var(--bad)' }) +
       kpiCard('Completed', k.completed, 'tasks/status=Completed', { color: 'var(--ok)', sub: k.completedThisMonth + ' this month' }) +
       kpiCard('Overdue', k.overdue, 'tasks/status=overdue', { alert: true, color: 'var(--bad)' }) +
+      kpiCard('On hold', (k.onHoldOthers || 0) + (k.onHoldInternal || 0), 'tasks/status=' + encodeURIComponent('On Hold'), { color: '#8a5a12', sub: (k.onHoldOthers || 0) + ' waiting on other teams' }) +
       '</div>' +
       '<div class="two-col" style="margin-top:18px"><div class="stack">' +
       listCard('Incoming requirements', d.incoming, 'Nothing new. Requirements raised through the form land here.', 'requirements', true) +
@@ -99,6 +100,12 @@ function activityText(a) {
     case 'reward': return 'gave a reward: ' + h(a.toValue);
     case 'final_link': return a.toValue === 'added' ? 'shared the final files link' : 'removed the final files link';
     case 'overdue': return '<span class="overdue-flag">became overdue</span>';
+    case 'hold': return 'put this <b>on hold</b> — waiting on ' + h(a.toValue);
+    case 'resume': return '<b>resumed</b> the task';
+    case 'reopened': return '<b>reopened</b> the task for changes';
+    case 'shared': return 'shared this task with a link';
+    case 'shared_info': return '<b>sent details</b> through the shared link';
+    case 'change_request': return '<b>asked for changes</b> on the finished request';
     default: return h(a.action);
   }
 }
@@ -156,7 +163,7 @@ function designerCard(t) {
     '<div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
     '<div class="tc-title">' + h(t.title) + '</div>' +
     '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + ' creatives approved</div>' +
-    '<div class="row between">' + statusBadge(t.status) + '<span class="small">Due ' + dueLabel(t) + '</span></div>' +
+    '<div class="row between"><span>' + statusBadge(t.status) + holdChip(t) + '</span><span class="small">Due ' + dueLabel(t) + '</span></div>' +
     '<div class="row"><div class="grow">' + progressBar(t.progress, t.status === 'Completed') + '</div><span class="faint small">' + h(t.progress) + '%</span></div></div>';
 }
 
@@ -174,7 +181,7 @@ VIEWS.requirements = function (arg, el, token) {
       rows.map(function (t) {
         return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' + h(t.requirementId) + ' · ' + h(t.taskId) + ' · ' + ago(t.createdAt) + '</div></td>' +
           '<td>' + h(t.requesterName) + '<div class="faint small">' + h(t.department) + '</div></td><td>' + h(t.creativeType) + '</td><td>' + h(t.deliverablesRequired) + '</td>' +
-          '<td>' + dueLabel(t) + '</td><td>' + priorityBadge(t.priority) + '</td><td>' + statusBadge(t.status) + '</td>' +
+          '<td>' + dueLabel(t) + '</td><td>' + priorityBadge(t.priority) + '</td><td>' + statusBadge(t.status) + holdChip(t) + '</td>' +
           '<td><button class="btn sm primary" data-go="task/' + h(t.taskId) + '">Review & assign</button></td></tr>';
       }).join('') + '</tbody></table>' : emptyState('No requirements waiting.', 'New requests from the form will show up here.')) + '</div></div>';
     wireGo(el);
@@ -306,7 +313,7 @@ function drawTasks() {
       rows.map(function (t) {
         return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td class="mono">' + h(t.taskId) + '</td><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' +
           h([t.campaign, t.department].filter(Boolean).join(' · ')) + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
-          '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + '</td>' +
+          '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + holdChip(t) + '</td>' +
           '<td><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="faint small">' + h(t.progress) + '%</span></div></td>' +
           '<td>' + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + '</td></tr>';
       }).join('') + '</tbody></table></div>' : emptyState('No tasks match these filters.', 'Try clearing a filter.', 'tasks');

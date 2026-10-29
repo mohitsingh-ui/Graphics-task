@@ -353,7 +353,13 @@ scenario('6 + 9. Approval recorded & notified; 1 of 5 approved does not complete
 });
 
 scenario('Approval after change: a new version of an approved creative needs fresh approval', () => {
-  ok(call(LEADER, 'api_setTaskStatus', task1.taskId, 'In Progress', { reason: 'Client wants one tweak' }));
+  err(call(LEADER, 'api_setTaskStatus', task1.taskId, 'In Progress', { reason: 'x' }), 'INVALID_TRANSITION');   // use Reopen
+  err(call(A, 'api_reopenTask', task1.taskId, { reason: 'Client wants one tweak', dueDate: future(2) }), 'FORBIDDEN');
+  ok(call(LEADER, 'api_reopenTask', task1.taskId, { reason: 'Client wants one tweak', deliverableIds: [deliv1], dueDate: future(2) }));
+  const ro = ok(call(A, 'api_getTask', task1.taskId));
+  assert.strictEqual(ro.task.status, 'Changes Requested');
+  assert.strictEqual(ro.task.reopenReason, 'Client wants one tweak');
+  assert.strictEqual(ro.deliverables.find(x => x.deliverableId === deliv1).status, 'Changes Requested');
   const r = upload(A, { kind: 'version', taskId: task1.taskId, deliverableId: deliv1, note: 'tweak' }, 'banner-v3.png', png(3000));
   assert.strictEqual(r.versionNo, 3);
   ok(call(A, 'api_submitForApproval', task1.taskId, [r.versionId]));
@@ -909,6 +915,110 @@ scenario('Shared review link: founder reviews many creatives without login (appr
   assert.ok(page.html.includes('api_getBatch') && page.xframe !== env.ctx.HtmlService.XFrameOptionsMode.ALLOWALL);
 });
 
+scenario('Packaging: hold waiting on another department, they send NI table via link, approval closes it, reopen later', () => {
+  state.currentUser = '';
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Rahul', department: 'Quality', email: 'rahul@example.org', brief: 'Ghee 1L pack front + back', preferredDate: future(1), preferredTime: '18:00', quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(1), dueTime: '18:00', priority: 'High' }));
+  const v1 = upload(A, { kind: 'version', taskId: tid, title: 'Ghee 1L pack' }, 'pack.png', png(900)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v1]));
+  // Designer puts it on hold: waiting for NI table + barcode from Quality
+  err(call(B, 'api_holdTask', tid, { reason: 'Waiting for info', party: 'other' }), 'NOT_FOUND');
+  err(call(A, 'api_holdTask', tid, { reason: '', party: 'other' }), 'VALIDATION');
+  const mails0 = state.mail.length;
+  ok(call(A, 'api_holdTask', tid, { reason: 'Waiting for NI table and barcode', party: 'other', dept: 'Quality' }));
+  let t = ok(call(LEADER, 'api_getTask', tid));
+  assert.strictEqual(t.task.status, 'On Hold');
+  assert.deepStrictEqual([t.task.hold.party, t.task.hold.dept, t.task.hold.reason], ['other', 'Quality', 'Waiting for NI table and barcode']);
+  assert.strictEqual(t.task.overdue, false);
+  assert.ok(state.mail.slice(mails0).some(m => m.to === 'rahul@example.org' && /We need something from you/.test(m.subject)), 'requester told what is needed');
+  const my = ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0];
+  assert.strictEqual(my.status, 'Waiting for your input');
+  assert.strictEqual(my.hold.reason, 'Waiting for NI table and barcode');
+  assert.strictEqual(ok(call(LEADER, 'api_leaderDashboard')).kpis.onHoldOthers >= 1, true);
+  // files still visible + review link still works while on hold
+  const toks = reviewTokensFromMail('Please review');
+  assert.strictEqual(ok(call('', 'api_getReview', toks[toks.length - 1])).state, 'open');
+  // deadline passes while on hold → no overdue alert
+  const raw = state.spreadsheets[state.props.SPREADSHEET_ID];
+  env.ctx.DB_CACHE_ = {};
+  const overdueBefore = state.mail.filter(m => /Overdue/.test(m.subject)).length;
+  // Share the task with Quality; they view, download and send the NI table
+  const share = ok(call(A, 'api_createTaskShare', tid, 'Quality team'));
+  const stok = /t=([A-Za-z0-9_-]+)/.exec(share.url)[1];
+  state.currentUser = '';
+  const sh = ok(call('', 'api_getShare', stok));
+  assert.strictEqual(sh.hold.reason, 'Waiting for NI table and barcode');
+  assert.strictEqual(sh.creatives.length, 1);
+  assert.ok(!JSON.stringify(sh).includes(A) && !JSON.stringify(sh).includes('fileId'), 'no designer email / Drive ids');
+  assert.ok(ok(call('', 'api_shareFile', stok, 'version', v1, 'original')).base64);
+  const ni = Buffer.from('%PDF-1.4 NI table'); 
+  const st = ok(call('', 'api_startUpload', { kind: 'share', share: stok, fileName: 'NI-table.pdf', size: ni.length, uploaderName: 'Rahul' }));
+  ok(call('', 'api_uploadChunk', st.uploadId, 0, ni.toString('base64')));
+  err(call('', 'api_shareMessage', stok, { name: '', message: 'x' }), 'VALIDATION');
+  ok(call('', 'api_shareMessage', stok, { name: 'Rahul', dept: 'Quality', message: 'NI table attached, barcode 8901234567890', files: 1 }));
+  t = ok(call(LEADER, 'api_getTask', tid));
+  assert.ok(t.attachments.some(a => a.fileName === 'NI-table.pdf'), 'file lands on the task');
+  assert.ok(t.activity.some(a => a.action === 'shared_info' && /barcode 8901234567890/.test(a.note) && a.actor === 'Rahul (Quality)'));
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(n => /Details received/.test(n.title)));
+  assert.ok(ok(call('', 'api_getShare', stok)).files.some(f => f.title === 'NI-table.pdf' && f.from === 'Rahul'));
+  // designer uploads the final pack while still on hold; approval closes the task
+  const v2 = upload(A, { kind: 'version', taskId: tid, deliverableId: t.deliverables[0].deliverableId, note: 'with NI + barcode' }, 'pack2.png', png(900)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v2]));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tid)).task.status, 'On Hold', 'stays on hold until approved');
+  ok(call(LEADER, 'api_leaderDecision', v2, 'approved', ''));
+  t = ok(call(LEADER, 'api_getTask', tid));
+  assert.strictEqual(t.task.status, 'Completed', 'approval ends the hold and completes the task');
+  assert.ok(t.task.heldDays >= 0);
+  assert.ok(t.activity.some(a => a.action === 'resume'));
+  // requester asks for a change later → leader reopens; final version stays until new approval
+  const ask = ok(call('', 'api_trackAskChanges', [sub.trackToken], sub.requirementId, 'Please change the MRP to Rs 899'));
+  assert.ok(/Sent/.test(ask.message));
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(n => /Changes asked/.test(n.title)));
+  err(call(LEADER, 'api_reopenTask', tid, { reason: 'MRP change', dueDate: '2020-01-01' }), 'VALIDATION');
+  ok(call(LEADER, 'api_reopenTask', tid, { reason: 'Change MRP to Rs 899', dueDate: future(2), dueTime: '12:00' }));
+  t = ok(call(A, 'api_getTask', tid));
+  assert.strictEqual(t.task.status, 'Changes Requested');
+  assert.strictEqual(t.task.reopenCount, 1);
+  assert.strictEqual(t.deliverables[0].approvedVersionId, v2, 'final version kept');
+  const fin = ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0].creatives[0];
+  assert.ok(fin.isFinal && fin.canDownload, 'requester can still download the final while it is reopened');
+  const v3 = upload(A, { kind: 'version', taskId: tid, deliverableId: t.deliverables[0].deliverableId }, 'pack3.png', png(900)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v3]));
+  ok(call(LEADER, 'api_leaderDecision', v3, 'approved', ''));
+  t = ok(call(LEADER, 'api_getTask', tid));
+  assert.strictEqual(t.task.status, 'Completed');
+  assert.strictEqual(t.deliverables[0].approvedVersionId, v3, 'new final version');
+  // share link withdrawal
+  const shares = ok(call(LEADER, 'api_listTaskShares', tid));
+  ok(call(LEADER, 'api_revokeTaskShare', shares[0].shareId));
+  err(call('', 'api_getShare', stok), 'LINK_CLOSED');
+});
+
+scenario('Hold: deadline is paused and moved out on resume (not counted against the team)', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'P', department: 'Sales', brief: 'Hold timing', preferredDate: future(2), quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(2), priority: 'High' }));
+  ok(call(LEADER, 'api_holdTask', tid, { reason: 'Waiting for barcode', party: 'requester' }));
+  // pretend it was on hold for 3 days
+  const raw = env.ctx.dbGet_('Tasks', tid);
+  env.ctx.withLock_(() => env.ctx.dbUpdate_('Tasks', tid, { holdSince: new Date(Date.now() - 3 * 864e5).toISOString() }));
+  env.ctx.DB_CACHE_ = {};
+  ok(call(LEADER, 'api_resumeTask', tid, {}));
+  const t = ok(call(LEADER, 'api_getTask', tid)).task;
+  assert.strictEqual(t.dueDate, future(5), 'deadline moved out by the 3 days on hold');
+  assert.ok(t.heldDays >= 2.9);
+  assert.strictEqual(t.hold, null);
+  // internal hold: no automatic extension
+  ok(call(LEADER, 'api_holdTask', tid, { reason: 'Designer on leave', party: 'internal' }));
+  env.ctx.withLock_(() => env.ctx.dbUpdate_('Tasks', tid, { holdSince: new Date(Date.now() - 864e5).toISOString() }));
+  env.ctx.DB_CACHE_ = {};
+  ok(call(A, 'api_resumeTask', tid, {}));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tid)).task.dueDate, future(5));
+  // status menu "On Hold" needs a reason
+  err(call(LEADER, 'api_setTaskStatus', tid, 'On Hold', {}), 'VALIDATION');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';
@@ -925,8 +1035,8 @@ scenario('Pages render: public form, review, app shell, no-access', () => {
   env.ctx.DB_CACHE_ = {};
   const no = env.ctx.doGet({ parameter: { p: 'app' } });
   assert.ok(no.html.includes('stranger@rosierfoods.com'));
-  ['Form', 'Review', 'Batch', 'App', 'NoAccess'].forEach(n => {
-    const html = env.ctx.doGet({ parameter: n === 'Review' ? { p: 'review' } : n === 'Batch' ? { p: 'batch' } : n === 'NoAccess' ? { p: 'app' } : {} }).html;
+  ['Form', 'Review', 'Batch', 'Share', 'App', 'NoAccess'].forEach(n => {
+    const html = env.ctx.doGet({ parameter: n === 'Review' ? { p: 'review' } : n === 'Batch' ? { p: 'batch' } : n === 'Share' ? { p: 'share' } : n === 'NoAccess' ? { p: 'app' } : {} }).html;
     const scripts = html.match(/<script>([\s\S]*?)<\/script>/g) || [];
     scripts.forEach(s => { new Function(s.replace(/^<script>|<\/script>$/g, '')); }); // syntax check every inline script
   });
