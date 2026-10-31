@@ -16,7 +16,7 @@ function leaderOverview(el, token) {
     var k = d.kpis;
     el.innerHTML =
       '<div class="page-h"><div><h1>Good ' + greeting() + ', ' + h(APP.boot.user.name.split(' ')[0]) + '</h1><p>Here’s where the graphics team stands today.</p></div>' +
-      '<div class="row wrap">' + newReqButton() + '<button class="btn primary" data-go="requirements">' + icon('inbox') + ' Review requirements</button></div></div>' +
+      '<div class="row wrap">' + newReqButton() + '<button class="btn" data-assign-new>' + icon('users') + ' Assign a task</button><button class="btn primary" data-go="requirements">' + icon('inbox') + ' Review requirements</button></div></div>' +
       '<div class="kpis">' +
       kpiCard('New requirements', k.newRequirements, 'tasks/status=' + encodeURIComponent('New Requirement'), { color: 'var(--info)' }) +
       kpiCard('Unassigned', k.unassigned, 'tasks/status=unassigned', { color: '#5b3f8f' }) +
@@ -92,6 +92,8 @@ function activityText(a) {
     case 'submitted': return 'sent <b>' + h(a.toValue) + '</b> for approval';
     case 'approved': return '<span style="color:var(--ok)">approved</span> <b>' + h(a.toValue) + '</b>';
     case 'changes_requested': return '<span style="color:var(--bad)">requested changes</span> on <b>' + h(a.toValue) + '</b>';
+    case 'rejected': return '<span style="color:var(--bad)"><b>rejected</b></span> <b>' + h(a.toValue) + '</b>';
+    case 'final_folder': return 'shared the final files <b>Drive folder</b>';
     case 'comment': return 'commented';
     case 'updated': return 'updated ' + h(a.toValue);
     case 'reference_added': return 'added reference ' + h(a.toValue);
@@ -190,6 +192,41 @@ VIEWS.requirements = function (arg, el, token) {
 };
 
 /** Opens the request form as the signed-in leader (prefilled, in a new tab). */
+/** Leader: give a designer a task directly — no request form needed. */
+function directTaskModal() {
+  var team = [];
+  api('api_listTeam').then(function (d) {
+    team = d.users.filter(function (u) { return u.active; });
+    modal({
+      title: 'Assign a task', wide: true,
+      body: '<div class="field"><label class="req" for="dtT">What’s the task?</label><input type="text" id="dtT" maxlength="150" placeholder="e.g. Instagram story for Monday’s ghee launch"></div>' +
+        '<div class="field"><label for="dtB">Details</label><textarea id="dtB" rows="3" maxlength="8000" placeholder="Sizes, copy, references…"></textarea></div>' +
+        '<div class="grid-2"><div class="field"><label class="req" for="dtA">Designer</label><select id="dtA"><option value="">Choose…</option>' + team.map(function (u) {
+          return '<option value="' + h(u.email) + '">' + h(u.name) + (u.designation ? ' · ' + h(u.designation) : '') + ' — ' + u.activeTasks + ' active</option>'; }).join('') + '</select></div>' +
+        '<div class="field"><label for="dtC">Category <span class="faint">(Drive folder)</span></label><input type="text" id="dtC" list="dtCL" maxlength="80" placeholder="e.g. Meta ads"><datalist id="dtCL">' +
+          (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist></div></div>' +
+        '<div class="grid-3"><div class="field"><label class="req" for="dtD">Due date</label><input type="date" id="dtD" min="' + todayIso() + '"></div>' +
+        '<div class="field"><label for="dtTm">Time</label><input type="time" id="dtTm" step="900"></div>' +
+        '<div class="field"><label for="dtQ">No. of creatives</label><input type="number" id="dtQ" min="1" max="50" value="1"></div></div>' +
+        '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="alert bad hidden" data-form-error></div>',
+      actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
+        var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value };
+        if (!input.title) return fieldErrors(m, 'Give the task a title.');
+        if (!input.assigneeEmail) return fieldErrors(m, 'Choose a designer.');
+        if (!input.dueDate) return fieldErrors(m, 'Pick a due date.');
+        return api('api_createDirectTask', input).then(function (r) { close(); toast('Task ' + r.taskId + ' assigned'); loadNotifications(); go('task/' + r.taskId); })
+          .catch(function (e) { fieldErrors(m, errMsg(e)); });
+      } }]
+    });
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+document.addEventListener('click', function (e) {
+  var b = e.target.closest && e.target.closest('[data-assign-new]');
+  if (b) { e.preventDefault(); directTaskModal(); }
+});
+
 function newReqButton(primary) {
   var base = APP.boot.internalUrl || '';
   if (!base) return '<button class="btn' + (primary ? ' primary' : '') + '" onclick="toast(\'Add the Internal web app URL in Settings → Portal links first.\', true)">' + icon('plus') + ' New requirement</button>';
@@ -215,7 +252,8 @@ VIEWS.tasks = function (arg, el, token) {
   if (arg && arg.indexOf('status=') === 0) TASK_UI.filters = { status: decodeURIComponent(arg.slice(7)) };
   else if (!arg) TASK_UI.filters = TASK_UI.filters || {};
   el.innerHTML = '<div class="page-h"><div><h1>Task board</h1><p>Every graphics task, filter by status, priority, campaign or deadline.</p></div>' +
-    '<div class="seg" id="viewSeg"><button data-v="table">' + icon('list') + ' Table</button><button data-v="board">' + icon('board') + ' Board</button></div></div>' +
+    '<div class="row wrap">' + (APP.role === 'leader' ? '<button class="btn primary" data-assign-new>' + icon('plus') + ' Assign a task</button>' : '') +
+    '<div class="seg" id="viewSeg"><button data-v="table">' + icon('list') + ' Table</button><button data-v="board">' + icon('board') + ' Board</button></div></div></div>' +
     '<div class="card"><div class="filters" id="filters"></div><div id="taskOut"><div class="loading-page"><span class="spinner"></span></div></div></div>';
   $all('#viewSeg button').forEach(function (b) {
     b.innerHTML = b.innerHTML; b.classList.toggle('on', b.getAttribute('data-v') === TASK_UI.view);
@@ -344,13 +382,13 @@ VIEWS.approvals = function (arg, el, token) {
           '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.deliverableTitle + ' · V' + r.versionNo) + '" data-sub="' + h(r.taskId + ' · ' + r.taskTitle + ' · by ' + r.uploadedByName) + '"' +
             ' data-status="' + h(r.status === 'Open' ? 'Awaiting approval' : r.decision ? (r.decision.decision === 'approved' ? 'Approved' : 'Changes requested') : '') + '">' + ext(r.fileName) + '</div>' +
           '<div class="grow"><div class="row wrap"><b>' + h(r.deliverableTitle) + '</b><span class="badge plain">V' + h(r.versionNo) + '</span>' +
-          (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
+          (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : dec.decision === 'rejected' ? 'Rejected' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
           '<div class="faint small"><a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a> · ' + h(r.taskTitle) + ' · by <b>' + h(r.uploadedByName) + '</b> · sent ' + fmtDateTime(r.createdAt) + '</div>' +
-          (dec ? '<div class="feedback ' + (dec.decision === 'approved' ? 'approved' : 'changes') + '">' + (dec.reviewerName ? h(dec.reviewerName) + (dec.reviewerEmail ? ' (' + h(dec.reviewerEmail) + ')' : '') : 'Anonymous reviewer') +
+          (dec ? '<div class="feedback ' + (dec.decision === 'approved' ? 'approved' : 'changes') + '">' + (dec.decision === 'rejected' ? '<b>Rejected</b> · ' : '') + (dec.reviewerName ? h(dec.reviewerName) + (dec.reviewerEmail ? ' (' + h(dec.reviewerEmail) + ')' : '') : 'Anonymous reviewer') +
             ' · ' + fmtDateTime(dec.decidedAt) + (dec.channel === 'portal' ? ' · in portal' : '') + (dec.comment ? '<div class="pre">' + h(dec.comment) + '</div>' : '') + '</div>' : '') +
           '</div>' +
           (r.status === 'Open' ? '<div class="row wrap" style="flex:none"><button class="btn sm" data-link="' + h(r.versionId) + '">' + icon('link') + ' Link</button>' +
-            '<button class="btn sm danger" data-chg="' + h(r.versionId) + '">Changes</button><button class="btn sm ok" data-ok="' + h(r.versionId) + '">Approve</button></div>' : '') +
+            '<button class="btn sm ghost" data-rej="' + h(r.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(r.versionId) + '">Changes</button><button class="btn sm ok" data-ok="' + h(r.versionId) + '">Approve</button></div>' : '') +
           '</div>';
       }).join('') : emptyState(scope === 'open' ? 'Nothing waiting for a decision.' : 'No decisions yet.', '', 'check')) + '</div>' +
       (scope === 'open' ? '<div id="sharedLinks"></div>' : '');
@@ -359,6 +397,7 @@ VIEWS.approvals = function (arg, el, token) {
     loadThumbs(el);
     $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved'); }; });
     $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes'); }; });
+    $all('[data-rej]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-rej'), 'rejected'); }; });
     $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
     if ($('#selAll')) {
       var picks = $all('[data-pick]', el), sync = function () {
@@ -522,17 +561,18 @@ function openAsset(kind, id, name) {
 }
 
 function leaderDecide(versionId, decision, after) {
-  var approve = decision === 'approved';
+  var approve = decision === 'approved', reject = decision === 'rejected';
   modal({
-    title: approve ? 'Approve this creative?' : 'Request changes',
+    title: approve ? 'Approve this creative?' : reject ? 'Reject this creative?' : 'Request changes',
     body: (approve ? '<p class="muted">The approval is recorded under your name. Any open review links for this version will stop working.</p>' : '') +
-      '<div class="field"><label class="' + (approve ? '' : 'req') + '">Feedback for the designer</label><textarea id="ldc" rows="4" maxlength="4000"></textarea></div><div class="alert bad hidden" data-form-error></div>',
+      (reject ? '<p class="muted">A rejected creative won’t be used and doesn’t count toward the task. The designer is told why; if the task still needs creatives, they upload a new one.</p>' : '') +
+      '<div class="field"><label class="' + (approve ? '' : 'req') + '">' + (reject ? 'Why is it rejected?' : 'Feedback for the designer') + '</label><textarea id="ldc" rows="4" maxlength="4000"></textarea></div><div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
-      label: approve ? 'Approve' : 'Send feedback', cls: approve ? 'ok' : 'danger solid', onClick: function (close, m) {
+      label: approve ? 'Approve' : reject ? 'Reject' : 'Send feedback', cls: approve ? 'ok' : 'danger solid', onClick: function (close, m) {
         var c = $('#ldc', m).value.trim();
-        if (!approve && c.length < 5) return fieldErrors(m, 'Tell the designer what to change.');
+        if (!approve && c.length < 5) return fieldErrors(m, reject ? 'Say why it’s rejected.' : 'Tell the designer what to change.');
         return api('api_leaderDecision', versionId, decision, c).then(function () {
-          close(); toast(approve ? 'Approved' : 'Feedback sent'); if (after) after(); else render(APP.route); loadNotifications();
+          close(); toast(approve ? 'Approved' : reject ? 'Rejected' : 'Feedback sent'); if (after) after(); else render(APP.route); loadNotifications();
         }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]

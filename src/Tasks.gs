@@ -84,6 +84,8 @@ function completeTask_(task, actor, note) {
         var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
           .map(function (t) { return t.finalLink; });
         if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
+        var folderUrl = finalFolderUrl_(req);
+        if (folderUrl) finals.unshift(folderUrl);
         var track = trackUrl_(issueTrackToken_(req.email));
         sendMail_(req.email, 'Your creative is ready (' + req.requirementId + ')',
           'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
@@ -138,6 +140,7 @@ function api_bootstrap() {
       companyName: s.companyName, portalName: s.portalName,
       priorities: s.priorities, statuses: STATUS_ORDER, progressSteps: PROGRESS_STEPS,
       departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
+      categories: s.creativeCategories || [], designations: (s.designations || []).map(function (d) { return d.name; }),
       creativeTypes: s.creativeTypes.map(function (t) { return { id: t.id, label: t.label }; }),
       chunkBytes: LIMITS.CHUNK_BYTES, maxUploadMB: s.maxUploadMB, extensions: s.allowedExtensions,
       workloadThreshold: s.workloadThreshold, brandGuidelinesUrl: s.brandGuidelinesUrl,
@@ -246,8 +249,8 @@ function api_designerDashboard() {
         avgCompletionDays: avgDays === null ? null : Math.round(avgDays * 10) / 10,
         approvalRate: myDecisions.length ? Math.round(approvals / myDecisions.length * 100) : null,
         overdue: active.filter(isOverdue_).length,
-        points: (rewardTotals_()[u.email] || { total: 0 }).total,
-        pointsMonth: (rewardTotals_()[u.email] || { month: 0 }).month
+        points: (pointsTable_(monthFn_())[u.email] || { total: 0 }).total,
+        pointsMonth: (pointsTable_(monthFn_())[u.email] || { period: 0 }).period
       },
       tasks: mine.sort(function (a, b) { return ((a.dueDate || '9') + (a.dueTime || '99')) > ((b.dueDate || '9') + (b.dueTime || '99')) ? 1 : -1; })
         .map(function (t) { return taskDto_(t, u, deliverableCounts_(t.taskId)); })
@@ -744,7 +747,8 @@ function api_divideTask(taskId, input) {
       return {
         assignee: email_(p.assigneeEmail, 'Designer ' + (i + 1), true),
         count: int_(p.count, 1, 50, 'Creatives for designer ' + (i + 1)),
-        note: str_(p.note, 1000, 'Note', false)
+        note: str_(p.note, 1000, 'Note', false),
+        category: str_(p.category, 80, 'Category', false)
       };
     });
     return withLock_(function () {
@@ -758,7 +762,9 @@ function api_divideTask(taskId, input) {
       var n = clean.length, baseTitle = t.title.replace(/ \(\d+\/\d+\)$/, '');
       var ids = [t.taskId];
       // Part 1 stays on this task
-      dbUpdate_('Tasks', t.taskId, { title: baseTitle + ' (1/' + n + ')', deliverablesRequired: String(clean[0].count), updatedAt: nowIso_() });
+      var partTitle = function (i) { return baseTitle + (clean[i].category ? ' — ' + clean[i].category : '') + ' (' + (i + 1) + '/' + n + ')'; };
+      dbUpdate_('Tasks', t.taskId, { title: partTitle(0), deliverablesRequired: String(clean[0].count),
+        creativeType: clean[0].category || t.creativeType, updatedAt: nowIso_() });
       logActivity_(t.taskId, u, 'updated', '', 'divided into ' + n + ' parts', '', 'team');
       assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note });
       // Parts 2..n become new tasks
@@ -768,7 +774,7 @@ function api_divideTask(taskId, input) {
         var copy = {};
         SCHEMA.Tasks.forEach(function (c) { copy[c] = t[c]; });
         Object.assign(copy, {
-          taskId: newId, title: baseTitle + ' (' + (i + 1) + '/' + n + ')', deliverablesRequired: String(clean[i].count),
+          taskId: newId, title: partTitle(i), deliverablesRequired: String(clean[i].count), creativeType: clean[i].category || t.creativeType,
           assigneeEmail: '', assignedBy: '', assignedAt: '', status: STATUS.READY, prevStatus: '', progress: '0',
           completedAt: '', dueSoonNotifiedAt: '', overdueNotifiedAt: '', internalNotes: '', createdBy: u.email, createdAt: now, updatedAt: now
         });
@@ -778,6 +784,50 @@ function api_divideTask(taskId, input) {
         ids.push(newId);
       }
       return { taskIds: ids };
+    });
+  });
+}
+
+/**
+ * Leader gives the team work directly — no request form. Creates an internal
+ * request (so tracking, folders and reports work the same) and assigns it.
+ */
+function api_createDirectTask(input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    var s = settings_();
+    var title = str_(input.title, 150, 'Task title', true);
+    var brief = str_(input.brief, LIMITS.TEXT_LONG, 'Details', false) || title;
+    var assignee = email_(input.assigneeEmail, 'Designer', true);
+    var qty = int_(input.quantity || 1, 1, 50, 'Number of creatives');
+    var dueDate = date_(input.dueDate, 'Due date', true), dueTime = time_(input.dueTime, 'Due time', false);
+    if (dueDate < isoDateOnly_()) throw AppError_('VALIDATION', 'The due date can’t be in the past.');
+    var priority = oneOf_(str_(input.priority, 20, 'Priority', false) || 'Medium', s.priorities, 'Priority');
+    var category = str_(input.category, 80, 'Category', false);
+    var department = str_(input.department, 100, 'Department', false) || 'Graphics team';
+    var refs = urls_(input.referenceUrls);
+    return withLock_(function () {
+      var m = userByEmail_(assignee);
+      if (!m || !bool_(m.active)) throw AppError_('VALIDATION', 'Choose an active team member.');
+      var reqId = nextSeqId_('REQ'), taskId = nextSeqId_('GFX'), now = nowIso_();
+      var folder = DriveApp.getFolderById(ensureFolderId_('references', [String(new Date().getFullYear())])).createFolder(reqId);
+      dbInsert_('Requirements', {
+        requirementId: reqId, requesterName: u.name, department: department, email: '', phone: '', title: title, creativeType: '',
+        purpose: '', brief: brief, campaign: '', product: '', quantity: String(qty), dimensions: '', platform: '', copyText: '',
+        referenceUrls: refs.join('\n'), typeFields: '{}', preferredDate: dueDate, priorityRequested: priority, instructions: '',
+        folderId: folder.getId(), status: 'Received', notifiedAt: now, submittedAt: now, updatedAt: now, preferredTime: dueTime, submittedBy: u.email
+      });
+      dbInsert_('Tasks', {
+        taskId: taskId, requirementId: reqId, title: title, brief: brief, creativeType: category, purpose: '', campaign: '', product: '',
+        deliverablesRequired: String(qty), dimensions: '', formats: '', copyText: '', referenceUrls: refs.join('\n'),
+        assigneeEmail: '', assignedBy: '', assignedAt: '', startDate: '', dueDate: dueDate, dueTime: dueTime, priority: priority,
+        status: STATUS.READY, prevStatus: '', progress: '0', instructions: '', internalNotes: '', folderId: folder.getId(), completedAt: '',
+        dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now
+      });
+      logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
+      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false) });
+      return { taskId: taskId, requirementId: reqId };
     });
   });
 }

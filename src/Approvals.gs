@@ -130,8 +130,8 @@ function api_revokeReviewLinks(versionId) {
 function api_leaderDecision(versionId, decision, comment) {
   return respond_(function () {
     var u = requireLeader_();
-    decision = oneOf_(String(decision || ''), ['approved', 'changes'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision === 'changes');
+    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
     return withLock_(function () {
       var r = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
       if (!r) throw AppError_('ALREADY_DECIDED', 'This version is no longer waiting for approval.');
@@ -165,30 +165,32 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor, op
   });
 
   if (decision === 'approved') {
-    var copyId = '';
-    try {
-      var folder = DriveApp.getFolderById(ensureFolderId_('approved', [String(new Date().getFullYear()), task.taskId]));
-      copyId = DriveApp.getFileById(v.fileId).makeCopy('APPROVED_' + v.fileName, folder).getId();
-    } catch (e) { console.warn('Approved copy failed for ' + v.versionId + ': ' + e); }
+    // The approved copy goes into the request's shared folder, in a sub-folder for its kind of creative.
+    var copyId = fileApprovedCopy_(task, d, v);
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.APPROVED, approvedFileId: copyId });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.APPROVED, approvedVersionId: v.versionId, updatedAt: now });
+  } else if (decision === 'rejected') {
+    dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.REJECTED });
+    dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.REJECTED, updatedAt: now });
   } else {
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.CHANGES });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now });
   }
 
-  var label = decision === 'approved' ? 'Approved' : 'Changes requested';
-  logActivity_(task.taskId, channel === 'public' ? 'reviewer' : actor, decision === 'approved' ? 'approved' : 'changes_requested',
-    '', d.title + ' · V' + v.versionNo, comment || '', 'team');
+  var label = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Changes requested';
+  var action = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'changes_requested';
+  logActivity_(task.taskId, channel === 'public' ? 'reviewer' : actor, action, '', d.title + ' · V' + v.versionNo, comment || '', 'team');
 
   if (opts && opts.quiet) { recomputeTaskStatus_(task.taskId, 'system'); return { task: task, d: d, v: v }; }
   var who = reviewer.name ? reviewer.name + (reviewer.email ? ' (' + reviewer.email + ')' : '') : 'An anonymous reviewer';
   var title = label + ': ' + d.title + ' V' + v.versionNo;
   var mail = designerRecipients_(task, v, actor);
   // Email goes only to the designer. Leaders just see it in the portal's bell.
-  notify_(mail, decision === 'approved' ? 'creative_approved' : 'changes_requested', title,
-    (decision === 'approved' ? 'Nice work — this creative is approved.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId, true);
-  notify_(leaderEmails_().filter(function (e) { return mail.indexOf(e) === -1; }), decision === 'approved' ? 'creative_approved' : 'changes_requested',
+  var ntype = decision === 'approved' ? 'creative_approved' : decision === 'rejected' ? 'creative_rejected' : 'changes_requested';
+  notify_(mail, ntype, title,
+    (decision === 'approved' ? 'Nice work — this creative is approved.' : decision === 'rejected' ? 'This creative won’t be used.\n\nReason: ' + comment +
+      '\n\nIf the task still needs more creatives, upload a new one.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId, true);
+  notify_(leaderEmails_().filter(function (e) { return mail.indexOf(e) === -1; }), ntype,
     title, who + ' — ' + task.taskId + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + task.taskId, false);
   recomputeTaskStatus_(task.taskId, 'system');
   return { task: task, d: d, v: v };

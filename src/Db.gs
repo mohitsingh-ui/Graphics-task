@@ -72,7 +72,8 @@ function cellIn_(v) {
 /** All rows as objects. Each object carries a hidden _row index. */
 function dbAll_(table) {
   if (DB_CACHE_[table]) return DB_CACHE_[table];
-  var cached = tcacheGet_(table);
+  // A table written in this request must not come from the shared cache (it was taken before the write).
+  var cached = DIRTY_[table] ? null : tcacheGet_(table);
   if (cached) { DB_CACHE_[table] = cached; return cached; }
   var tagBefore = tcacheTag_(table);
   var sh = sheet_(table);

@@ -21,31 +21,101 @@ function rewardDto_(r) {
     points: Number(r.points) || 0, reason: r.reason, taskId: r.taskId, givenBy: displayName_(r.givenBy), givenAt: r.givenAt };
 }
 
-/** Points per person: total and this month. */
-function rewardTotals_() {
-  var month = isoDateOnly_().slice(0, 7), by = {};
-  dbAll_('Rewards').forEach(function (r) {
-    var e = String(r.userEmail).toLowerCase();
-    var x = by[e] || (by[e] = { email: e, total: 0, month: 0, count: 0 });
-    var p = Number(r.points) || 0;
-    x.total += p; x.count++;
-    if (String(r.givenAt).slice(0, 7) === month) x.month += p;
+/** Points for one approved creative, from the person's designation (Settings → Designations). */
+function designationPoints_(user) {
+  var list = settings_().designations || [];
+  var name = String((user && user.designation) || '').toLowerCase();
+  var hit = list.filter(function (d) { return String(d.name).toLowerCase() === name; })[0];
+  if (hit) return Number(hit.points) || 0;
+  var mid = list.filter(function (d) { return /^graphic designer$/i.test(d.name); })[0];
+  return mid ? Number(mid.points) || 0 : 10;
+}
+
+/**
+ * Everyone's points, worked out from the records (nothing to keep in sync):
+ *   + designation points for each approved creative (credited to whoever made the approved version)
+ *   + first-time bonus when a creative was approved with no changes asked
+ *   + on-time bonus for each task completed by its deadline (paused hold time isn't counted)
+ *   − rejection penalty per rejected creative (if set)
+ *   + reward points from the team leader
+ * inPeriod(dateIso) → true marks points that also count for the period (e.g. this month).
+ */
+function pointsTable_(inPeriod) {
+  var s = settings_(), per = {};
+  inPeriod = inPeriod || function () { return false; };
+  var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
+  function P(e) {
+    e = String(e || '').toLowerCase();
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0 });
+  }
+  function add(e, pts, when, field, n) {
+    if (!e) return;
+    var x = P(e); x.total += pts; if (inPeriod(when)) x.period += pts;
+    if (field) x[field] += (n === undefined ? pts : n);
+  }
+  var versions = {}; dbAll_('CreativeVersions').forEach(function (v) { versions[v.versionId] = v; });
+  var decByDel = {};
+  dbAll_('ApprovalDecisions').forEach(function (d) { (decByDel[d.deliverableId] = decByDel[d.deliverableId] || []).push(d); });
+  dbAll_('CreativeSubmissions').forEach(function (d) {
+    var v = d.approvedVersionId && versions[d.approvedVersionId];
+    var decs = (decByDel[d.deliverableId] || []).sort(function (a, b) { return a.decidedAt < b.decidedAt ? -1 : 1; });
+    if (v && v.status === VSTATUS.APPROVED) {
+      var who = String(v.uploadedBy).toLowerCase();
+      var ok = decs.filter(function (x) { return x.versionId === v.versionId && x.decision === 'approved'; }).pop();
+      var when = ok ? ok.decidedAt : v.uploadedAt;
+      var pts = designationPoints_(users[who]);
+      add(who, pts, when, 'creativePts');
+      P(who).creatives++;
+      var hadChanges = decs.some(function (x) { return x.decidedAt <= when && (x.decision === 'changes' || x.decision === 'rejected'); });
+      if (!hadChanges && Number(s.pointsFirstTime)) add(who, Number(s.pointsFirstTime), when, 'firstTime');
+    }
+    decs.forEach(function (x) {
+      if (x.decision !== 'rejected') return;
+      var rv = versions[x.versionId]; if (!rv) return;
+      var w = String(rv.uploadedBy).toLowerCase();
+      P(w).rejected++;
+      if (Number(s.pointsRejected)) add(w, -Number(s.pointsRejected), x.decidedAt);
+    });
   });
-  return by;
+  if (Number(s.pointsOnTime)) {
+    dbAll_('Tasks').forEach(function (t) {
+      if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || !t.dueDate) return;
+      var end = dueEnd_(t.dueDate, t.dueTime);
+      if (end && new Date(t.completedAt).getTime() <= end.getTime()) add(t.assigneeEmail, Number(s.pointsOnTime), t.completedAt, 'onTime', 1);
+    });
+  }
+  dbAll_('Rewards').forEach(function (r) { add(r.userEmail, Number(r.points) || 0, r.givenAt, 'rewards'); P(r.userEmail).rewardCount++; });
+  return per;
+}
+
+/** True for timestamps in the current month, in the portal's time zone (not UTC). */
+function monthFn_() {
+  var tz = Session.getScriptTimeZone(), m = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
+  return function (d) { if (!d) return false; var t = new Date(d); return !isNaN(t) && Utilities.formatDate(t, tz, 'yyyy-MM') === m; };
 }
 
 function api_listRewards() {
   return respond_(function () {
-    var u = currentUser_();
-    var totals = rewardTotals_();
+    var u = currentUser_(), s = settings_();
+    var table = pointsTable_(monthFn_());
     var board = dbFind_('Users', function (x) { return bool_(x.active) && x.role === ROLES.DESIGNER; }).map(function (x) {
-      var t = totals[x.email.toLowerCase()] || { total: 0, month: 0, count: 0 };
-      return { email: x.email, name: x.name, total: t.total, month: t.month, count: t.count };
+      var t = table[x.email.toLowerCase()] || { total: 0, period: 0, creatives: 0, onTime: 0, rewards: 0, rejected: 0, firstTime: 0, creativePts: 0, rewardCount: 0 };
+      return { email: x.email, name: x.name, designation: x.designation || '', total: t.total, month: t.period, creatives: t.creatives,
+        onTime: t.onTime, rewards: t.rewards, rejected: t.rejected };
     }).sort(function (a, b) { return b.total - a.total || b.month - a.month || (a.name < b.name ? -1 : 1); });
+    board.forEach(function (x, i) { x.rank = i + 1; });
     var rows = dbAll_('Rewards').filter(function (r) { return isLeader_(u) || String(r.userEmail).toLowerCase() === u.email; })
       .sort(function (a, b) { return a.givenAt < b.givenAt ? 1 : -1; }).slice(0, 200).map(rewardDto_);
-    var me = totals[u.email] || { total: 0, month: 0, count: 0 };
-    return { badges: REWARD_BADGES, leaderboard: board, items: rows, me: { total: me.total, month: me.month, count: me.count } };
+    var me = table[u.email] || { total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0 };
+    var mine = board.filter(function (x) { return x.email === u.email; })[0];
+    return {
+      badges: REWARD_BADGES, leaderboard: board, items: rows,
+      me: { total: me.total, month: me.period, count: me.rewardCount, rank: mine ? mine.rank : null, of: board.length,
+        designation: (userByEmail_(u.email) || {}).designation || '',
+        breakdown: { creatives: me.creatives, creativePts: me.creativePts, firstTime: me.firstTime, onTime: me.onTime, onTimePts: me.onTime * (Number(s.pointsOnTime) || 0),
+          rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards } },
+      rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0 }
+    };
   });
 }
 

@@ -96,6 +96,7 @@ function api_getMyRequests(token) {
         required: required || Number(r.quantity) || 0,
         awaiting: awaiting,
         creatives: creatives,
+        finalFolderUrl: finalFolderUrl_(r),
         hold: (function () {
           var h = tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; })[0];
           return h ? { reason: h.holdReason, dept: h.holdDept, since: h.holdSince } : null;
@@ -117,7 +118,7 @@ function api_getMyRequests(token) {
 function requesterVersion_(d) {
   if (d.approvedVersionId) { var a = dbGet_('CreativeVersions', d.approvedVersionId); if (a && a.status === VSTATUS.APPROVED) return a; }
   var vs = dbFind_('CreativeVersions', function (v) {
-    return v.deliverableId === d.deliverableId && (v.status === VSTATUS.AWAITING || v.status === VSTATUS.CHANGES || v.status === VSTATUS.APPROVED);
+    return v.deliverableId === d.deliverableId && [VSTATUS.AWAITING, VSTATUS.CHANGES, VSTATUS.APPROVED, VSTATUS.REJECTED].indexOf(v.status) !== -1;
   }).sort(function (x, y) { return Number(y.versionNo) - Number(x.versionNo); });
   return vs[0] || null;
 }
@@ -125,6 +126,7 @@ function requesterVersion_(d) {
 function creativeState_(d, v) {
   if (v.status === VSTATUS.APPROVED) return 'Approved';
   if (v.status === VSTATUS.AWAITING) return 'Waiting for your review';
+  if (v.status === VSTATUS.REJECTED) return 'Rejected';
   return 'Being revised';
 }
 
@@ -223,9 +225,9 @@ function api_trackDecide(token, versionId, decision, comment) {
   return respond_(function () {
     var keys = trackKeys_(token);
     rateLimit_('trackdecide:' + keys.join(',').slice(0, 120), 60, 600);
-    decision = oneOf_(String(decision || ''), ['approved', 'changes'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision === 'changes');
-    if (decision === 'changes' && comment.length < 5) throw AppError_('VALIDATION', 'Please tell the team what to change.');
+    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
+    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     return withLock_(function () {
       var reviewer = { name: '', email: '' };
       var rq = trackOpenRequest_(keys, versionId, reviewer, settings_().reviewerIdentity !== 'anonymous');

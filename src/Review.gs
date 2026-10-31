@@ -107,9 +107,9 @@ function api_submitReview(token, input) {
   return respond_(function () {
     input = input || {};
     rateLimit_('reviewsubmit:' + String(token).slice(0, 60), 10, 600);
-    var decision = oneOf_(String(input.decision || ''), ['approved', 'changes'], 'Decision');
-    var comment = str_(input.comment, 4000, 'Feedback', decision === 'changes');
-    if (decision === 'changes' && comment.length < 5) throw AppError_('VALIDATION', 'Please tell the team what to change.');
+    var decision = oneOf_(String(input.decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
+    var comment = str_(input.comment, 4000, 'Feedback', decision !== 'approved');
+    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     var mode = settings_().reviewerIdentity;
     var reviewer = { name: '', email: '' };
     if (mode !== 'anonymous') {

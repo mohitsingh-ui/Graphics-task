@@ -89,6 +89,7 @@ function createEnv(opts = {}) {
       getUrl: () => 'https://drive.google.com/drive/folders/' + f.id,
       isTrashed: () => !!f.trashed,
       setTrashed: v => { f.trashed = !!v; },
+      setSharing: (a, p) => { if (state.blockPublicSharing && a === 'ANYONE_WITH_LINK') throw new Error('Sharing blocked by admin'); f.sharing = a; },
       getSharingAccess: () => 'PRIVATE',
       getFiles: () => iter(Object.values(state.files).filter(x => x.parent === f.id && !x.trashed).map(fileApi)),
       getFoldersByName: n => iter(Object.values(state.folders).filter(x => x.parent === f.id && x.name === n && !x.trashed).map(folderApi)),
@@ -104,13 +105,15 @@ function createEnv(opts = {}) {
     return {
       getId: () => f.id, getName: () => f.name, setName: n => { f.name = n; return this; },
       getSize: () => f.bytes.length, getMimeType: () => f.mime, getUrl: () => 'https://drive.google.com/file/d/' + f.id,
-      getBlob: () => ({ getBytes: () => signed(f.bytes), getContentType: () => f.mime }),
+      getBlob: () => { const b = { _n: f.name, getBytes: () => signed(f.bytes), getContentType: () => f.mime, getName: () => b._n, setName: n => { b._n = n; return b; } }; return b; },
       makeCopy: (name, folder) => { const c = { id: nid('fi'), name, mime: f.mime, bytes: Buffer.from(f.bytes), parent: folder.getId() }; state.files[c.id] = c; return fileApi(c); },
       moveTo: folder => { f.parent = folder.getId(); },
+      getParents: () => iter(f.parent && state.folders[f.parent] ? [folderApi(state.folders[f.parent])] : []),
       setTrashed: v => { f.trashed = !!v; }
     };
   }
   const DriveApp = {
+    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', PRIVATE: 'PRIVATE' }, Permission: { VIEW: 'VIEW', NONE: 'NONE' },
     createFolder: n => folderApi(newFolder(n, 'root')),
     getFolderById: id => { const f = state.folders[id]; if (!f) throw new Error('No folder ' + id); return folderApi(f); },
     getFileById: id => { const f = state.files[id]; if (!f || f.trashed) throw new Error('No file ' + id); return fileApi(f); }
@@ -182,11 +185,13 @@ function createEnv(opts = {}) {
     base64EncodeWebSafe: b => unsigned(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
     base64Encode: b => unsigned(b).toString('base64'),
     base64Decode: s => signed(Buffer.from(s, 'base64')),
+    zip: (blobs, name) => { state.lastZip = blobs.map(b => b.getName()); const bytes = Buffer.concat(blobs.map(b => unsigned(b.getBytes()))); return { getName: () => name, getBytes: () => signed(bytes) }; },
     formatDate: (d, tz, fmt) => {
       const shifted = new Date(d.getTime() + 330 * 60000); // Asia/Kolkata
       if (fmt === 'yyyy-MM-dd') return shifted.toISOString().slice(0, 10);
       if (fmt === 'Z') return '+0530';
       if (fmt === 'HH:mm') return shifted.toISOString().slice(11, 16);
+      if (fmt === 'yyyy-MM') return shifted.toISOString().slice(0, 7);
       if (fmt === 'yyyy-MM-dd_HHmm') return shifted.toISOString().slice(0, 16).replace('T', '_').replace(':', '');
       throw new Error('fmt ' + fmt);
     }

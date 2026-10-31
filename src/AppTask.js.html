@@ -70,7 +70,7 @@ function drawTask(el) {
 
     '<div class="detail"><div class="stack">' +
     briefCard(d) + deliverablesCard(d) + activityTimeline(d) +
-    '</div><div class="stack">' + requestCard(d) + finalLinkCard(d) + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
+    '</div><div class="stack">' + requestCard(d) + finalFilesCard(d) + finalLinkCard(d) + sideCard(d) + (p.canProgress ? progressCard(t) : '') + (leader ? leaderSide(d) : '') + '</div></div>';
 
   wireGo(el);
   loadThumbs(el);
@@ -83,6 +83,9 @@ function drawTask(el) {
   if ($('#aHold')) $('#aHold').onclick = holdModal;
   if ($('#aReopen')) $('#aReopen').onclick = reopenModal;
   if ($('#aShare')) $('#aShare').onclick = shareTaskModal;
+  if ($('#zipTask')) $('#zipTask').onclick = function () { zipDownload(t.taskId, true, this); };
+  if ($('#zipReq')) $('#zipReq').onclick = function () { zipDownload(t.requirementId, false, this); };
+  if ($('#driveReq')) $('#driveReq').onclick = function () { driveFolderModal(t.requirementId); };
   if ($('#aStatus')) $('#aStatus').onclick = statusModal;
   if ($('#aReward')) $('#aReward').onclick = function () { rewardModal({ userEmail: t.assigneeEmail, taskId: t.taskId }, reloadTask); };
   if ($('#aDelete')) $('#aDelete').onclick = function () {
@@ -110,6 +113,7 @@ function drawTask(el) {
   if ($('#shareAll')) $('#shareAll').onclick = function () { shareForReview(this.getAttribute('data-ids').split(','), t.title); };
   if ($('#approveAll')) $('#approveAll').onclick = function () { bulkApprove(this.getAttribute('data-ids').split(','), reloadTask); };
   $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes', reloadTask); }; });
+  $all('[data-rej]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-rej'), 'rejected', reloadTask); }; });
   $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
   $all('[data-revoke]', el).forEach(function (b) {
     b.onclick = function () {
@@ -163,13 +167,13 @@ function deliverablesCard(d) {
           '<div class="faint small">' + h(v.uploadedByName || v.uploadedBy) + ' · uploaded ' + fmtDateTime(v.uploadedAt) + ' · ' + fileSize(v.sizeBytes) + (v.submittedAt ? ' · sent ' + fmtDateTime(v.submittedAt) : '') + '</div>' +
           (v.note ? '<div class="small pre muted" style="margin-top:4px">“' + h(v.note) + '”</div>' : '') +
           v.decisions.map(function (x) {
-            return '<div class="feedback ' + (x.decision === 'approved' ? 'approved' : 'changes') + '"><b>' + (x.decision === 'approved' ? 'Approved' : 'Changes requested') + '</b>' +
+            return '<div class="feedback ' + (x.decision === 'approved' ? 'approved' : 'changes') + '"><b>' + (x.decision === 'approved' ? 'Approved' : x.decision === 'rejected' ? 'Rejected' : 'Changes requested') + '</b>' +
               (leader ? ' by ' + h(x.reviewerName || 'anonymous reviewer') + (x.reviewerEmail ? ' (' + h(x.reviewerEmail) + ')' : '') + (x.channel === 'portal' ? ' in portal' : ' via review link') : '') +
               ' · ' + fmtDateTime(x.decidedAt) + (x.comment ? '<div class="pre">' + h(x.comment) + '</div>' : '') + '</div>';
           }).join('') +
           (leader && v.request && v.request.status === 'Open' ? '<div class="row wrap" style="margin-top:8px"><span class="faint small">' + v.request.activeLinks + ' active review link(s)</span>' +
             '<button class="btn sm" data-link="' + h(v.versionId) + '">' + icon('link') + ' New link</button><button class="btn sm ghost" data-revoke="' + h(v.versionId) + '">Revoke links</button>' +
-            '<button class="btn sm danger" data-chg="' + h(v.versionId) + '">Request changes</button><button class="btn sm ok" data-ok="' + h(v.versionId) + '">Approve</button></div>' : '') +
+            '<button class="btn sm ghost" data-rej="' + h(v.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(v.versionId) + '">Request changes</button><button class="btn sm ok" data-ok="' + h(v.versionId) + '">Approve</button></div>' : '') +
           '</div></div>';
       }).join('') + '</div>';
   }).join('') : emptyState('No creatives uploaded yet.', p.canUpload ? 'Use “Upload creative” to add your first version.' : '', 'image');
@@ -177,7 +181,7 @@ function deliverablesCard(d) {
   d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.request && v.request.status === 'Open') waiting.push(v.versionId); }); });
   var bulk = (leader && waiting.length ? '<button class="btn sm" id="shareAll" data-ids="' + h(waiting.join(',')) + '">' + icon('link') + ' Share for review</button>' : '') +
     (leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '');
-  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div></div><div class="card-b">' + body + '</div></div>';
+  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.filter(function (x) { return x.status !== 'Rejected'; }).length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div></div><div class="card-b">' + body + '</div></div>';
 }
 
 function activityTimeline(d) {
@@ -210,6 +214,50 @@ function requestCard(d) {
 }
 
 /** Google Drive (or any) link to the final files, shown to the requester on "My requests". */
+function approvedCount(d) { return d.deliverables.filter(function (x) { return x.approvedVersionId; }).length; }
+
+/** Approved files for the whole request: one Drive folder (sub-folders per category) + zip download. */
+function finalFilesCard(d) {
+  var n = approvedCount(d), leader = APP.role === 'leader', parts = (d.requestParts || []).length;
+  if (!n && !parts) return '';
+  return '<div class="card"><div class="card-h"><h3>Approved files</h3><span class="faint small">' + n + ' in this task' + (parts ? ' · request has ' + parts + ' parts' : '') + '</span></div><div class="card-b stack">' +
+    '<button class="btn" id="zipTask"' + (n ? '' : ' disabled') + '>' + icon('download') + ' Download approved (.zip)</button>' +
+    (parts ? '<button class="btn" id="zipReq">' + icon('download') + ' Download whole request (.zip)</button>' : '') +
+    (leader ? '<button class="btn primary" id="driveReq">' + icon('external') + ' Drive link for the whole request</button>' +
+      '<p class="faint small" style="margin:0">One folder for ' + h(d.requirement.requirementId) + ' with a sub-folder per category (Meta ads, banners…). Anyone with the link can download — no login.</p>' : '') +
+    '</div></div>';
+}
+
+function driveFolderModal(id) {
+  var m = modal({ title: 'Drive folder for the whole request', body: '<div class="loading-page" style="padding:20px"><span class="spinner"></span> Putting the approved files in place…</div>', actions: [{ label: 'Close' }] });
+  function show(r) {
+    var msg = (r.title || 'Approved creatives') + ' (' + r.requirementId + ') — all approved creatives: ' + r.url;
+    $('.modal-b', m.el).innerHTML =
+      '<p class="muted" style="margin-top:0"><b>' + r.total + '</b> approved creative(s) for ' + h(r.requirementId) + ', in these folders:</p>' +
+      '<div class="row wrap" style="gap:6px;margin-bottom:12px">' + r.categories.map(function (c) { return '<span class="badge plain">' + icon('file') + ' ' + h(c.name) + ' · ' + c.count + '</span>'; }).join('') + '</div>' +
+      (r.shared ? '<div class="alert ok" style="margin-bottom:10px">Anyone with the link can open and download — no login. New approvals are added automatically.</div>' +
+        '<div class="field"><div class="row" style="gap:8px"><input type="text" readonly id="dfUrl" value="' + h(r.url) + '"><button class="btn primary" id="dfCopy">Copy</button></div></div>' +
+        '<div class="row wrap" style="gap:8px"><a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/?text=' + encodeURIComponent(msg) + '">Send on WhatsApp</a>' +
+        '<a class="btn" href="mailto:?subject=' + encodeURIComponent('Approved creatives — ' + (r.title || r.requirementId)) + '&body=' + encodeURIComponent(msg) + '">Email</a>' +
+        '<a class="btn" target="_blank" rel="noopener" href="' + h(r.url) + '">Open in Drive</a><button class="btn ghost danger" id="dfStop">Stop sharing</button></div>'
+        : '<p class="small">The folder is private for now. Make a link anyone can open (no login)?</p><button class="btn primary" id="dfShare">' + icon('link') + ' Create public link</button>') +
+      '<div class="alert bad hidden" data-form-error></div>';
+    if ($('#dfCopy', m.el)) $('#dfCopy', m.el).onclick = function () { copyText(r.url); $('#dfUrl', m.el).select(); };
+    if ($('#dfShare', m.el)) $('#dfShare', m.el).onclick = function () { this.disabled = true; load(true); };
+    if ($('#dfStop', m.el)) $('#dfStop', m.el).onclick = function () {
+      api('api_unshareFinalFolder', id).then(function () { toast('Link turned off'); load(false); }).catch(function (e) { toast(errMsg(e), true); });
+    };
+  }
+  function load(share) { api('api_finalFolder', id, share).then(show).catch(function (e) { fieldErrors(m.el, errMsg(e)); var b = $('#dfShare', m.el); if (b) b.disabled = false; }); }
+  load(false);
+}
+
+function zipDownload(id, taskOnly, btn) {
+  btn.disabled = true; var old = btn.innerHTML; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px"></span> Preparing…';
+  api('api_downloadApprovedZip', id, taskOnly).then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); toast(f.count + ' file(s) downloaded'); })
+    .catch(function (e) { toast(errMsg(e), true); }).then(function () { btn.disabled = false; btn.innerHTML = old; });
+}
+
 function finalLinkCard(d) {
   var t = d.task, can = d.permissions.canSetFinalLink;
   if (!can && !t.finalLink) return '';
@@ -311,7 +359,8 @@ function divideModal() {
   var thr = APP.boot.workloadThreshold;
   var m = modal({
     title: 'Divide among team', wide: true,
-    body: '<p class="muted" style="margin:0">Give each designer their share of the <b>' + h(t.deliverablesRequired) + '</b> creative(s). Each person gets their own task with the same brief and references.</p>' +
+    body: '<p class="muted" style="margin:0">Give each designer their share of the <b>' + h(t.deliverablesRequired) + '</b> creative(s) — e.g. 20 Meta ads to one, 4 homepage banners to another. Each person gets their own task with the same brief; the category becomes their folder in the request’s Drive folder.</p>' +
+      '<datalist id="dvCatL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' +
       '<div id="dvRows" class="stack" style="gap:8px"></div>' +
       '<div class="row between"><button class="btn sm" id="dvAdd">' + icon('plus') + ' Add designer</button><span class="small" id="dvTotal"></span></div>' +
       '<div class="grid-3"><div class="field"><label class="req">Due date</label><input type="date" id="dvDate" value="' + h(t.dueDate) + '"></div>' +
@@ -321,7 +370,7 @@ function divideModal() {
     actions: [{ label: 'Cancel' }, {
       label: 'Divide & assign', cls: 'primary', onClick: function (close, el) {
         sync();
-        var parts = rows.map(function (r) { return { assigneeEmail: r.email, count: r.count }; });
+        var parts = rows.map(function (r) { return { assigneeEmail: r.email, count: r.count, category: r.category }; });
         if (parts.some(function (p) { return !p.assigneeEmail || !(p.count >= 1); })) return fieldErrors(el, 'Pick a designer and at least 1 creative on every row.');
         var seen = {};
         if (parts.some(function (p) { if (seen[p.assigneeEmail]) return true; seen[p.assigneeEmail] = 1; return false; })) return fieldErrors(el, 'Each designer should appear only once.');
@@ -336,7 +385,8 @@ function divideModal() {
     $('#dvRows', m.el).innerHTML = rows.map(function (r, i) {
       return '<div class="row" data-i="' + i + '"><select class="grow" data-k="email"><option value="">Choose designer…</option>' + team.map(function (u) {
         return '<option value="' + h(u.email) + '"' + (u.email === r.email ? ' selected' : '') + '>' + h(u.name) + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
-      }).join('') + '</select><input type="number" min="1" max="50" data-k="count" value="' + h(r.count) + '" style="width:90px" aria-label="Creatives">' +
+      }).join('') + '</select><input type="text" data-k="category" list="dvCatL" placeholder="Category, e.g. Meta ads" value="' + h(r.category || '') + '" style="width:190px" aria-label="Category">' +
+        '<input type="number" min="1" max="50" data-k="count" value="' + h(r.count) + '" style="width:90px" aria-label="Creatives">' +
         '<span class="faint small" style="width:60px">creative(s)</span>' +
         (rows.length > 2 ? '<button class="btn ghost icon" data-rm="' + i + '" aria-label="Remove">' + icon('x') + '</button>' : '<span style="width:36px"></span>') + '</div>';
     }).join('');
@@ -347,7 +397,7 @@ function divideModal() {
   function sync() {
     $all('#dvRows [data-i]', m.el).forEach(function (row) {
       var r = rows[Number(row.getAttribute('data-i'))];
-      r.email = $('[data-k="email"]', row).value; r.count = Number($('[data-k="count"]', row).value);
+      r.email = $('[data-k="email"]', row).value; r.count = Number($('[data-k="count"]', row).value); r.category = $('[data-k="category"]', row).value.trim();
     });
   }
   function total_() {
@@ -569,7 +619,8 @@ function uploadModal(deliverableId) {
       '<div id="u_new" class="stack">' +
       '<div class="field"><label class="req">Creative title</label><input type="text" id="u_title" maxlength="150" placeholder="e.g. Homepage banner — desktop"></div>' +
       '<div class="field"><label>What the creative is for <span class="faint">(optional)</span></label><input type="text" id="u_purpose" maxlength="500" value="' + h(t.purpose ? t.purpose.slice(0, 500) : '') + '"></div>' +
-      '<div class="field"><label>Deliverable type</label><input type="text" id="u_type" maxlength="100" value="' + h(t.creativeType) + '"></div></div>' +
+      '<div class="field"><label>Category <span class="faint">(Drive folder)</span></label><input type="text" id="u_type" maxlength="80" list="u_typeL" value="' + h(t.creativeType) + '" placeholder="e.g. Meta ads">' +
+        '<datalist id="u_typeL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist></div></div>' +
       '<div class="field"><label>Version</label><input type="text" id="u_ver" readonly></div>' +
       '<div class="field"><label class="req">File(s)</label><div class="drop" id="u_drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files</b> or click to choose</div>' +
       '<div class="faint small">Max ' + h(APP.boot.maxUploadMB) + ' MB · ' + h(APP.boot.extensions.join(', ')) + '</div></div><div id="u_files" class="stack" style="gap:6px;margin-top:8px"></div>' +

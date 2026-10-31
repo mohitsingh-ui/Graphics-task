@@ -434,6 +434,70 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('42-reopened-task');
     });
 
+    await step('Assign a task directly, reject + approve in gallery, Drive folder + zip, designations & leaderboard', async () => {
+      env.call(LEADER, 'api_saveUser', { email: A, name: 'Asha Verma', role: 'designer', designation: 'Senior Graphic Designer' });
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="tasks"]');
+      await page.waitForSelector('[data-assign-new]');
+      await page.click('[data-assign-new]');
+      await page.waitForSelector('#dtT');
+      await page.fill('#dtT', 'Sale — Meta ads set');
+      await page.fill('#dtB', 'Two 1:1 Meta ads for the weekend sale');
+      await page.selectOption('#dtA', A);
+      await page.fill('#dtC', 'Meta ads');
+      await page.fill('#dtD', future(3));
+      await page.fill('#dtQ', '1');
+      await shot('43-assign-task-modal');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForSelector('#aAssign');
+      const tid = (await page.textContent('#crumb')).split(' · ')[0].trim();
+      const ids = [];
+      for (const [i, txt] of ['Weekend sale A', 'Weekend sale B'].entries()) {
+        const b = await bannerPng(txt, 40 + i * 30);
+        const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: 'Meta ' + (i + 1), fileName: 'meta' + i + '.png', size: b.length }).data;
+        ids.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+      }
+      env.call(A, 'api_submitForApproval', tid, ids);
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('[data-rej]');
+      await page.locator('[data-thumb]').first().click();
+      await page.waitForSelector('.gal .lb-stage img:not(.hidden)');
+      await page.click('.gal [data-rej]');
+      await page.fill('#lbFb', 'Wrong product shot');
+      await shot('44-gallery-reject');
+      await page.click('.gal [data-send]');
+      await page.waitForFunction(() => document.querySelector('.gal [data-c]').textContent.trim() === '2 / 2');
+      await page.click('.gal [data-okk]');
+      await page.waitForTimeout(400);
+      await page.click('.gal [data-close]');
+      await page.waitForSelector('.badge.s-rejected');
+      await page.waitForSelector('#driveReq');
+      await page.click('#driveReq');
+      await page.waitForSelector('#dfShare');
+      await page.click('#dfShare');
+      await page.waitForSelector('#dfUrl');
+      await shot('45-drive-folder-modal');
+      await page.click('.modal-f >> text=Close');
+      const dl = page.waitForEvent('download');
+      await page.click('#zipTask');
+      const file = await dl;
+      assert.ok(/\.zip$/.test(file.suggestedFilename()));
+      await page.click('[data-r="rewards"]');
+      await page.waitForSelector('.lboard');
+      await shot('46-leaderboard-leader');
+      await page.click('[data-r="settings"]');
+      await page.waitForSelector('#desigRows [data-dr]');
+      await page.locator('text=Points & designations').scrollIntoViewIfNeeded();
+      await shot('47-settings-points');
+      await page.goto(BASE + '/page?as=' + A);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="rewards"]');
+      await page.waitForSelector('.rank-hero');
+      assert.ok((await page.textContent('.rank-hero')).includes('Senior Graphic Designer'));
+      await shot('48-my-points-designer');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

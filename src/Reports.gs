@@ -65,6 +65,7 @@ function computeReport_(range) {
   dbAll_('CreativeVersions').forEach(function (v) { uploaderByVersion[v.versionId] = String(v.uploadedBy).toLowerCase(); });
 
   var versionsIn = dbAll_('CreativeVersions').filter(function (v) { return inRange_(v.uploadedAt, r); });
+  var ptsTable = pointsTable_(function (d) { return inRange_(d, r); });
   var users = dbAll_('Users');
   var designers = users.map(function (u) {
     var mine = tasks.filter(function (t) { return t.assigneeEmail === u.email; });
@@ -76,7 +77,10 @@ function computeReport_(range) {
     dec.forEach(function (d) { if (d.decision === 'approved') doneSet[d.deliverableId] = true; });
     var uploaded = {};
     versionsIn.forEach(function (v) { if (String(v.uploadedBy).toLowerCase() === u.email.toLowerCase()) uploaded[v.deliverableId] = true; });
+    var pts = ptsTable[u.email.toLowerCase()] || { period: 0, total: 0 };
     return {
+      creativesRejected: dec.filter(function (d) { return d.decision === 'rejected'; }).length,
+      points: pts.period, pointsTotal: pts.total, designation: u.designation || '',
       creativesDone: Object.keys(doneSet).length,
       creativesUploaded: Object.keys(uploaded).length,
       name: u.name, email: u.email, role: u.role, active: bool_(u.active),
@@ -124,7 +128,8 @@ function computeReport_(range) {
       decisions: decisionsIn.length,
       onHoldOthers: tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; }).length,
       onHoldInternal: tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && (!t.holdParty || t.holdParty === 'internal'); }).length,
-      creativesDone: Object.keys(creativesDoneTotal).length
+      creativesDone: Object.keys(creativesDoneTotal).length,
+      creativesRejected: decisionsIn.filter(function (d) { return d.decision === 'rejected'; }).length
     },
     designers: designers,
     byDepartment: groupCount(tasksCreatedIn, function (t) { return (reqMap[t.requirementId] || {}).department; }),
@@ -151,8 +156,8 @@ function api_exportCsv(kind, range) {
     var rows;
     if (kind === 'designers') {
       var rep = computeReport_(r);
-      rows = [['Designer', 'Email', 'Creatives done (approved)', 'Creatives uploaded', 'Tasks assigned', 'Tasks completed', 'Avg completion (days)', 'Active now', 'Overdue now', 'Revision cycles', 'Approval rate %']]
-        .concat(rep.designers.map(function (d) { return [d.name, d.email, d.creativesDone, d.creativesUploaded, d.assigned, d.completed, d.avgCompletionDays, d.activeNow, d.overdueNow, d.revisionCycles, d.approvalRate]; }));
+      rows = [['Designer', 'Email', 'Designation', 'Points (period)', 'Creatives rejected', 'Creatives done (approved)', 'Creatives uploaded', 'Tasks assigned', 'Tasks completed', 'Avg completion (days)', 'Active now', 'Overdue now', 'Revision cycles', 'Approval rate %']]
+        .concat(rep.designers.map(function (d) { return [d.name, d.email, d.designation, d.points, d.creativesRejected, d.creativesDone, d.creativesUploaded, d.assigned, d.completed, d.avgCompletionDays, d.activeNow, d.overdueNow, d.revisionCycles, d.approvalRate]; }));
     } else if (kind === 'decisions') {
       rows = [['Decided at', 'Task', 'Deliverable', 'Version', 'Decision', 'Reviewer', 'Reviewer email', 'Channel', 'Comment']];
       dbAll_('ApprovalDecisions').filter(function (d) { return inRange_(d.decidedAt, r); }).forEach(function (d) {

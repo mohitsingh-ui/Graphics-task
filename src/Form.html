@@ -217,6 +217,7 @@ function reqCard(r) {
   }).concat(r.finalLinks.map(function (u, i) {
     return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
   })).join('');
+  if (r.finalFolderUrl) acts = '<a class="btn ok sm" href="' + h(r.finalFolderUrl) + '" target="_blank" rel="noopener">' + icon('download') + ' All approved files (Google Drive)</a>' + acts;
   acts = (r.hold ? '<button class="btn primary sm" data-sendinfo="' + h(r.requirementId) + '">' + icon('send') + ' Send the details</button>' : '') + all + acts +
     (r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '');
   var cr = r.creatives || [];

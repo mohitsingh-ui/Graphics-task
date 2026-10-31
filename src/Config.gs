@@ -7,12 +7,12 @@ var APP_NAME = 'Graphics Team Portal';
 
 /** Sheet name → column list. The first column is the primary key. */
 var SCHEMA = {
-  Users: ['userId', 'email', 'name', 'role', 'active', 'createdAt', 'updatedAt'],
+  Users: ['userId', 'email', 'name', 'role', 'active', 'createdAt', 'updatedAt', 'designation'],
   Departments: ['departmentId', 'name', 'active', 'createdAt'],
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
@@ -44,7 +44,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 6;
+var SCHEMA_VERSION = 7;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -76,9 +76,9 @@ var PRE_ASSIGN = [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY];
 var CLOSED = [STATUS.COMPLETED, STATUS.CANCELLED];
 
 /** Deliverable (creative submission) and version statuses. */
-var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved' };
+var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved', REJECTED: 'Rejected' };
 var VSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved',
-  SUPERSEDED: 'Superseded' };
+  SUPERSEDED: 'Superseded', REJECTED: 'Rejected' };
 
 /**
  * Manual status transitions. System transitions (upload, review decisions)
@@ -132,6 +132,15 @@ var DEFAULT_SETTINGS = {
   allowedExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'psd', 'ai', 'eps', 'indd', 'tif',
     'tiff', 'mp4', 'mov', 'gif', 'zip', 'docx', 'pptx', 'xlsx', 'txt'],
   publicExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'pptx', 'xlsx', 'txt', 'zip'],
+  // Folder names inside each request's shared Drive folder (one per kind of creative).
+  creativeCategories: ['Meta ads', 'Website banners', 'Collection page banners', 'Listing images', 'Social media posts', 'Packaging', 'Print', 'Other'],
+  // Points per approved creative, by designation. Edit in Settings.
+  designations: [
+    { name: 'Intern', points: 5 }, { name: 'Junior Graphic Designer', points: 8 }, { name: 'Graphic Designer', points: 10 },
+    { name: 'Senior Graphic Designer', points: 12 }, { name: 'Lead Designer', points: 15 }],
+  pointsOnTime: 20,          // per task completed by its deadline (hold time not counted)
+  pointsFirstTime: 5,        // per creative approved without any changes
+  pointsRejected: 0,         // taken off per rejected creative (0 = no penalty)
   creativeTypes: [
     { id: 'social_post', label: 'Social media post', fields: [
       { key: 'platform', label: 'Platform', type: 'select', required: true,
@@ -185,7 +194,8 @@ var EDITABLE_SETTINGS = {
   tokenExpiryDays: 'number', emailNotifications: 'boolean', emailRequesterOnSubmit: 'boolean',
   sendReviewLinkToRequester: 'boolean', autoCompleteOnApproval: 'boolean', workloadThreshold: 'number',
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
-  allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json'
+  allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
+  creativeCategories: 'list', designations: 'designations', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number'
 };
 
 /** Drive folders created under the root. */

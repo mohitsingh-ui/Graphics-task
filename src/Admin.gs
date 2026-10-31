@@ -12,14 +12,15 @@ function api_listTeam() {
     return {
       users: dbAll_('Users').map(function (x) {
         var mine = tasks.filter(function (t) { return t.assigneeEmail === x.email; });
-        return Object.assign(pick_(x, ['userId', 'email', 'name', 'role', 'createdAt']), {
+        return Object.assign(pick_(x, ['userId', 'email', 'name', 'role', 'createdAt', 'designation']), {
           active: bool_(x.active),
           activeTasks: mine.filter(function (t) { return CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.APPROVED; }).length,
           completed: mine.filter(function (t) { return t.status === STATUS.COMPLETED; }).length
         });
       }),
       departments: dbAll_('Departments').map(function (d) { return { departmentId: d.departmentId, name: d.name, active: bool_(d.active) }; }),
-      allowedDomain: settings_().allowedDomain
+      allowedDomain: settings_().allowedDomain,
+      designations: settings_().designations
     };
   });
 }
@@ -31,6 +32,7 @@ function api_saveUser(input) {
     var email = email_(input.email, 'Email', true);
     var name = str_(input.name, 100, 'Name', true);
     var role = oneOf_(String(input.role || ''), [ROLES.LEADER, ROLES.DESIGNER], 'Role');
+    var designation = str_(input.designation, 60, 'Designation', false);
     var domain = settings_().allowedDomain;
     if (domain && email.split('@')[1] !== domain.toLowerCase()) {
       throw AppError_('VALIDATION', 'Team members must use an @' + domain + ' Google account, because the internal portal only lets in your Workspace domain.');
@@ -39,10 +41,10 @@ function api_saveUser(input) {
       var existing = userByEmail_(email);
       if (existing) {
         if (existing.email === u.email && role !== ROLES.LEADER) throw AppError_('VALIDATION', 'You can’t remove your own leader role.');
-        dbUpdate_('Users', existing.userId, { name: name, role: role, updatedAt: nowIso_() });
+        dbUpdate_('Users', existing.userId, { name: name, role: role, designation: designation, updatedAt: nowIso_() });
       } else {
         dbInsert_('Users', { userId: 'USR-' + uuid_().slice(0, 8), email: email, name: name, role: role, active: true,
-          createdAt: nowIso_(), updatedAt: nowIso_() });
+          createdAt: nowIso_(), updatedAt: nowIso_(), designation: designation });
         var s = settings_();
         if (s.internalUrl) sendMail_(email, 'You’ve been added to the graphics team portal',
           'Hi ' + name + ',\n\n' + u.name + ' added you to the ' + s.portalName + ' as ' + (role === ROLES.LEADER ? 'a team leader' : 'a designer') +
@@ -139,6 +141,10 @@ function api_saveSettings(patch) {
         if (!list.length) throw AppError_('VALIDATION', k + ' can’t be empty.');
         clean[k] = list.map(function (x) { return str_(x, 50, k, true); });
         if (k === 'allowedExtensions' || k === 'publicExtensions') clean[k] = clean[k].map(function (x) { return x.toLowerCase().replace(/^\./, ''); });
+      } else if (type === 'designations') {
+        var ds = typeof v === 'string' ? parseJson_(v, null) : v;
+        if (!Array.isArray(ds) || !ds.length || ds.length > 20) throw AppError_('VALIDATION', 'Add between 1 and 20 designations.');
+        clean[k] = ds.map(function (d) { return { name: str_(d && d.name, 60, 'Designation', true), points: int_(d && d.points, 0, 1000, 'Points') }; });
       } else if (type === 'json') {
         var parsed = typeof v === 'string' ? parseJson_(v, null) : v;
         clean[k] = validateCreativeTypes_(parsed);

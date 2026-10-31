@@ -363,28 +363,31 @@ function gallery(items, opts) {
     var info = '<div class="lb-info">' + (it.status ? '<span class="lb-chip ' + slug(it.status) + '">' + h(it.status) + '</span>' : '') +
       (it.sub ? '<span class="ellipsis">' + h(it.sub) + '</span>' : '') + '</div>';
     if (!it.canDecide) { a.innerHTML = info; return; }
-    if (mode === 'changes') {
-      a.innerHTML = '<div class="lb-fb"><textarea id="lbFb" rows="2" maxlength="4000" placeholder="What should change? e.g. Make the price bigger, use the 1L jar"></textarea>' +
-        '<div class="row"><button class="btn sm" data-cancel>Cancel</button><button class="btn sm danger solid" data-send>Send feedback</button></div></div>';
+    if (mode === 'changes' || mode === 'rejected') {
+      var rej = mode === 'rejected';
+      a.innerHTML = '<div class="lb-fb"><textarea id="lbFb" rows="2" maxlength="4000" placeholder="' + (rej ? 'Why is it rejected? e.g. Wrong product, off-brand' : 'What should change? e.g. Make the price bigger, use the 1L jar') + '"></textarea>' +
+        '<div class="row"><button class="btn sm" data-cancel>Cancel</button><button class="btn sm danger solid" data-send>' + (rej ? 'Reject creative' : 'Send feedback') + '</button></div></div>';
       $('#lbFb', a).focus();
       $('[data-cancel]', a).onclick = function () { mode = ''; drawActions(); };
       $('[data-send]', a).onclick = function () {
         var c = $('#lbFb', a).value.trim();
-        if (c.length < 5) return toast('Tell the designer what to change.', true);
-        decide('changes', c, this);
+        if (c.length < 5) return toast(rej ? 'Say why it’s rejected.' : 'Tell the designer what to change.', true);
+        decide(mode, c, this);
       };
       return;
     }
-    a.innerHTML = info + '<div class="row lb-btns"><button class="btn danger" data-chg>Request changes</button><button class="btn ok solid" data-okk>' + icon('check') + ' Approve</button></div>';
+    a.innerHTML = info + '<div class="row lb-btns">' + (opts.noReject ? '' : '<button class="btn ghost lb-rej" data-rej>Reject</button>') +
+      '<button class="btn danger" data-chg>Request changes</button><button class="btn ok solid" data-okk>' + icon('check') + ' Approve</button></div>';
     $('[data-chg]', a).onclick = function () { mode = 'changes'; drawActions(); };
+    if ($('[data-rej]', a)) $('[data-rej]', a).onclick = function () { mode = 'rejected'; drawActions(); };
     $('[data-okk]', a).onclick = function () { decide('approved', '', this); };
   }
   function decide(decision, comment, btn) {
     var it = items[i];
     $all('[data-a] button', lb).forEach(function (b) { b.disabled = true; });
     opts.decide(it, decision, comment).then(function () {
-      changed = true; it.canDecide = false; it.status = decision === 'approved' ? 'Approved' : 'Changes requested';
-      toast(decision === 'approved' ? 'Approved' : 'Feedback sent');
+      changed = true; it.canDecide = false; it.status = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Changes requested';
+      toast(decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Feedback sent');
       // Move on to the next creative still waiting for a decision.
       for (var k = 1; k < items.length; k++) { var j = (i + k) % items.length; if (items[j].canDecide) return show(j); }
       mode = ''; drawActions();

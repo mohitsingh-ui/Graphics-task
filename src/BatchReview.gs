@@ -90,11 +90,11 @@ function batchItem_(versionId) {
   var openReq = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
   var dec = dbFind_('ApprovalDecisions', function (x) { return x.versionId === versionId; }).pop();
   var state = openReq && t.status !== STATUS.CANCELLED ? 'open'
-    : v.status === VSTATUS.APPROVED ? 'approved' : v.status === VSTATUS.CHANGES ? 'changes' : 'closed';
+    : v.status === VSTATUS.APPROVED ? 'approved' : v.status === VSTATUS.CHANGES ? 'changes' : v.status === VSTATUS.REJECTED ? 'rejected' : 'closed';
   return {
     versionId: v.versionId, title: d.title || 'Creative', version: 'V' + v.versionNo, task: t.title, purpose: d.purpose || '',
     ext: extOf_(v.fileName), isImage: INLINE_IMAGE_TYPES.indexOf(v.mimeType) !== -1, state: state,
-    comment: dec && state === 'changes' ? dec.comment : '', _v: v, _t: t, _req: openReq
+    comment: dec && (state === 'changes' || state === 'rejected') ? dec.comment : '', _v: v, _t: t, _req: openReq
   };
 }
 
@@ -173,16 +173,16 @@ function checkNotOwnWork_(reviewer, v, t) {
 function api_batchDecide(token, versionId, decision, comment, who) {
   return respond_(function () {
     rateLimit_('batchdecide:' + String(token).slice(0, 60), 120, 600);
-    decision = oneOf_(String(decision || ''), ['approved', 'changes'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision === 'changes');
-    if (decision === 'changes' && comment.length < 5) throw AppError_('VALIDATION', 'Please tell the team what to change.');
+    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
+    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     var reviewer = batchReviewer_(who);
     return withLock_(function () {
       var b = batchFromToken_(token), it = batchVersion_(b, versionId);
       if (it.state !== 'open') throw AppError_('ALREADY_DECIDED', 'A decision has already been recorded for this creative.');
       checkNotOwnWork_(reviewer, it._v, it._t);
       applyDecision_(it._req, decision, comment, reviewer, 'public', null);
-      return { state: decision === 'approved' ? 'approved' : 'changes' };
+      return { state: decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'changes' };
     });
   });
 }

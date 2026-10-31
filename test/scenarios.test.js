@@ -19,7 +19,7 @@ function scenario(name, fn) {
   catch (e) { results.push('  ✗ ' + name + '\n      ' + (e.stack || e).toString().split('\n').slice(0, 4).join('\n      ')); process.exitCode = 1; }
 }
 
-const env = createEnv();
+const env = createEnv({ verbose: !!process.env.V });
 const { call, state } = env;
 
 function ok(r) { if (!r || !r.ok) throw new Error('API error: ' + JSON.stringify(r && r.error)); return r.data; }
@@ -331,7 +331,10 @@ scenario('6 + 9. Approval recorded & notified; 1 of 5 approved does not complete
   assert.strictEqual(dec.reviewerEmail, REQUESTER);
   assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(x => x.type === 'creative_approved'));
   const folders = JSON.parse(state.props.FOLDER_IDS);
-  assert.ok(Object.values(state.files).some(f => f.name.startsWith('APPROVED_') && state.folders[state.folders[f.parent].parent].parent === folders.approved), 'approved copy saved');
+  const up = id => state.folders[id] && state.folders[id].parent;
+  const copy = Object.values(state.files).find(f => / V\d+\.png$/.test(f.name) && up(up(up(f.parent))) === folders.approved);
+  assert.ok(copy, 'approved copy saved in approved / year / request / category');
+  assert.ok(state.folders[up(copy.parent)].name.startsWith(req1), 'request folder named after the request');
   // 100% progress must not complete
   ok(call(A, 'api_updateProgress', task1.taskId, 100, 'All done from my side'));
   assert.notStrictEqual(ok(call(A, 'api_getTask', task1.taskId)).task.status, 'Completed');
@@ -712,16 +715,17 @@ scenario('Rewards: leader gives badges and points; designers see their own; lead
   assert.ok(ok(call(A, 'api_getNotifications')).items.some(n => /reward/i.test(n.title) && n.route === 'rewards'));
   assert.ok(state.mail.length > before, 'emailed');
   const a = ok(call(A, 'api_listRewards'));
-  assert.strictEqual(a.me.total, 65);
+  assert.strictEqual(a.me.breakdown.rewards, 65);
+  assert.ok(a.me.total >= 65 && a.me.rank >= 1, 'total = work points + rewards');
   assert.ok(a.items.every(x => x.userEmail === A), 'designer sees only own rewards');
   assert.strictEqual(a.leaderboard[0].email, A);
-  assert.strictEqual(ok(call(A, 'api_designerDashboard')).stats.points, 65);
+  assert.strictEqual(ok(call(A, 'api_designerDashboard')).stats.points, a.me.total);
   const l = ok(call(LEADER, 'api_listRewards'));
   assert.strictEqual(l.items.length, 3);
   assert.ok(ok(call(LEADER, 'api_getTask', global.__galleryTask.tid)).activity.some(x => x.action === 'reward'));
   err(call(A, 'api_deleteReward', r1.rewardId), 'FORBIDDEN');
   ok(call(LEADER, 'api_deleteReward', r1.rewardId));
-  assert.strictEqual(ok(call(A, 'api_listRewards')).me.total, 15);
+  assert.strictEqual(ok(call(A, 'api_listRewards')).me.breakdown.rewards, 15);
 });
 
 scenario('Leader deletes a task: gone everywhere, files to Drive trash', () => {
@@ -1017,6 +1021,95 @@ scenario('Hold: deadline is paused and moved out on resume (not counted against 
   assert.strictEqual(ok(call(LEADER, 'api_getTask', tid)).task.dueDate, future(5));
   // status menu "On Hold" needs a reason
   err(call(LEADER, 'api_setTaskStatus', tid, 'On Hold', {}), 'VALIDATION');
+});
+
+scenario('Sale request divided by category → one shared Drive folder with sub-folders; reject; zip; direct task; points', () => {
+  state.currentUser = '';
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'ABC', department: 'Sales', email: 'abc@example.org', brief: 'Sale: 2 meta + 1 banner', preferredDate: future(4), quantity: 3 }));
+  const t0 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_divideTask', t0, { parts: [{ assigneeEmail: A, count: 2, category: 'Meta ads' }, { assigneeEmail: B, count: 1, category: 'Website banners' }], dueDate: future(4), priority: 'High' }));
+  const parts = ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === sub.requirementId);
+  const ta = parts.find(x => x.assigneeEmail === A), tb = parts.find(x => x.assigneeEmail === B);
+  assert.ok(/Meta ads/.test(ta.title) && ta.creativeType === 'Meta ads');
+  const m1 = upload(A, { kind: 'version', taskId: ta.taskId, title: 'Meta 1' }, 'meta1.png', png(700)).versionId;
+  const m2 = upload(A, { kind: 'version', taskId: ta.taskId, title: 'Meta 2' }, 'meta2.png', png(700)).versionId;
+  const b1 = upload(B, { kind: 'version', taskId: tb.taskId, title: 'Home banner' }, 'home.png', png(700)).versionId;
+  ok(call(A, 'api_submitForApproval', ta.taskId, [m1, m2]));
+  ok(call(B, 'api_submitForApproval', tb.taskId, [b1]));
+  // reject
+  err(call(LEADER, 'api_leaderDecision', m2, 'rejected', ''), 'VALIDATION');
+  ok(call(LEADER, 'api_leaderDecision', m2, 'rejected', 'Off-brand colours, not usable'));
+  let t = ok(call(A, 'api_getTask', ta.taskId));
+  assert.strictEqual(t.deliverables.find(d => d.title === 'Meta 2').status, 'Rejected');
+  assert.ok(state.mail.some(m => m.to === A && /Rejected: Meta 2/.test(m.subject)));
+  ok(call(LEADER, 'api_leaderDecision', m1, 'approved', ''));
+  ok(call(LEADER, 'api_leaderDecision', b1, 'approved', ''));
+  t = ok(call(A, 'api_getTask', ta.taskId));
+  assert.notStrictEqual(t.task.status, 'Completed', 'a rejected creative does not count: 1 of 2 approved');
+  const m3 = upload(A, { kind: 'version', taskId: ta.taskId, title: 'Meta 3' }, 'meta3.png', png(700)).versionId;
+  ok(call(A, 'api_submitForApproval', ta.taskId, [m3]));
+  ok(call(LEADER, 'api_leaderDecision', m3, 'approved', ''));
+  assert.strictEqual(ok(call(A, 'api_getTask', ta.taskId)).task.status, 'Completed');
+  // one folder for the whole request, sub-folders per category
+  err(call(A, 'api_finalFolder', sub.requirementId, true), 'FORBIDDEN');
+  state.blockPublicSharing = true;
+  err(call(LEADER, 'api_finalFolder', sub.requirementId, true), 'DRIVE_SHARING');
+  state.blockPublicSharing = false;
+  const f = ok(call(LEADER, 'api_finalFolder', ta.taskId, true));
+  assert.strictEqual(f.shared, true); assert.strictEqual(f.total, 3);
+  assert.deepStrictEqual(f.categories, [{ name: 'Meta ads', count: 2 }, { name: 'Website banners', count: 1 }]);
+  const reqRow = env.ctx.dbGet_('Requirements', sub.requirementId);
+  const root = state.folders[reqRow.finalFolderId];
+  assert.strictEqual(root.sharing, 'ANYONE_WITH_LINK');
+  const kids = Object.values(state.folders).filter(x => x.parent === root.id).map(x => x.name).sort();
+  assert.deepStrictEqual(kids, ['Meta ads', 'Website banners']);
+  const inMeta = Object.values(state.files).filter(x => state.folders[x.parent] && state.folders[x.parent].name === 'Meta ads' && state.folders[x.parent].parent === root.id).map(x => x.name).sort();
+  assert.deepStrictEqual(inMeta, ['Meta 1 V1.png', 'Meta 3 V1.png'], 'rejected creative not in the folder');
+  assert.ok(ok(call('', 'api_getMyRequests', [sub.trackToken])).requests[0].finalFolderUrl.includes(root.id), 'requester sees the Drive link');
+  // zip
+  const z = ok(call(LEADER, 'api_downloadApprovedZip', sub.requirementId));
+  assert.strictEqual(z.count, 3);
+  assert.deepStrictEqual(Array.from(state.lastZip).sort(), ['Meta ads/Meta 1 V1.png', 'Meta ads/Meta 3 V1.png', 'Website banners/Home banner V1.png']);
+  ok(call(LEADER, 'api_unshareFinalFolder', sub.requirementId));
+  assert.strictEqual(root.sharing, 'PRIVATE');
+  // reports: rejections
+  const rep = ok(call(LEADER, 'api_getReports', {}));
+  assert.ok(rep.designers.find(d => d.email === A).creativesRejected >= 1);
+  assert.ok(rep.summary.creativesRejected >= 1);
+  // direct task from the leader
+  err(call(A, 'api_createDirectTask', { title: 'x', assigneeEmail: B, dueDate: future(1) }), 'FORBIDDEN');
+  const dt = ok(call(LEADER, 'api_createDirectTask', { title: 'Instagram story for Monday', brief: 'Use the new ghee jar shot', assigneeEmail: B, dueDate: future(2), dueTime: '11:00', quantity: 2, category: 'Social media posts' }));
+  const dtt = ok(call(B, 'api_getTask', dt.taskId));
+  assert.strictEqual(dtt.task.status, 'Assigned');
+  assert.strictEqual(dtt.task.creativeType, 'Social media posts');
+  assert.ok(ok(call(B, 'api_getNotifications')).items.some(n => /New task: Instagram story/.test(n.title)));
+});
+
+scenario('Designations and automatic points: approved creatives, first-time and on-time bonuses, rewards, rank', () => {
+  ok(call(LEADER, 'api_saveUser', { email: A, name: 'Asha Verma', role: 'designer', designation: 'Senior Graphic Designer' }));
+  ok(call(LEADER, 'api_saveUser', { email: B, name: 'Bilal', role: 'designer', designation: 'Intern' }));
+  assert.strictEqual(ok(call(LEADER, 'api_listTeam')).users.find(u => u.email === A).designation, 'Senior Graphic Designer');
+  ok(call(LEADER, 'api_saveSettings', { pointsOnTime: 20, pointsFirstTime: 5, pointsRejected: 3 }));
+  const before = ok(call(A, 'api_listRewards')).me;
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Pts', department: 'Sales', brief: 'points', preferredDate: future(3), quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(3), priority: 'High' }));
+  const v = upload(A, { kind: 'version', taskId: tid, title: 'Pts 1' }, 'p.png', png(500)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v]));
+  ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  const after = ok(call(A, 'api_listRewards'));
+  assert.strictEqual(after.me.total - before.total, 12 + 5 + 20, 'senior: 12 per creative + 5 first-time + 20 on-time');
+  assert.strictEqual(after.me.designation, 'Senior Graphic Designer');
+  const bRow = after.leaderboard.find(x => x.email === B);
+  assert.ok(after.leaderboard.every((x, i) => x.rank === i + 1), 'ranked');
+  assert.ok(after.me.rank >= 1 && after.me.of === after.leaderboard.length);
+  assert.ok('designation' in bRow);
+  assert.ok(after.me.breakdown.rejectedPts >= 3, 'rejection penalty applied');
+  const rep = ok(call(LEADER, 'api_getReports', {}));
+  assert.ok(typeof rep.designers.find(d => d.email === A).points === 'number');
+  err(call(LEADER, 'api_saveSettings', { designations: [] }), 'VALIDATION');
+  ok(call(LEADER, 'api_saveSettings', { designations: [{ name: 'Intern', points: 4 }, { name: 'Senior Graphic Designer', points: 15 }] }));
+  ok(call(LEADER, 'api_saveSettings', { pointsRejected: 0 }));
 });
 
 scenario('Pages render: public form, review, app shell, no-access', () => {

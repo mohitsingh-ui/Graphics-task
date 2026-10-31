@@ -34,7 +34,7 @@ VIEWS.reports = function (arg, el, token) {
       '<div class="row wrap"><input type="date" id="rf" value="' + h(r.range.from) + '" style="width:auto"><span class="faint">to</span><input type="date" id="rt" value="' + h(r.range.to) + '" style="width:auto">' +
       '<button class="btn" id="rApply">Apply</button></div></div>' +
       '<div class="kpis">' +
-      kpiCard('Requirements received', s.requirements) + kpiCard('Creatives done', s.creativesDone, null, { sub: 'approved in this period', color: 'var(--ok)' }) + kpiCard('Tasks completed', s.tasksCompleted) + kpiCard('Overdue now', s.overdueNow, null, { alert: true }) +
+      kpiCard('Requirements received', s.requirements) + kpiCard('Creatives done', s.creativesDone, null, { sub: 'approved in this period', color: 'var(--ok)' }) + kpiCard('Creatives rejected', s.creativesRejected || 0, null, { color: 'var(--bad)' }) + kpiCard('Tasks completed', s.tasksCompleted) + kpiCard('Overdue now', s.overdueNow, null, { alert: true }) +
       kpiCard('Avg. completion', s.avgCompletionDays === null ? '—' : s.avgCompletionDays + 'd', null, { sub: 'assignment → completion, hold time excluded' }) +
       kpiCard('Avg. approval time', s.avgApprovalHours === null ? '—' : (s.avgApprovalHours >= 48 ? Math.round(s.avgApprovalHours / 24 * 10) / 10 + 'd' : s.avgApprovalHours + 'h'), null, { sub: 'link sent → decision' }) +
       kpiCard('Revision cycles', s.revisionCycles, null, { sub: (s.avgRevisionsPerCompletedTask === null ? '—' : s.avgRevisionsPerCompletedTask) + ' per completed task' }) +
@@ -42,9 +42,9 @@ VIEWS.reports = function (arg, el, token) {
       kpiCard('On hold now', (s.onHoldOthers || 0) + (s.onHoldInternal || 0), null, { sub: (s.onHoldOthers || 0) + ' waiting on other teams · not counted as late' }) +
       '</div>' +
       '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Designers</h3><button class="btn sm" data-csv="designers">' + icon('download') + ' CSV</button></div><div class="table-wrap">' +
-      (r.designers.length ? '<table class="t"><thead><tr><th>Designer</th><th title="Creatives approved in this period">Creatives done</th><th title="Creatives uploaded in this period">Uploaded</th><th>Tasks assigned</th><th>Tasks completed</th><th>Avg. completion</th><th>Active now</th><th>Overdue now</th><th>Revision cycles</th><th>Approval rate</th></tr></thead><tbody>' +
+      (r.designers.length ? '<table class="t"><thead><tr><th>Designer</th><th title="Points earned in this period">Points</th><th title="Creatives approved in this period">Creatives done</th><th title="Creatives rejected in this period">Rejected</th><th title="Creatives uploaded in this period">Uploaded</th><th>Tasks assigned</th><th>Tasks completed</th><th>Avg. completion</th><th>Active now</th><th>Overdue now</th><th>Revision cycles</th><th>Approval rate</th></tr></thead><tbody>' +
         r.designers.map(function (d) {
-          return '<tr><td><b>' + h(d.name) + '</b>' + (d.active ? '' : ' <span class="faint small">(inactive)</span>') + '<div class="faint small">' + h(d.email) + '</div></td><td><b style="font-size:15px">' + d.creativesDone + '</b></td><td>' + d.creativesUploaded + '</td><td>' + d.assigned + '</td><td>' + d.completed + '</td>' +
+          return '<tr><td><b>' + h(d.name) + '</b>' + (d.active ? '' : ' <span class="faint small">(inactive)</span>') + '<div class="faint small">' + h(d.designation || d.email) + '</div></td><td><b>' + d.points + '</b></td><td><b style="font-size:15px">' + d.creativesDone + '</b></td><td' + (d.creativesRejected ? ' style="color:var(--bad)"' : '') + '>' + d.creativesRejected + '</td><td>' + d.creativesUploaded + '</td><td>' + d.assigned + '</td><td>' + d.completed + '</td>' +
             '<td>' + (d.avgCompletionDays === null ? '—' : d.avgCompletionDays + ' d') + '</td><td>' + d.activeNow + '</td><td' + (d.overdueNow ? ' class="overdue-flag"' : '') + '>' + d.overdueNow + '</td>' +
             '<td>' + d.revisionCycles + '</td><td>' + (d.approvalRate === null ? '—' : d.approvalRate + '%') + '</td></tr>';
         }).join('') + '</tbody></table>' : emptyState('No designer data yet.', '', 'users')) + '</div></div>' +
@@ -80,7 +80,7 @@ VIEWS.team = function (arg, el, token) {
       '<button class="btn primary" id="addUser">' + icon('plus') + ' Add team member</button></div>' +
       '<div class="card"><div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Role</th><th>Active tasks</th><th>Completed</th><th>Status</th><th></th></tr></thead><tbody>' +
       d.users.map(function (u) {
-        return '<tr><td><b>' + h(u.name) + '</b><div class="faint small">' + h(u.email) + '</div></td><td>' + (u.role === 'leader' ? 'Team leader' : 'Designer') + '</td>' +
+        return '<tr><td><b>' + h(u.name) + '</b><div class="faint small">' + h(u.email) + '</div></td><td>' + (u.role === 'leader' ? 'Team leader' : 'Designer') + (u.designation ? '<div class="faint small">' + h(u.designation) + '</div>' : '') + '</td>' +
           '<td>' + u.activeTasks + '</td><td>' + u.completed + '</td><td>' + (u.active ? '<span class="badge s-approved">Active</span>' : '<span class="badge s-cancelled">Deactivated</span>') + '</td>' +
           '<td style="text-align:right;white-space:nowrap"><button class="btn sm ghost" data-edit="' + h(u.email) + '">Edit</button>' +
           (u.email === APP.boot.user.email ? '' : '<button class="btn sm ' + (u.active ? 'danger' : '') + '" data-toggle="' + h(u.email) + '" data-active="' + (u.active ? '1' : '0') + '">' + (u.active ? 'Deactivate' : 'Reactivate') + '</button>') + '</td></tr>';
@@ -91,8 +91,8 @@ VIEWS.team = function (arg, el, token) {
           '<button class="btn ghost sm" style="height:22px;padding:0 6px" data-dept="' + h(x.departmentId) + '" data-name="' + h(x.name) + '" data-dactive="' + (x.active ? '1' : '0') + '">' + (x.active ? 'Hide' : 'Show') + '</button></span>';
       }).join('') + '<p class="faint small" style="width:100%;margin:6px 0 0">Departments appear in the requirement form dropdown.</p></div></div>';
 
-    $('#addUser').onclick = function () { userModal(null, d.allowedDomain); };
-    $all('[data-edit]', el).forEach(function (b) { b.onclick = function () { userModal(d.users.filter(function (u) { return u.email === b.getAttribute('data-edit'); })[0], d.allowedDomain); }; });
+    $('#addUser').onclick = function () { userModal(null, d.allowedDomain, d.designations); };
+    $all('[data-edit]', el).forEach(function (b) { b.onclick = function () { userModal(d.users.filter(function (u) { return u.email === b.getAttribute('data-edit'); })[0], d.allowedDomain, d.designations); }; });
     $all('[data-toggle]', el).forEach(function (b) {
       b.onclick = function () {
         var on = b.getAttribute('data-active') === '1', email = b.getAttribute('data-toggle');
@@ -121,7 +121,10 @@ VIEWS.team = function (arg, el, token) {
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
 };
 
-function userModal(u, domain) {
+function userModal(u, domain, designations) {
+  var cur = u ? u.designation || '' : '';
+  var opts = (designations || []).map(function (d) { return d.name; });
+  if (cur && opts.indexOf(cur) === -1) opts.push(cur);
   modal({
     title: u ? 'Edit team member' : 'Add team member',
     body: '<div class="field"><label class="req">Name</label><input type="text" id="un" maxlength="100" value="' + h(u ? u.name : '') + '"></div>' +
@@ -129,9 +132,13 @@ function userModal(u, domain) {
       '<span class="hint">They sign in with this company Google account. No password is created.</span></div>' +
       '<div class="field"><label class="req">Role</label><select id="ur"><option value="designer"' + (u && u.role === 'designer' ? ' selected' : '') + '>Designer — sees only their own tasks</option>' +
       '<option value="leader"' + (u && u.role === 'leader' ? ' selected' : '') + '>Team leader — full access</option></select></div>' +
+      '<div class="field"><label for="ud">Designation</label><select id="ud"><option value="">—</option>' + opts.map(function (o) {
+        var pts = (designations || []).filter(function (d) { return d.name === o; })[0];
+        return '<option' + (o === cur ? ' selected' : '') + ' value="' + h(o) + '">' + h(o) + (pts ? ' · ' + pts.points + ' pts per creative' : '') + '</option>';
+      }).join('') + '</select><span class="hint">Sets how many points each approved creative earns. Edit the list in Settings → Points &amp; designations.</span></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, { label: 'Save', cls: 'primary', onClick: function (close, m) {
-      return api('api_saveUser', { name: $('#un', m).value, email: $('#ue', m).value, role: $('#ur', m).value })
+      return api('api_saveUser', { name: $('#un', m).value, email: $('#ue', m).value, role: $('#ur', m).value, designation: $('#ud', m).value })
         .then(function () { close(); toast('Saved'); render('team'); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
     } }]
   });
@@ -140,35 +147,51 @@ function userModal(u, domain) {
 /* ================= REWARDS ================= */
 VIEWS.rewards = function (arg, el, token) {
   var leader = APP.role === 'leader';
-  setCrumb(leader ? 'Rewards' : 'My rewards');
+  setCrumb(leader ? 'Leaderboard & rewards' : 'My points');
   api('api_listRewards').then(function (d) {
     if (stale(token)) return;
     APP.badges = d.badges;
-    var top = d.leaderboard.filter(function (x) { return x.total > 0; })[0];
-    el.innerHTML = '<div class="page-h"><div><h1>' + (leader ? 'Rewards' : 'My rewards') + '</h1><p>' +
-      (leader ? 'Recognise great work. Designers get a notification and see it on their dashboard.' : 'Badges and points from your team leader.') + '</p></div>' +
+    var me = d.me, b = me.breakdown || {}, r = d.rules || {};
+    var rulesHtml = '<div class="card"><div class="card-h"><h3>How points work</h3></div><div class="card-b small stack" style="gap:6px">' +
+      '<div><b>Each approved creative</b> earns points by designation:</div><div class="row wrap" style="gap:6px">' +
+      (r.designations || []).map(function (x) { return '<span class="badge plain">' + h(x.name) + ' · ' + x.points + '</span>'; }).join('') + '</div>' +
+      (r.firstTime ? '<div>+' + r.firstTime + ' when a creative is approved first time (no changes asked)</div>' : '') +
+      (r.onTime ? '<div>+' + r.onTime + ' for each task completed by its deadline (time on hold isn’t counted)</div>' : '') +
+      (r.rejected ? '<div>−' + r.rejected + ' for each rejected creative</div>' : '') +
+      '<div>+ reward points from the team leader</div></div></div>';
+    var board = '<div class="card"><div class="card-h"><h3>Leaderboard</h3><span class="faint small">This month · all time</span></div><div class="card-b">' +
+      (d.leaderboard.length ? '<ol class="lboard">' + d.leaderboard.map(function (x) {
+        return '<li' + (x.email === APP.boot.user.email ? ' class="me"' : '') + '><span class="rank">' + x.rank + '</span><span class="grow"><span class="lb-name">' + h(x.name) +
+          (x.rank === 1 && x.total > 0 ? ' ' + icon('award') : '') + '</span>' + (x.designation ? '<span class="faint small lb-des">' + h(x.designation) + '</span>' : '') + '</span>' +
+          '<span class="small faint" title="This month">' + x.month + '</span><b title="All time">' + x.total + '</b><span class="faint small">pts</span></li>';
+      }).join('') + '</ol>' : emptyState('No designers yet.')) + '</div></div>';
+    var history = '<div class="card"><div class="card-h"><h3>' + (leader ? 'Rewards given' : 'Rewards from your leader') + '</h3></div><div class="card-b">' +
+      (d.items.length ? '<ul class="reward-list">' + d.items.map(function (x) {
+        return '<li><span class="reward-badge">' + icon('award') + '</span><div class="grow"><div><b>' + h(x.badgeLabel) + '</b> <span class="pts">+' + x.points + '</span>' +
+          (leader ? ' · ' + h(x.userName) : '') + '</div>' + (x.reason ? '<div class="small muted">“' + h(x.reason) + '”</div>' : '') +
+          '<div class="faint small">' + h(x.givenBy) + ' · ' + fmtDate(x.givenAt) + (x.taskId ? ' · <a href="#" data-go="task/' + h(x.taskId) + '">' + h(x.taskId) + '</a>' : '') + '</div></div>' +
+          (leader ? '<button class="btn ghost sm" data-delr="' + h(x.rewardId) + '" aria-label="Remove reward">' + icon('trash') + '</button>' : '') + '</li>';
+      }).join('') + '</ul>' : emptyState(leader ? 'No rewards given yet.' : 'No rewards yet.', leader ? 'Use “Give a reward” to recognise great work.' : 'Keep up the great work!', 'award')) + '</div></div>';
+    var mine = leader ? '' :
+      '<div class="rank-hero card"><div class="card-b"><div class="rh-rank">' + (me.rank ? '#' + me.rank : '—') + '<small>of ' + (me.of || 0) + '</small></div>' +
+      '<div class="grow"><div class="rh-pts"><b>' + me.total + '</b> points</div><div class="muted small">' + me.month + ' this month' + (me.designation ? ' · ' + h(me.designation) : '') + '</div></div></div>' +
+      '<div class="rh-break">' +
+      '<div><b>' + (b.creatives || 0) + '</b><span>creatives approved</span><em>+' + (b.creativePts || 0) + '</em></div>' +
+      '<div><b>' + (r.firstTime ? Math.round((b.firstTime || 0) / r.firstTime) : 0) + '</b><span>approved first time</span><em>+' + (b.firstTime || 0) + '</em></div>' +
+      '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span><em>+' + (b.onTimePts || 0) + '</em></div>' +
+      '<div><b>' + (me.count || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
+      (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span>' + (b.rejectedPts ? '<em class="neg">−' + b.rejectedPts + '</em>' : '<em class="faint">no penalty</em>') + '</div>' : '') +
+      '</div></div>';
+    el.innerHTML = '<div class="page-h"><div><h1>' + (leader ? 'Leaderboard & rewards' : 'My points') + '</h1><p>' +
+      (leader ? 'Points add up automatically from approved work. Give rewards for extra recognition.' : 'Where you stand in the team, and how you earned your points.') + '</p></div>' +
       (leader ? '<button class="btn primary" id="giveR">' + icon('award') + ' Give a reward</button>' : '') + '</div>' +
-      (leader ? '' : '<div class="kpis">' + kpiCard('My points', d.me.total, null, { color: 'var(--accent)' }) + kpiCard('This month', d.me.month, null, { color: 'var(--ok)' }) +
-        kpiCard('Rewards received', d.me.count, null, { color: 'var(--info)' }) + '</div>') +
-      '<div class="detail" style="margin-top:14px"><div class="stack">' +
-      '<div class="card"><div class="card-h"><h3>' + (leader ? 'All rewards' : 'History') + '</h3></div><div class="card-b">' +
-      (d.items.length ? '<ul class="reward-list">' + d.items.map(function (r) {
-        return '<li><span class="reward-badge">' + icon('award') + '</span><div class="grow"><div><b>' + h(r.badgeLabel) + '</b> <span class="pts">+' + r.points + '</span>' +
-          (leader ? ' · ' + h(r.userName) : '') + '</div>' + (r.reason ? '<div class="small muted">“' + h(r.reason) + '”</div>' : '') +
-          '<div class="faint small">' + h(r.givenBy) + ' · ' + fmtDate(r.givenAt) + (r.taskId ? ' · <a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a>' : '') + '</div></div>' +
-          (leader ? '<button class="btn ghost sm" data-delr="' + h(r.rewardId) + '" aria-label="Remove reward">' + icon('trash') + '</button>' : '') + '</li>';
-      }).join('') + '</ul>' : emptyState(leader ? 'No rewards given yet.' : 'No rewards yet.', leader ? 'Use “Give a reward” to recognise great work.' : 'Keep up the great work!', 'award')) +
-      '</div></div></div><div class="stack"><div class="card"><div class="card-h"><h3>Leaderboard</h3></div><div class="card-b">' +
-      (d.leaderboard.length ? '<ol class="lboard">' + d.leaderboard.map(function (x, i) {
-        return '<li' + (x.email === APP.boot.user.email ? ' class="me"' : '') + '><span class="rank">' + (i + 1) + '</span><span class="grow">' + h(x.name) +
-          (top && x.email === top.email ? ' ' + icon('award') : '') + '</span><b>' + x.total + '</b><span class="faint small">pts</span></li>';
-      }).join('') + '</ol>' : emptyState('No designers yet.')) + '</div></div></div></div>';
+      mine + '<div class="detail" style="margin-top:14px"><div class="stack">' + board + history + '</div><div class="stack">' + rulesHtml + '</div></div>';
     wireGo(el);
     if ($('#giveR')) $('#giveR').onclick = function () { rewardModal(null, function () { render('rewards'); }); };
-    $all('[data-delr]', el).forEach(function (b) {
-      b.onclick = function () {
+    $all('[data-delr]', el).forEach(function (btn) {
+      btn.onclick = function () {
         confirmBox('Remove this reward?', 'The points are taken off the leaderboard.', 'Remove', true).then(function (y) {
-          if (y) api('api_deleteReward', b.getAttribute('data-delr')).then(function () { toast('Reward removed'); render('rewards'); }).catch(function (e) { toast(errMsg(e), true); });
+          if (y) api('api_deleteReward', btn.getAttribute('data-delr')).then(function () { toast('Reward removed'); render('rewards'); }).catch(function (e) { toast(errMsg(e), true); });
         });
       };
     });
@@ -233,6 +256,11 @@ VIEWS.settings = function (arg, el, token) {
         '<p class="faint small" style="margin:0">Emails remaining today on this Google account: <b>' + (d.mailQuotaRemaining === null ? 'unknown' : d.mailQuotaRemaining) + '</b></p>') +
       sec('Uploads', '<div class="grid-3">' + txt('maxUploadMB', 'Team max file size (MB)', '', 'number') + txt('maxPublicUploadMB', 'Requester max file size (MB)', '', 'number') + txt('maxPublicFiles', 'Requester max files', '', 'number') + '</div>' +
         txt('allowedExtensions', 'File types the team can upload') + txt('publicExtensions', 'File types requesters can attach')) +
+      sec('Points & designations', '<p class="muted small" style="margin:0">Points are worked out automatically. Each approved creative earns points by the designer’s designation; bonuses for first-time approvals and on-time tasks; reward points come on top.</p>' +
+        '<div id="desigRows" class="stack" style="gap:6px"></div><div><button class="btn sm" id="desigAdd" type="button">' + icon('plus') + ' Add designation</button></div>' +
+        '<div class="grid-3">' + txt('pointsFirstTime', 'Bonus: approved first time', 'Per creative, no changes asked', 'number') + txt('pointsOnTime', 'Bonus: task on time', 'Per task completed by its deadline', 'number') +
+        txt('pointsRejected', 'Minus per rejected creative', '0 = no penalty', 'number') + '</div>') +
+      sec('Creative categories (Drive folders)', txt('creativeCategories', 'Categories (comma separated)', 'Each request’s Drive folder gets one sub-folder per category, e.g. Meta ads, Website banners, Listing images.')) +
       sec('Creative types & form fields', '<p class="muted small" style="margin:0">Each type can add its own questions to the request form. Field types: text, textarea, number, select (with options).</p>' +
         '<textarea id="s_creativeTypes" rows="16" class="mono" spellcheck="false">' + h(JSON.stringify(s.creativeTypes, null, 2)) + '</textarea>') +
       '</div><div class="stack">' +
@@ -252,11 +280,27 @@ VIEWS.settings = function (arg, el, token) {
       }).join('') + '</div></div></div>' +
       '</div></div>';
 
+    var DES = (s.designations || []).slice();
+    function drawDes() {
+      $('#desigRows').innerHTML = '<div class="row small faint" style="gap:8px"><span class="grow">Designation</span><span style="width:110px">Points / creative</span><span style="width:36px"></span></div>' +
+        DES.map(function (d, i) {
+          return '<div class="row" data-dr="' + i + '" style="gap:8px"><input type="text" class="grow" data-k="n" maxlength="60" value="' + h(d.name) + '"><input type="number" data-k="p" min="0" max="1000" style="width:110px" value="' + h(d.points) + '">' +
+            '<button class="btn ghost icon" type="button" data-drm="' + i + '" aria-label="Remove">' + icon('x') + '</button></div>';
+        }).join('');
+      $all('[data-drm]').forEach(function (b) { b.onclick = function () { syncDes(); DES.splice(Number(b.getAttribute('data-drm')), 1); drawDes(); }; });
+    }
+    function syncDes() { DES = $all('#desigRows [data-dr]').map(function (r) { return { name: $('[data-k=n]', r).value, points: $('[data-k=p]', r).value }; }); }
+    drawDes();
+    $('#desigAdd').onclick = function () { syncDes(); DES.push({ name: '', points: 10 }); drawDes(); };
     $('#saveSettings').onclick = function () {
       var patch = {};
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
       ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      patch.creativeCategories = $('#s_creativeCategories').value.trim();
+      ['pointsFirstTime', 'pointsOnTime', 'pointsRejected'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
+      patch.designations = $all('#desigRows [data-dr]').map(function (r) { return { name: $('[data-k=n]', r).value.trim(), points: Number($('[data-k=p]', r).value) }; }).filter(function (x) { return x.name; });
+      if (!patch.designations.length) return toast('Add at least one designation.', true);
       try { JSON.parse(patch.creativeTypes); } catch (e) { return toast('Creative types isn’t valid JSON: ' + e.message, true); }
       var b = this; b.disabled = true;
       api('api_saveSettings', patch).then(function () {

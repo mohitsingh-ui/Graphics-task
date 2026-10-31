@@ -284,4 +284,15 @@ dl.kv dd { margin: 0; word-break: break-word; }
 .seg-choice input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hold-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: #7a4f00; background: var(--warn-soft); border-radius: 999px; padding: 2px 8px; }
 @media (max-width: 640px) { .seg-choice { grid-template-columns: 1fr; } }
+.lboard .lb-name { display: block; } .lboard .lb-des { display: block; }
+.rank-hero .card-b { display: flex; align-items: center; gap: 18px; }
+.rh-rank { font-size: 40px; font-weight: 700; color: var(--accent); line-height: 1; display: flex; flex-direction: column; align-items: center; min-width: 70px; }
+.rh-rank small { font-size: 12px; color: var(--text-3); font-weight: 500; margin-top: 4px; }
+.rh-pts { font-size: 18px; } .rh-pts b { font-size: 28px; }
+.rh-break { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+.rh-break > div { background: var(--surface); padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-3); }
+.rh-break b { font-size: 18px; color: var(--text); } .rh-break em { font-style: normal; color: var(--ok); font-weight: 600; } .rh-break em.neg { color: var(--bad); } .rh-break em.faint { color: var(--text-3); font-weight: 400; }
+.s-rejected { background: #f3e1df; color: #7d1f16; }
+.gal .lb-chip.rejected { background: #5a1c16; }
+.gal .lb-actions .btn.lb-rej { background: transparent; color: rgba(255,255,255,.7); border-color: rgba(255,255,255,.25); }
 </style>
