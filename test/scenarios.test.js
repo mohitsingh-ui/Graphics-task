@@ -1209,6 +1209,16 @@ scenario('Themes: preset + custom accent applied to every page; validated', () =
   env.ctx.SETTINGS_MEMO_ = null;
 });
 
+scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
+  const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
+  const sheets = ss.sheets || ss.api && null;
+  delete state.spreadsheets[state.props.SPREADSHEET_ID].sheets.Campaigns;
+  env.ctx.DB_CACHE_ = {}; state.cache.clear();
+  const list = ok(call(LEADER, 'api_listCampaigns'));
+  assert.ok(Array.isArray(list));
+  assert.ok(state.spreadsheets[state.props.SPREADSHEET_ID].sheets.Campaigns, 'sheet recreated');
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

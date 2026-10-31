@@ -22,9 +22,23 @@ function ss_() {
 
 function sheet_(table) {
   if (!SCHEMA[table]) throw new Error('Unknown table ' + table);
-  var sh = ss_().getSheetByName(table);
-  if (!sh) throw AppError_('NOT_CONFIGURED', 'Database sheet "' + table + '" is missing. Run setup() again.');
-  return sh;
+  var ss = ss_(), sh = ss.getSheetByName(table);
+  if (sh) return sh;
+  // A table added by a newer version (e.g. after an update) — create it now, so read-only pages work straight away.
+  var lock = LockService.getScriptLock(), mine = LOCK_DEPTH_ === 0;
+  if (mine && !lock.tryLock(20000)) throw AppError_('BUSY', 'The portal is busy. Please try again in a moment.');
+  try {
+    sh = ss.getSheetByName(table);
+    if (!sh) {
+      var cols = SCHEMA[table];
+      sh = ss.insertSheet(table);
+      sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+      sh.getRange(1, 1, sh.getMaxRows(), cols.length).setNumberFormat('@');
+      console.log('Created missing sheet ' + table);
+    }
+    return sh;
+  } finally { if (mine) lock.releaseLock(); }
 }
 
 /** Run fn while holding the script lock. Re-entrant within one execution. */
