@@ -97,6 +97,10 @@ function api_getMyRequests(token) {
         awaiting: awaiting,
         creatives: creatives,
         finalFolderUrl: finalFolderUrl_(r),
+        campaign: r.campaignId ? (function () {
+          var c = dbGet_('Campaigns', r.campaignId); if (!c) return null;
+          return { campaignId: c.campaignId, name: c.name, approved: approvedOf_(campaignTasks_(c.campaignId)).length };
+        })() : null,
         hold: (function () {
           var h = tasks.filter(function (t) { return t.status === STATUS.ON_HOLD && t.holdParty && t.holdParty !== 'internal'; })[0];
           return h ? { reason: h.holdReason, dept: h.holdDept, since: h.holdSince } : null;
@@ -274,6 +278,65 @@ function api_trackAskChanges(token, requirementId, message) {
         t0 ? 'task/' + t0.taskId : 'requirements', true);
       return { message: 'Sent to the graphics team. They’ll reopen the task and let you know.' };
     });
+  });
+}
+
+/* ---------- whole campaign, for everyone who asked for something in it ---------- */
+
+/** The campaign, if one of this device's/link's requests is in it. */
+function trackCampaign_(keys, campaignId) {
+  var c = dbGet_('Campaigns', str_(campaignId, 40, 'Campaign', true));
+  if (!c || !campaignRequests_(c.campaignId).some(function (r) { return ownsRequirement_(keys, r); })) throw AppError_('NOT_FOUND', 'Campaign not found.');
+  return c;
+}
+
+function trackCampaignItems_(keys, c) {
+  var mine = {};
+  campaignRequests_(c.campaignId).forEach(function (r) { if (ownsRequirement_(keys, r)) mine[r.requirementId] = true; });
+  return approvedOf_(campaignTasks_(c.campaignId)).map(function (a) {
+    return { versionId: a.v.versionId, title: a.d.title, version: 'V' + a.v.versionNo, path: categoryOf_(a.task, a.d), ext: extOf_(a.v.fileName),
+      isImage: INLINE_IMAGE_TYPES.indexOf(a.v.mimeType) !== -1, mine: !!mine[a.task.requirementId], _v: a.v, _d: a.d };
+  }).sort(function (x, y) { return x.path === y.path ? (x.title < y.title ? -1 : 1) : (x.path < y.path ? -1 : 1); });
+}
+
+/** Every approved creative in the campaign (all departments' requests + the team's own tasks). */
+function api_trackCampaign(token, campaignId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackcamp:' + keys.join(',').slice(0, 120), 60, 600);
+    var c = trackCampaign_(keys, campaignId);
+    var folderUrl = '';
+    if (bool_(c.shared) && c.folderId) { try { folderUrl = DriveApp.getFolderById(c.folderId).getUrl(); } catch (e) { folderUrl = ''; } }
+    return { campaignId: c.campaignId, name: c.name, folderUrl: folderUrl, items: trackCampaignItems_(keys, c).map(function (x) { var o = {}; Object.keys(x).forEach(function (k) { if (k.charAt(0) !== '_') o[k] = x[k]; }); return o; }) };
+  });
+}
+
+function trackCampaignVersion_(keys, campaignId, versionId) {
+  var c = trackCampaign_(keys, campaignId);
+  var it = trackCampaignItems_(keys, c).filter(function (x) { return x.versionId === String(versionId); })[0];
+  if (!it) throw AppError_('NOT_FOUND', 'Creative not found.');
+  return it;
+}
+
+function api_trackCampaignThumbs(token, campaignId, versionIds) {
+  return respond_(function () {
+    var keys = trackKeys_(token), c = trackCampaign_(keys, campaignId), out = {};
+    var items = trackCampaignItems_(keys, c), byId = {};
+    items.forEach(function (x) { byId[x.versionId] = x; });
+    (Array.isArray(versionIds) ? versionIds : []).slice(0, 24).forEach(function (id) {
+      var x = byId[id]; out[id] = x ? smallThumb_({ fileId: x._v.fileId, mime: x._v.mimeType, size: x._v.sizeBytes }) : null;
+    });
+    return out;
+  });
+}
+
+function api_trackCampaignFile(token, campaignId, versionId, mode) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackcampfile:' + keys.join(',').slice(0, 120), 120, 600);
+    var x = trackCampaignVersion_(keys, campaignId, versionId);
+    if (mode === 'original') return originalOf_(x._v.approvedFileId || x._v.fileId, approvedName_(x._d, x._v));
+    return previewOf_(x._v.fileId, x._v.mimeType, x._v.sizeBytes, 1600);
   });
 }
 

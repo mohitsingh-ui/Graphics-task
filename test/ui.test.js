@@ -585,6 +585,77 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       env.call(LEADER, 'api_saveSettings', { theme: 'rosier', accentColor: '' });
     });
 
+    await step('Sale picked on the form; leader chooses the folder; both departments see every creative in the campaign', async () => {
+      const cid = env.call(LEADER, 'api_listCampaigns').data.find(c => c.name === 'Diwali Sale 2026').campaignId;
+      const fresh = await browser.newPage();
+      fresh.on('pageerror', e => errors.push('form pageerror: ' + e.message));
+      await fresh.goto(BASE + '/page');
+      await fresh.waitForSelector('#f');
+      await fresh.fill('#requesterName', 'Priya');
+      await fresh.fill('#email', 'priya@example.org');
+      await fresh.selectOption('#department', 'Marketing');
+      await fresh.selectOption('#campaignId', cid);
+      await fresh.fill('#preferredDate', future(6));
+      await fresh.fill('#quantity', '1');
+      await fresh.fill('#brief', '30% off — 1 Meta creative');
+      await fresh.screenshot({ path: path.join(OUT, '55-form-sale-dropdown.png') });
+      await fresh.click('#submitBtn');
+      await fresh.waitForSelector('.ref-id', { timeout: 15000 });
+      const reqId = (await fresh.textContent('.ref-id')).trim();
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === reqId).taskId;
+      // leader assigns and picks the folder inside the campaign
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#aAssign');
+      await page.click('#aAssign');
+      await page.selectOption('#asg', A);
+      await page.fill('#add', future(4));
+      await page.fill('#afo', '30% off / Meta ads');
+      await shot('56-assign-choose-folder');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForSelector('text=30% off / Meta ads');
+      const b = await bannerPng('30% off', 10);
+      const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: '30% off Meta 1', fileName: 'x.png', size: b.length }).data;
+      const v = env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId;
+      env.call(A, 'api_submitForApproval', tid, [v]); env.call(LEADER, 'api_leaderDecision', v, 'approved', '');
+      // the requester sees all creatives in the sale, not just theirs
+      await fresh.click('[data-tab="my"]');
+      await fresh.waitForSelector('[data-campview]');
+      await fresh.click('[data-campview]');
+      await fresh.waitForSelector('.modal [data-cv]');
+      const n = await fresh.locator('.modal [data-cv]').count();
+      assert.ok(n >= 3, 'sees creatives from other requests too, got ' + n);
+      assert.ok((await fresh.textContent('.modal')).includes('30% off / Meta ads'));
+      await fresh.waitForTimeout(300);
+      await fresh.screenshot({ path: path.join(OUT, '57-requester-sees-whole-sale.png') });
+      await fresh.close();
+    });
+
+    await step('Bonus points: set when assigning, shown to the designer, counted on My Points', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="tasks"]');
+      await page.waitForSelector('[data-assign-new]');
+      await page.click('[data-assign-new]');
+      await page.waitForSelector('#dtBp');
+      await page.fill('#dtT', 'Brand film storyboard');
+      await page.selectOption('#dtA', A);
+      await page.fill('#dtD', future(5));
+      await page.fill('#dtBp', '50');
+      await shot('58-assign-with-bonus');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForSelector('.bonus-badge');
+      assert.ok((await page.textContent('.bonus-badge')).includes('+50'));
+      await page.goto(BASE + '/page?as=' + A);
+      await page.waitForSelector('#dtabs');
+      await page.click('#dtabs [data-tab="all"]');
+      await page.waitForSelector('.bonus-badge');
+      assert.ok((await page.textContent('#view')).includes('+50 bonus pts on completion'));
+      await shot('59-designer-sees-bonus');
+      await page.click('[data-r="rewards"]');
+      await page.waitForSelector('.rank-hero');
+      assert.ok((await page.textContent('.rank-hero')).includes('task bonuses'));
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

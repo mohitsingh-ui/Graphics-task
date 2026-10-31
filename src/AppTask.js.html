@@ -37,6 +37,7 @@ function drawTask(el) {
   if (p.canHold) actions += '<button class="btn" id="aHold">' + icon('clock') + ' Put on hold</button>';
   if (p.canReopen) actions += '<button class="btn primary" id="aReopen">' + icon('refresh') + ' Reopen for changes</button>';
   if (p.canShare) actions += '<button class="btn" id="aShare">' + icon('link') + ' Share</button>';
+  if (leader && (t.status === 'Completed' || t.status === 'Approved')) actions += '<button class="btn" id="aMore">' + icon('plus') + ' Add more creatives</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
   if (leader && t.assigneeEmail && t.assigneeEmail !== APP.boot.user.email) actions += '<button class="btn" id="aReward">' + icon('award') + ' Reward</button>';
   if (leader) actions += '<button class="btn ghost danger" id="aDelete" title="Delete task">' + icon('trash') + ' Delete</button>';
@@ -51,7 +52,8 @@ function drawTask(el) {
 
   el.innerHTML =
     '<div class="page-h"><div class="grow"><div class="row wrap" style="margin-bottom:6px"><span class="mono faint">' + h(t.taskId) + '</span>' + statusBadge(t.status) + priorityBadge(t.priority) +
-    (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
+    (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') +
+    (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
     '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.deliverablesRequired) + ' creative(s) approved' + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
     '<div class="actionbar">' + actions + '</div></div>' +
 
@@ -63,6 +65,8 @@ function drawTask(el) {
       '<div class="small" style="margin-top:6px">' + (t.hold.party !== 'internal' ? 'The deadline is paused and this time isn’t counted against the graphics team. ' : '') +
       'Files can still be viewed, uploaded and approved — once every creative is approved, the task completes automatically.</div></div>' :
       (t.status === 'On Hold' ? '<div class="alert warn" style="margin-bottom:16px">This task is on hold.</div>' : '')) +
+    (leader && d.suggestedCampaign ? '<div class="alert info row between wrap" style="margin-bottom:16px;gap:10px"><span>The requester says this is for <b>' + h(d.suggestedCampaign) + '</b>. Put it in that campaign so all its creatives share one Drive folder?</span>' +
+      '<button class="btn sm primary" id="mkCamp">' + icon('board') + ' Add to “' + h(d.suggestedCampaign) + '”</button></div>' : '') +
     (t.reopenedAt && t.status !== 'Completed' ? '<div class="alert info" style="margin-bottom:16px"><b>Reopened for changes</b> <span class="small">· ' + fmtDateTime(t.reopenedAt) +
       (t.reopenCount > 1 ? ' · reopened ' + t.reopenCount + ' times' : '') + '</span><div class="pre" style="margin-top:4px">' + h(t.reopenReason) + '</div>' +
       '<div class="small" style="margin-top:6px">The ★ Final approved files stay available until the new versions are approved.</div></div>' : '') +
@@ -83,6 +87,11 @@ function drawTask(el) {
   if ($('#aHold')) $('#aHold').onclick = holdModal;
   if ($('#aReopen')) $('#aReopen').onclick = reopenModal;
   if ($('#aShare')) $('#aShare').onclick = shareTaskModal;
+  if ($('#aMore')) $('#aMore').onclick = function () { directTaskModal({ requirementId: t.requirementId, requirementTitle: r.title || t.title, campaignId: d.campaign ? d.campaign.campaignId : '', folderPath: t.folderPath || '' }); };
+  if ($('#mkCamp')) $('#mkCamp').onclick = function () {
+    this.disabled = true;
+    api('api_campaignFromSuggestion', t.taskId).then(function (x) { toast('Added to campaign “' + x.name + '”'); reloadTask(); }).catch(function (e) { toast(errMsg(e), true); });
+  };
   if ($('#zipTask')) $('#zipTask').onclick = function () { zipDownload(t.taskId, true, this); };
   if ($('#zipReq')) $('#zipReq').onclick = function () { zipDownload(t.requirementId, false, this); };
   if ($('#driveReq')) $('#driveReq').onclick = function () { driveFolderModal(t.requirementId); };
@@ -283,6 +292,7 @@ function sideCard(d) {
     '<dt>Wanted by</dt><dd>' + fmtDue(r.preferredDate, r.preferredTime) + ' <span class="faint small">(' + h(r.priorityRequested) + ')</span></dd>' +
     (leader ? '<dt>Designer</dt><dd>' + (t.assigneeName ? h(t.assigneeName) + '<div class="faint small">' + h(t.assigneeEmail) + '</div>' : '<span class="faint">Not assigned</span>') + '</dd>' +
       (t.assignedBy ? '<dt>Assigned by</dt><dd>' + h(t.assignedBy) + '<div class="faint small">' + fmtDateTime(t.assignedAt) + '</div></dd>' : '') : '') +
+    (leader ? '<dt>Saves to</dt><dd class="small">' + icon('file').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h((d.folderRoot || r.requirementId) + ' / ' + (t.folderPath || t.creativeType || 'Creatives').replace(/\//g, ' / ')) + '</dd>' : '') +
     '<dt>Start date</dt><dd>' + fmtDate(t.startDate) + '</dd>' +
     '<dt>Due date</dt><dd>' + dueLabel(t) + '</dd>' +
     '<dt>Progress</dt><dd><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="small">' + h(t.progress) + '%</span></div></dd>' +
@@ -332,6 +342,21 @@ function addComment() {
   run(api('api_addComment', TASK.task.taskId, v, $('#cmtPriv') ? $('#cmtPriv').checked : false), 'Comment posted').then(function () { b.disabled = false; });
 }
 
+/** "Save approved files to" field: folder inside the request's / campaign's Drive folder. */
+function folderField(id, value, root, options) {
+  return '<div class="field"><label for="' + id + '">Save approved files to</label><div class="folder-in"><span class="folder-root">' + icon('file') + ' ' + h(root || 'Request folder') + ' /</span>' +
+    '<input type="text" id="' + id + '" list="' + id + 'L" maxlength="250" value="' + h(value || '') + '" placeholder="e.g. 20% off / Meta ads"></div>' +
+    '<datalist id="' + id + 'L">' + (options || []).map(function (o) { return '<option value="' + h(o) + '">'; }).join('') + '</datalist>' +
+    '<span class="hint">Pick a folder already used here or type a new one. Use / for sub-folders. Everything lands in one Drive link.</span></div>';
+}
+
+/** Optional bonus the designer earns when the task is completed. */
+function bonusField(id, value) {
+  return '<div class="field"><label for="' + id + '">Bonus points on completion <span class="faint">(optional)</span></label>' +
+    '<div class="bonus-in">' + icon('award') + '<input type="number" id="' + id + '" min="0" max="1000" step="5" value="' + h(value || '') + '" placeholder="e.g. 50"><span>extra points</span></div>' +
+    '<span class="hint">For big or time-taking work. Added to the designer’s points when the task is completed.</span></div>';
+}
+
 function assignModal() {
   var t = TASK.task;
   var team = TASK.team.slice().sort(function (a, b) { return (a.role === 'designer' ? 0 : 1) - (b.role === 'designer' ? 0 : 1) || a.activeTasks - b.activeTasks; });
@@ -346,12 +371,14 @@ function assignModal() {
       '<div class="field"><label class="req">Due date</label><input type="date" id="add" value="' + h(t.dueDate) + '"></div>' +
       '<div class="field"><label>Due time</label><input type="time" id="adt" step="900" value="' + h(t.dueTime || '') + '"><span class="hint">Empty = end of day</span></div></div>' +
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
+      folderField('afo', t.folderPath || t.creativeType || '', TASK.folderRoot, TASK.folderOptions) +
+      bonusField('abp', t.bonusPoints) +
       '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
       '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
-        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value };
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value };
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
@@ -370,7 +397,8 @@ function divideModal() {
   var m = modal({
     title: 'Divide among team', wide: true,
     body: '<p class="muted" style="margin:0">Give each designer their share of the <b>' + h(t.deliverablesRequired) + '</b> creative(s) — e.g. 20 Meta ads to one, 4 homepage banners to another. Each person gets their own task with the same brief; the category becomes their folder in the request’s Drive folder.</p>' +
-      '<datalist id="dvCatL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' +
+      '<datalist id="dvCatL">' + (TASK.folderOptions || APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' +
+      '<p class="faint small" style="margin:0">Folders are inside <b>' + h(TASK.folderRoot || 'the request folder') + '</b> on Drive.</p>' +
       '<div id="dvRows" class="stack" style="gap:8px"></div>' +
       '<div class="row between"><button class="btn sm" id="dvAdd">' + icon('plus') + ' Add designer</button><span class="small" id="dvTotal"></span></div>' +
       '<div class="grid-3"><div class="field"><label class="req">Due date</label><input type="date" id="dvDate" value="' + h(t.dueDate) + '"></div>' +
@@ -380,7 +408,7 @@ function divideModal() {
     actions: [{ label: 'Cancel' }, {
       label: 'Divide & assign', cls: 'primary', onClick: function (close, el) {
         sync();
-        var parts = rows.map(function (r) { return { assigneeEmail: r.email, count: r.count, category: r.category }; });
+        var parts = rows.map(function (r) { var last = (r.category || '').split('/').pop().trim(); return { assigneeEmail: r.email, count: r.count, category: last, folderPath: r.category, bonusPoints: r.bonus }; });
         if (parts.some(function (p) { return !p.assigneeEmail || !(p.count >= 1); })) return fieldErrors(el, 'Pick a designer and at least 1 creative on every row.');
         var seen = {};
         if (parts.some(function (p) { if (seen[p.assigneeEmail]) return true; seen[p.assigneeEmail] = 1; return false; })) return fieldErrors(el, 'Each designer should appear only once.');
@@ -395,8 +423,9 @@ function divideModal() {
     $('#dvRows', m.el).innerHTML = rows.map(function (r, i) {
       return '<div class="row" data-i="' + i + '"><select class="grow" data-k="email"><option value="">Choose designer…</option>' + team.map(function (u) {
         return '<option value="' + h(u.email) + '"' + (u.email === r.email ? ' selected' : '') + '>' + h(u.name) + ' — ' + u.activeTasks + ' active' + (u.activeTasks >= thr ? ' ⚠ busy' : '') + '</option>';
-      }).join('') + '</select><input type="text" data-k="category" list="dvCatL" placeholder="Category, e.g. Meta ads" value="' + h(r.category || '') + '" style="width:190px" aria-label="Category">' +
+      }).join('') + '</select><input type="text" data-k="category" list="dvCatL" placeholder="Folder, e.g. 20% off / Meta ads" value="' + h(r.category || '') + '" style="width:220px" aria-label="Save to folder">' +
         '<input type="number" min="1" max="50" data-k="count" value="' + h(r.count) + '" style="width:90px" aria-label="Creatives">' +
+        '<input type="number" min="0" max="1000" step="5" data-k="bonus" value="' + h(r.bonus || '') + '" placeholder="Bonus" title="Bonus points on completion (optional)" style="width:84px" aria-label="Bonus points">' +
         '<span class="faint small" style="width:60px">creative(s)</span>' +
         (rows.length > 2 ? '<button class="btn ghost icon" data-rm="' + i + '" aria-label="Remove">' + icon('x') + '</button>' : '<span style="width:36px"></span>') + '</div>';
     }).join('');
@@ -407,7 +436,7 @@ function divideModal() {
   function sync() {
     $all('#dvRows [data-i]', m.el).forEach(function (row) {
       var r = rows[Number(row.getAttribute('data-i'))];
-      r.email = $('[data-k="email"]', row).value; r.count = Number($('[data-k="count"]', row).value); r.category = $('[data-k="category"]', row).value.trim();
+      r.email = $('[data-k="email"]', row).value; r.count = Number($('[data-k="count"]', row).value); r.category = $('[data-k="category"]', row).value.trim(); r.bonus = $('[data-k="bonus"]', row).value;
     });
   }
   function total_() {
@@ -429,7 +458,9 @@ function editModal() {
     body: f('title', 'Title', t.title) +
       '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
-      '<div class="grid-3">' + f('creativeType', 'Category (Drive folder)', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
+      folderField('e_folderPath', t.folderPath || '', TASK.folderRoot, TASK.folderOptions) +
+      bonusField('e_bonusPoints', t.bonusPoints) +
+      '<div class="grid-3">' + f('creativeType', 'Category', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
         '<datalist id="e_catL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
       f('instructions', 'Instructions', t.instructions, 'textarea') + f('referenceUrls', 'Reference links (one per line)', t.referenceUrls.join('\n'), 'textarea') +
@@ -437,7 +468,7 @@ function editModal() {
     actions: [{ label: 'Cancel' }, {
       label: 'Save', cls: 'primary', onClick: function (close, m) {
         var patch = {};
-        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
+        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'folderPath', 'bonusPoints', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });

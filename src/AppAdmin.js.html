@@ -153,7 +153,7 @@ function pointsSection(p) {
   var cell = function (b, neg) { return b && b.n ? b.n + (b.pts ? ' <span class="' + (neg ? 'neg' : 'pos') + '-pts">' + (b.pts > 0 ? '+' : '') + b.pts + '</span>' : '') : '<span class="faint">—</span>'; };
   return '<div class="card" style="margin-top:18px" id="pointsReport"><div class="card-h"><h3>Points & rewards</h3><div class="row" style="gap:8px">' +
     '<button class="btn sm" data-csv="points">' + icon('download') + ' Points CSV</button><button class="btn sm" data-csv="rewards">' + icon('download') + ' Rewards CSV</button></div></div>' +
-    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
+    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Task bonus</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
       p.people.map(function (x) {
         return '<tr><td><span class="rank-dot' + (x.rank === 1 && x.period > 0 ? ' first' : '') + '">' + x.rank + '</span></td><td><b>' + h(x.name) + '</b>' + (x.active ? '' : ' <span class="faint small">(inactive)</span>') +
           '<div class="faint small">' + h(x.designation || '—') + '</div></td><td><b style="font-size:15px">' + x.period + '</b></td>' +
@@ -185,6 +185,7 @@ VIEWS.rewards = function (arg, el, token) {
       (r.firstTime ? '<div>+' + r.firstTime + ' when a creative is approved first time (no changes asked)</div>' : '') +
       (r.onTime ? '<div>+' + r.onTime + ' for each task completed by its deadline (time on hold isn’t counted)</div>' : '') +
       (r.rejected ? '<div>−' + r.rejected + ' for each rejected creative</div>' : '') +
+      '<div>+ bonus points the leader sets on big tasks, paid when the task is completed</div>' +
       '<div>+ reward points from the team leader</div></div></div>';
     var board = '<div class="card"><div class="card-h"><h3>Leaderboard</h3><span class="faint small">This month · all time</span></div><div class="card-b">' +
       (d.leaderboard.length ? '<ol class="lboard">' + d.leaderboard.map(function (x) {
@@ -206,6 +207,7 @@ VIEWS.rewards = function (arg, el, token) {
       '<div><b>' + (b.creatives || 0) + '</b><span>creatives approved</span><em>+' + (b.creativePts || 0) + '</em></div>' +
       '<div><b>' + (r.firstTime ? Math.round((b.firstTime || 0) / r.firstTime) : 0) + '</b><span>approved first time</span><em>+' + (b.firstTime || 0) + '</em></div>' +
       '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span><em>+' + (b.onTimePts || 0) + '</em></div>' +
+      '<div><b>' + (b.bonusCount || 0) + '</b><span>task bonuses</span><em>+' + (b.bonus || 0) + '</em></div>' +
       '<div><b>' + (me.count || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
       (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span>' + (b.rejectedPts ? '<em class="neg">−' + b.rejectedPts + '</em>' : '<em class="faint">no penalty</em>') + '</div>' : '') +
       '</div></div>';

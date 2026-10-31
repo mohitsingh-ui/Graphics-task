@@ -46,9 +46,9 @@ function pointsTable_(inPeriod) {
   var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
   function P(e) {
     e = String(e || '').toLowerCase();
-    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0,
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0,
       // the same, counted only inside the period: { n: how many, pts: points }
-      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 } } });
+      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 } } });
   }
   function add(e, pts, when, field, n) {
     if (!e) return;
@@ -92,6 +92,12 @@ function pointsTable_(inPeriod) {
       if (end && new Date(t.completedAt).getTime() <= end.getTime()) { add(t.assigneeEmail, Number(s.pointsOnTime), t.completedAt, 'onTime', 1); tally(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), t.completedAt); }
     });
   }
+  // Task bonus set by the leader when assigning: paid to the designer once the task is completed.
+  dbAll_('Tasks').forEach(function (t) {
+    var b = Number(t.bonusPoints) || 0;
+    if (!b || t.status !== STATUS.COMPLETED || !t.assigneeEmail) return;
+    add(t.assigneeEmail, b, t.completedAt, 'bonus'); P(t.assigneeEmail).bonusCount++; tally(t.assigneeEmail, 'bonus', b, t.completedAt);
+  });
   dbAll_('Rewards').forEach(function (r) { add(r.userEmail, Number(r.points) || 0, r.givenAt, 'rewards'); P(r.userEmail).rewardCount++; tally(r.userEmail, 'rewards', Number(r.points) || 0, r.givenAt); });
   return per;
 }
@@ -121,7 +127,7 @@ function api_listRewards() {
       me: { total: me.total, month: me.period, count: me.rewardCount, rank: mine ? mine.rank : null, of: board.length,
         designation: (userByEmail_(u.email) || {}).designation || '',
         breakdown: { creatives: me.creatives, creativePts: me.creativePts, firstTime: me.firstTime, onTime: me.onTime, onTimePts: me.onTime * (Number(s.pointsOnTime) || 0),
-          rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards } },
+          rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards, bonus: me.bonus || 0, bonusCount: me.bonusCount || 0 } },
       rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0 }
     };
   });

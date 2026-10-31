@@ -129,3 +129,49 @@ function api_setRequestCampaign(id, campaignId) {
     });
   });
 }
+
+/** Folder choices for a request/campaign: folders already used there + the category list from Settings. */
+function folderOptions_(req) {
+  var tasks = req && req.campaignId ? campaignTasks_(req.campaignId)
+    : (req ? dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId; }) : []);
+  var seen = {}, out = [];
+  function add(p) { p = cleanPath_(p); if (p && !seen[p.toLowerCase()]) { seen[p.toLowerCase()] = 1; out.push(p); } }
+  tasks.forEach(function (t) { add(t.folderPath); add(t.creativeType); });
+  dbAll_('CreativeSubmissions').forEach(function (d) { if (tasks.some(function (t) { return t.taskId === d.taskId; })) add(d.deliverableType); });
+  (settings_().creativeCategories || []).forEach(add);
+  return out;
+}
+
+/** Leader: folder choices for "Assign a task" (scope = CMP-…, REQ-… or '' for a new request). */
+function api_folderOptions(scope) {
+  return respond_(function () {
+    requireLeader_();
+    scope = str_(scope, 40, 'Scope', false);
+    if (/^CMP-/.test(scope)) {
+      var c = dbGet_('Campaigns', scope);
+      return { root: c ? c.name : '', options: folderOptions_({ campaignId: scope, requirementId: '' }) };
+    }
+    var r = scope ? dbGet_('Requirements', scope) : null;
+    return { root: r ? (r.campaignId ? (dbGet_('Campaigns', r.campaignId) || {}).name : r.requirementId) : 'the new request', options: folderOptions_(r) };
+  });
+}
+
+/** Leader: turn the requester's typed sale name into a campaign (or join the existing one with that name) and add the request. */
+function api_campaignFromSuggestion(id) {
+  return respond_(function () {
+    var u = requireLeader_();
+    return withLock_(function () {
+      var req = dbGet_('Requirements', str_(id, 40, 'Request', true));
+      if (!req) { var t = dbGet_('Tasks', id); req = t && dbGet_('Requirements', t.requirementId); }
+      if (!req || !req.campaign) throw AppError_('NOT_FOUND', 'No campaign name on this request.');
+      var name = str_(req.campaign, 80, 'Campaign name', true);
+      var c = dbFind_('Campaigns', function (x) { return x.name.toLowerCase() === name.toLowerCase(); })[0];
+      if (!c) c = dbInsert_('Campaigns', { campaignId: 'CMP-' + uuid_().slice(0, 8).toUpperCase(), name: name, folderId: '', shared: '', active: true, createdBy: u.email, createdAt: nowIso_(), updatedAt: nowIso_() });
+      dbUpdate_('Requirements', req.requirementId, { campaignId: c.campaignId, updatedAt: nowIso_() });
+      var tasks = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.status !== STATUS.CANCELLED; });
+      fileInto_(finalFolder_(dbGet_('Requirements', req.requirementId)), tasks);
+      tasks.forEach(function (t) { logActivity_(t.taskId, u, 'campaign', '', c.name, 'Added to campaign “' + c.name + '”', 'team'); });
+      return { campaignId: c.campaignId, name: c.name };
+    });
+  });
+}

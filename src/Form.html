@@ -44,6 +44,8 @@
   .req-card .meta { font-size: 12.5px; color: var(--text-3); }
   .req-card .brief { font-size: 13px; color: var(--text-2); margin: 8px 0 0; white-space: pre-line; }
   .req-card .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .camp-strip { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; }
+  .camp-strip svg { width: 14px; height: 14px; vertical-align: -2px; }
   .gal-h { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 8px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
   .cr { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface-2); display: flex; flex-direction: column; }
@@ -127,6 +129,7 @@ function renderMy() {
       };
     });
     wireCreatives(el);
+    $all('[data-campview]', el).forEach(function (b) { b.onclick = function () { campaignGallery(b.getAttribute('data-campview')); }; });
     $all('[data-sendinfo]', el).forEach(function (b) {
       b.onclick = function () {
         var w = null; try { w = window.open('', '_blank'); } catch (x) { w = null; }
@@ -163,6 +166,40 @@ function renderMy() {
     if (e.code === 'LINK_INVALID' || e.code === 'LINK_EXPIRED') { TRACKS = []; saveTracks(); return renderAskEmail(errMsg(e)); }
     el.innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>';
   });
+}
+
+/** Every approved creative in the campaign (all departments + the team's own work), grouped by folder. */
+function campaignGallery(cid) {
+  var m = modal({ title: 'Loading…', wide: true, body: '<div class="loading-page"><span class="spinner"></span></div>', actions: [{ label: 'Close' }] });
+  api('api_trackCampaign', TRACKS, cid).then(function (d) {
+    $('.modal-h h2', m.el).textContent = d.name;
+    var groups = {}; d.items.forEach(function (x, i) { x.i = i; (groups[x.path] = groups[x.path] || []).push(x); });
+    $('.modal-b', m.el).innerHTML = '<p class="muted" style="margin-top:0">' + d.items.length + ' approved creative(s) for <b>' + h(d.name) + '</b> — from every request in this sale, including the team’s own. Tap to view; download any of them.</p>' +
+      (d.folderUrl ? '<a class="btn ok" style="margin-bottom:12px" target="_blank" rel="noopener" href="' + h(d.folderUrl) + '">' + icon('download') + ' Open the Google Drive folder</a>' : '') +
+      (d.items.length ? Object.keys(groups).map(function (g) {
+        return '<div class="gal-h"><span>' + icon('file').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h(g.replace(/\//g, ' / ')) + ' (' + groups[g].length + ')</span></div><div class="gallery">' +
+          groups[g].map(function (x) {
+            return '<div class="cr"><button class="ph" data-cv="' + x.i + '" aria-label="View ' + h(x.title) + '">' + h(x.ext || 'file') + '</button><div class="info"><div class="t">' + h(x.title) + '</div>' +
+              '<div class="s ok"><span>' + h(x.version) + (x.mine ? ' · yours' : '') + '</span><button class="dl" data-cd="' + x.i + '" title="Download">' + icon('download') + '</button></div></div></div>';
+          }).join('') + '</div>';
+      }).join('') : '<p class="faint">Nothing approved yet.</p>');
+    var ids = d.items.map(function (x) { return x.versionId; });
+    for (var k = 0; k < ids.length; k += 24) {
+      api('api_trackCampaignThumbs', TRACKS, cid, ids.slice(k, k + 24)).then(function (t) {
+        d.items.forEach(function (x) { var b = $('[data-cv="' + x.i + '"]', m.el); if (b && t[x.versionId]) { b.style.backgroundImage = 'url("' + t[x.versionId] + '")'; b.textContent = ''; } });
+      }).catch(function () {});
+    }
+    $all('[data-cv]', m.el).forEach(function (b) { b.onclick = function () {
+      gallery(d.items.map(function (x) { return { title: x.title + ' · ' + x.version, sub: x.path.replace(/\//g, ' / '), status: 'Approved',
+        load: function () { return api('api_trackCampaignFile', TRACKS, cid, x.versionId, 'preview'); },
+        download: function () { return api('api_trackCampaignFile', TRACKS, cid, x.versionId, 'original'); } }; }), { start: Number(b.getAttribute('data-cv')) });
+    }; });
+    $all('[data-cd]', m.el).forEach(function (b) { b.onclick = function () {
+      var x = d.items[Number(b.getAttribute('data-cd'))]; b.disabled = true;
+      api('api_trackCampaignFile', TRACKS, cid, x.versionId, 'original').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); })
+        .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+    }; });
+  }).catch(function (e) { $('.modal-b', m.el).innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>'; });
 }
 
 /** Thumbnails, full-size view and download for the requester's creatives. */
@@ -233,7 +270,10 @@ function reqCard(r) {
     (r.hold ? '<div class="alert warn" style="margin-top:12px"><b>We need something from you' + (r.hold.dept ? ' (' + h(r.hold.dept) + ')' : '') + '</b><div class="pre" style="margin-top:4px">' + h(r.hold.reason) +
       '</div><div class="small" style="margin-top:6px">The design is ready to see below. The work is paused until we get this.</div></div>' : '') +
     (r.reopened ? '<div class="alert info" style="margin-top:12px">Reopened for changes — the ★ final files stay available until the new ones are approved.</div>' : '') +
-    progress + galleryHtml + (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
+    progress + galleryHtml +
+    (r.campaign ? '<div class="camp-strip"><span>' + icon('board') + ' Part of <b>' + h(r.campaign.name) + '</b> — ' + r.campaign.approved + ' approved creative(s) from everyone</span>' +
+      '<button class="btn sm" data-campview="' + h(r.campaign.campaignId) + '">See all</button></div>' : '') +
+    (acts ? '<div class="acts">' + acts + '</div>' : '') + '</div>';
 }
 
 function renderAskEmail(msg) {
@@ -277,8 +317,10 @@ function renderForm() {
     '<input type="time" id="preferredTime" name="preferredTime" step="900" aria-label="Deadline time (optional)" title="Optional time">' +
     '<span class="err hidden"></span></div>' +
 
-    ((CFG.campaigns || []).length ? '<div class="mrow" data-f="campaignId"><label class="mlabel" for="campaignId">Campaign</label>' +
-      '<select id="campaignId" name="campaignId"><option value="">Not part of a campaign</option>' + CFG.campaigns.map(function (c) { return '<option value="' + h(c.campaignId) + '">' + h(c.name) + '</option>'; }).join('') + '</select></div>' : '') +
+    '<div class="mrow split" data-f="campaignId"><label class="mlabel" for="campaignId">For a sale?</label>' +
+      '<select id="campaignId" name="campaignId"><option value="">No — standalone request</option>' + (CFG.campaigns || []).map(function (c) { return '<option value="' + h(c.campaignId) + '">' + h(c.name) + '</option>'; }).join('') +
+      '<option value="__new">Something new…</option></select>' +
+      '<input type="text" id="campaignNew" name="campaign" maxlength="80" class="hidden" placeholder="Name of the sale / campaign, e.g. Diwali Sale" aria-label="New sale or campaign name"></div>' +
     '<div class="mrow" data-f="quantity"><label class="mlabel" for="quantity">No. of creatives</label>' +
     '<input type="number" id="quantity" name="quantity" min="1" max="50" value="1" style="max-width:120px"><span class="err hidden"></span></div>' +
 
@@ -304,6 +346,7 @@ function renderForm() {
   ['dragleave', 'drop'].forEach(function (ev) { mail.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || !mail.contains(e.relatedTarget)) mail.classList.remove('dragging'); }); });
   mail.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
   $('#f').onsubmit = submit;
+  $('#campaignId').onchange = function () { var n = this.value === '__new'; $('#campaignNew').classList.toggle('hidden', !n); if (n) $('#campaignNew').focus(); };
 }
 
 function addFiles(list) {
@@ -332,6 +375,7 @@ function renderFiles() {
 function collect() {
   var d = {};
   $all('#f [name]').forEach(function (el) { d[el.name] = el.value.trim(); });
+  if (d.campaignId === '__new') d.campaignId = ''; else d.campaign = '';
   return d;
 }
 

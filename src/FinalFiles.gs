@@ -12,7 +12,26 @@
 
 function cleanFolderName_(s) { return String(s || '').replace(/[\\/:*?"<>|#]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Creatives'; }
 
-function categoryOf_(task, d) { return cleanFolderName_((d && d.deliverableType) || (task && task.creativeType) || 'Creatives'); }
+/** "20% off / Meta ads" → "20% off/Meta ads" (max 3 levels, each part cleaned). '' if empty. */
+function cleanPath_(p) {
+  return String(p || '').split(/[\/>]+/).map(function (x) { return String(x).replace(/[\\:*?"<>|#]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80); })
+    .filter(String).slice(0, 3).join('/');
+}
+
+/**
+ * Where a creative is filed inside the request/campaign folder:
+ * the folder the leader chose for the task, else the creative's category, else the task's category.
+ */
+function categoryOf_(task, d) {
+  return cleanPath_(task && task.folderPath) || cleanPath_(d && d.deliverableType) || cleanPath_(task && task.creativeType) || 'Creatives';
+}
+
+/** Nested folders for a path like "20% off/Meta ads". */
+function subPath_(root, path) {
+  var f = root;
+  String(path || 'Creatives').split('/').forEach(function (part) { if (part) f = subFolder_(f, part); });
+  return f;
+}
 
 /** Gets / creates a named sub-folder (cached by parent + name). */
 function subFolder_(parent, name) {
@@ -46,7 +65,7 @@ function fileApprovedCopy_(task, d, v) {
   try {
     var req = dbGet_('Requirements', task.requirementId);
     var root = req ? finalFolder_(req) : DriveApp.getFolderById(ensureFolderId_('approved', [String(new Date().getFullYear()), task.taskId]));
-    var cat = subFolder_(root, categoryOf_(task, d));
+    var cat = subPath_(root, categoryOf_(task, d));
     if (d.approvedVersionId && d.approvedVersionId !== v.versionId) {
       var old = dbGet_('CreativeVersions', d.approvedVersionId);
       if (old && old.approvedFileId) { try { DriveApp.getFileById(old.approvedFileId).moveTo(subFolder_(cat, 'Older versions')); } catch (e) { /* gone */ } }
@@ -87,8 +106,8 @@ function scopeFolder_(x) {
 function fileInto_(root, tasks) {
   var counts = {};
   approvedOf_(tasks).forEach(function (a) {
-    var cat = subFolder_(root, categoryOf_(a.task, a.d));
-    counts[cat.getName()] = (counts[cat.getName()] || 0) + 1;
+    var path = categoryOf_(a.task, a.d), cat = subPath_(root, path);
+    counts[path] = (counts[path] || 0) + 1;
     var ok = false;
     if (a.v.approvedFileId) {
       try {

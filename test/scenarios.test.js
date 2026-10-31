@@ -1209,6 +1209,90 @@ scenario('Themes: preset + custom accent applied to every page; validated', () =
   env.ctx.SETTINGS_MEMO_ = null;
 });
 
+scenario('Diwali: Performance + Sales both in the campaign, leader picks folders (20% off / 30% off), everyone sees all creatives', () => {
+  const c = ok(call(LEADER, 'api_saveCampaign', { name: 'Diwali Festival' }));
+  state.currentUser = '';
+  const pm = ok(call('', 'api_submitRequirement', { requesterName: 'Perf', department: 'Performance Marketing', email: 'perf@example.org', brief: '20% off Meta', preferredDate: future(5), quantity: 2, campaignId: c.campaignId }));
+  const sl = ok(call('', 'api_submitRequirement', { requesterName: 'Sal', department: 'Sales', email: 'sales@example.org', brief: 'Banners', preferredDate: future(5), quantity: 1, campaignId: c.campaignId }));
+  const tPm = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === pm.requirementId).taskId;
+  const tSl = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sl.requirementId).taskId;
+  // leader decides where each task's creatives go
+  ok(call(LEADER, 'api_assignTask', tPm, { assigneeEmail: A, dueDate: future(5), priority: 'High', folderPath: '20% off / Meta ads' }));
+  ok(call(LEADER, 'api_assignTask', tSl, { assigneeEmail: B, dueDate: future(5), priority: 'High', folderPath: 'Website banners' }));
+  const g = ok(call(LEADER, 'api_getTask', tPm));
+  assert.strictEqual(g.task.folderPath, '20% off/Meta ads'); assert.strictEqual(g.folderRoot, 'Diwali Festival');
+  assert.ok(g.folderOptions.includes('20% off/Meta ads') && g.folderOptions.includes('Website banners') && g.folderOptions.includes('Listing images'));
+  const done = (who, tid, title) => { const v = upload(who, { kind: 'version', taskId: tid, title }, 'f.png', png(400)).versionId; ok(call(who, 'api_submitForApproval', tid, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', '')); return v; };
+  done(A, tPm, 'PM 20 a'); done(A, tPm, 'PM 20 b'); done(B, tSl, 'Home banner');
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tPm)).task.status, 'Completed');
+  // later: 30% off — leader adds 1 more creative into the SAME (completed) request, own folder
+  const more = ok(call(LEADER, 'api_createDirectTask', { title: '30% off Meta', assigneeEmail: A, dueDate: future(3), quantity: 1, requirementId: pm.requirementId, folderPath: '30% off/Meta ads' }));
+  done(A, more.taskId, 'PM 30 a');
+  const f = ok(call(LEADER, 'api_finalFolder', c.campaignId, false));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f.categories)), [{ name: '20% off/Meta ads', count: 2 }, { name: '30% off/Meta ads', count: 1 }, { name: 'Website banners', count: 1 }]);
+  const root = state.folders[env.ctx.dbGet_('Campaigns', c.campaignId).folderId];
+  const kid = (parent, name) => Object.values(state.folders).find(x => x.parent === parent.id && x.name === name);
+  const meta30 = kid(kid(root, '30% off'), 'Meta ads');
+  assert.ok(Object.values(state.files).some(x => x.parent === meta30.id && x.name === 'PM 30 a V1.png'), 'nested folder Diwali Festival / 30% off / Meta ads');
+  // both requesters see ALL creatives of the campaign (theirs + the other department's + team's own)
+  const my = ok(call('', 'api_getMyRequests', [pm.trackToken])).requests.find(r => r.requirementId === pm.requirementId);
+  assert.strictEqual(my.campaign.name, 'Diwali Festival'); assert.strictEqual(my.campaign.approved, 4);
+  const all = ok(call('', 'api_trackCampaign', [sl.trackToken], c.campaignId));
+  assert.strictEqual(all.items.length, 4);
+  assert.deepStrictEqual(all.items.filter(x => x.mine).map(x => x.title), ['Home banner']);
+  const pmItem = all.items.find(x => x.title === 'PM 30 a');
+  assert.ok(ok(call('', 'api_trackCampaignFile', [sl.trackToken], c.campaignId, pmItem.versionId, 'preview')).dataUrl);
+  assert.ok(ok(call('', 'api_trackCampaignFile', [sl.trackToken], c.campaignId, pmItem.versionId, 'original')).base64);
+  assert.ok(ok(call('', 'api_trackCampaignThumbs', [sl.trackToken], c.campaignId, [pmItem.versionId]))[pmItem.versionId]);
+  const outsider = ok(call('', 'api_submitRequirement', { requesterName: 'X', department: 'HR', brief: 'x', preferredDate: future(3) }));
+  err(call('', 'api_trackCampaign', [outsider.trackToken], c.campaignId), 'NOT_FOUND');
+  err(call('', 'api_trackCampaignFile', [outsider.trackToken], c.campaignId, pmItem.versionId, 'preview'), 'NOT_FOUND');
+  // moving a task's folder moves its approved files
+  ok(call(LEADER, 'api_updateTask', tSl, { folderPath: 'Banners/Homepage' }));
+  const f2 = ok(call(LEADER, 'api_finalFolder', c.campaignId, false));
+  assert.ok(f2.categories.some(x => x.name === 'Banners/Homepage' && x.count === 1));
+  assert.ok(!f2.categories.some(x => x.name === 'Website banners'));
+  // requester types a new sale name → leader turns it into a campaign in one click
+  const nw = ok(call('', 'api_submitRequirement', { requesterName: 'Ops', department: 'Ops', brief: 'Republic day', preferredDate: future(6), campaign: 'Republic Day Sale' }));
+  const tNw = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === nw.requirementId).taskId;
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tNw)).suggestedCampaign, 'Republic Day Sale');
+  const made = ok(call(LEADER, 'api_campaignFromSuggestion', tNw));
+  assert.strictEqual(made.name, 'Republic Day Sale');
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', tNw)).campaign.name, 'Republic Day Sale');
+  assert.strictEqual(ok(call(LEADER, 'api_folderOptions', c.campaignId)).root, 'Diwali Festival');
+});
+
+scenario('Task bonus points: leader sets extra points when assigning; paid when the task is completed', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Big', department: 'Brand', brief: 'Brand film storyboard', preferredDate: future(6), quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  err(call(LEADER, 'api_assignTask', tid, { assigneeEmail: B, dueDate: future(6), priority: 'High', bonusPoints: 5000 }), 'VALIDATION');
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: B, dueDate: future(6), priority: 'High', bonusPoints: 50 }));
+  assert.strictEqual(ok(call(B, 'api_getTask', tid)).task.bonusPoints, '50');
+  assert.ok(ok(call(B, 'api_getNotifications')).items.some(n => /\+50 points when this task is completed/.test(n.body)));
+  const before = ok(call(B, 'api_listRewards')).me;
+  // not paid before completion
+  const v = upload(B, { kind: 'version', taskId: tid, title: 'Storyboard' }, 's.png', png(400)).versionId;
+  ok(call(B, 'api_submitForApproval', tid, [v]));
+  assert.strictEqual(ok(call(B, 'api_listRewards')).me.breakdown.bonus, before.breakdown.bonus);
+  ok(call(LEADER, 'api_updateTask', tid, { bonusPoints: 80 }));   // leader raises it before completion
+  ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  const after = ok(call(B, 'api_listRewards')).me;
+  assert.strictEqual(after.breakdown.bonus - before.breakdown.bonus, 80);
+  assert.strictEqual(after.breakdown.bonusCount - before.breakdown.bonusCount, 1);
+  const rep = ok(call(LEADER, 'api_getReports', {}));
+  assert.ok(rep.points.people.find(x => x.email === B).bonus.pts >= 80);
+  assert.ok(ok(call(LEADER, 'api_exportCsv', 'points', {})).csv.includes('Bonus points'));
+  // per-designer bonus when dividing, and on a direct task
+  const s2 = ok(call('', 'api_submitRequirement', { requesterName: 'Two', department: 'Brand', brief: 'Two parts', preferredDate: future(6), quantity: 2 }));
+  const t2 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s2.requirementId).taskId;
+  ok(call(LEADER, 'api_divideTask', t2, { parts: [{ assigneeEmail: A, count: 1, bonusPoints: 30 }, { assigneeEmail: B, count: 1 }], dueDate: future(6), priority: 'High' }));
+  const parts = ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === s2.requirementId);
+  assert.strictEqual(parts.find(x => x.assigneeEmail === A).bonusPoints, '30');
+  assert.ok(!Number(parts.find(x => x.assigneeEmail === B).bonusPoints));
+  const d = ok(call(LEADER, 'api_createDirectTask', { title: 'Big deck', assigneeEmail: A, dueDate: future(3), bonusPoints: 100 }));
+  assert.strictEqual(ok(call(A, 'api_getTask', d.taskId)).task.bonusPoints, '100');
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

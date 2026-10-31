@@ -313,4 +313,12 @@ dl.kv dd { margin: 0; word-break: break-word; }
 @media (prefers-reduced-motion: reduce) { .view-in > * { animation: none; } }
 .btn { transition: background .12s, border-color .12s, box-shadow .12s, transform .06s; } .btn:active:not(:disabled) { transform: translateY(1px); }
 tr.click { transition: background .1s; }
+.folder-in { display: flex; align-items: stretch; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+.folder-in .folder-root { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; background: var(--surface-2); color: var(--text-2); font-size: 12.5px; white-space: nowrap; border-right: 1px solid var(--line); max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.folder-in .folder-root svg { width: 14px; height: 14px; flex: none; }
+.folder-in input { border: 0 !important; box-shadow: none !important; flex: 1; min-width: 0; }
+.bonus-in { display: flex; align-items: center; gap: 8px; } .bonus-in svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
+.bonus-in input { width: 120px; } .bonus-in span { color: var(--text-3); font-size: 13px; }
+.bonus-badge { background: var(--accent-soft); color: var(--accent-ink); display: inline-flex; align-items: center; gap: 4px; }
+.bonus-badge svg { width: 12px; height: 12px; }
 </style>

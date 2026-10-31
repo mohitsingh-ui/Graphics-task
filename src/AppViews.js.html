@@ -163,7 +163,7 @@ function designerOverview(el, token, tab) {
 function designerCard(t) {
   return '<div class="tcard" data-go="task/' + h(t.taskId) + '">' +
     '<div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
-    '<div class="tc-title">' + h(t.title) + '</div>' +
+    '<div class="tc-title">' + h(t.title) + '</div>' + (Number(t.bonusPoints) ? '<span class="badge bonus-badge" style="align-self:flex-start">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts on completion</span>' : '') +
     '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + ' creatives approved</div>' +
     '<div class="row between"><span>' + statusBadge(t.status) + holdChip(t) + '</span><span class="small">Due ' + dueLabel(t) + '</span></div>' +
     '<div class="row"><div class="grow">' + progressBar(t.progress, t.status === 'Completed') + '</div><span class="faint small">' + h(t.progress) + '%</span></div></div>';
@@ -219,7 +219,8 @@ function completedRequests(el, token) {
             '<td class="small">' + h(r.designers.join(', ') || '—') + '</td>' +
             '<td class="small">' + fmtDate(r.completedAt) + '</td>' +
             '<td style="text-align:right;white-space:nowrap"><button class="btn sm ' + (r.shared ? 'ok' : 'primary') + '" data-dfolder="' + h(r.requirementId) + '" title="' + (r.campaignName ? 'Link to the whole campaign folder' : 'Link to this request’s folder') + '">' + icon('external') + (r.shared ? ' Drive link' : ' Get Drive link') + '</button> ' +
-              '<button class="btn sm" data-dzip="' + h(r.requirementId) + '"' + (r.approved ? '' : ' disabled') + ' title="Download all approved as .zip">' + icon('download') + '</button></td></tr>';
+              '<button class="btn sm" data-dzip="' + h(r.requirementId) + '"' + (r.approved ? '' : ' disabled') + ' title="Download all approved as .zip">' + icon('download') + '</button> ' +
+              '<button class="btn sm" data-more="' + h(r.requirementId) + '" data-title="' + h(r.title) + '" data-camp="' + h(r.campaignId || '') + '" title="Add more creatives to this request">' + icon('plus') + ' More</button></td></tr>';
         }).join('') + '</tbody></table>' : emptyState(DONE_FILTER.q || DONE_FILTER.from ? 'No completed requests match.' : 'No completed requests yet.', 'Requests show up here once every task in them is completed.', 'check')) +
       '</div>' + (d.total > d.rows.length ? '<p class="faint small" style="padding:8px 16px">Showing the latest ' + d.rows.length + ' of ' + d.total + '. Narrow it with the search or dates.</p>' : '') + '</div>';
     wireGo(el);
@@ -229,6 +230,7 @@ function completedRequests(el, token) {
     if ($('#dnClear')) $('#dnClear').onclick = function () { DONE_FILTER = { q: '', from: '', to: '' }; render('requirements/completed'); };
     $all('[data-dfolder]', el).forEach(function (b) { b.onclick = function () { driveFolderModal(b.getAttribute('data-dfolder')); }; });
     $all('[data-dzip]', el).forEach(function (b) { b.onclick = function () { zipDownload(b.getAttribute('data-dzip'), false, b); }; });
+    $all('[data-more]', el).forEach(function (b) { b.onclick = function () { directTaskModal({ requirementId: b.getAttribute('data-more'), requirementTitle: b.getAttribute('data-title'), campaignId: b.getAttribute('data-camp') }); }; });
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
 }
 
@@ -251,18 +253,22 @@ function directTaskModal(preset) {
         '<div class="field"><label for="dtB">Details</label><textarea id="dtB" rows="3" maxlength="8000" placeholder="Sizes, copy, references…"></textarea></div>' +
         '<div class="grid-2"><div class="field"><label class="req" for="dtA">Designer</label><select id="dtA"><option value="">Choose…</option>' + team.map(function (u) {
           return '<option value="' + h(u.email) + '">' + h(u.name) + (u.designation ? ' · ' + h(u.designation) : '') + ' — ' + u.activeTasks + ' active</option>'; }).join('') + '</select></div>' +
-        '<div class="field"><label for="dtC">Category <span class="faint">(Drive folder)</span></label><input type="text" id="dtC" list="dtCL" maxlength="80" placeholder="e.g. Meta ads"><datalist id="dtCL">' +
+        '<div class="field"><label for="dtC">Category</label><input type="text" id="dtC" list="dtCL" maxlength="80" placeholder="e.g. Meta ads"><datalist id="dtCL">' +
           (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist></div></div>' +
+        '<div id="dtFolder"></div>' +
         '<div class="grid-3"><div class="field"><label class="req" for="dtD">Due date</label><input type="date" id="dtD" min="' + todayIso() + '"></div>' +
         '<div class="field"><label for="dtTm">Time</label><input type="time" id="dtTm" step="900"></div>' +
         '<div class="field"><label for="dtQ">No. of creatives</label><input type="number" id="dtQ" min="1" max="50" value="1"></div></div>' +
+        bonusField('dtBp', preset.bonusPoints || '') +
         '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
         '<div class="alert bad hidden" data-form-error></div>',
       actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
         var to = $('#dtTo', m).value;
+        var fp = $('#dtF', m) ? $('#dtF', m).value.trim() : '';
         var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
-          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value,
-          requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '' };
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value,
+          requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '', folderPath: fp };
+        if (!input.category && fp) input.category = fp.split('/').pop().trim();
         if (!input.title) return fieldErrors(m, 'Give the task a title.');
         if (!input.assigneeEmail) return fieldErrors(m, 'Choose a designer.');
         if (!input.dueDate) return fieldErrors(m, 'Pick a due date.');
@@ -270,6 +276,16 @@ function directTaskModal(preset) {
           .catch(function (e) { fieldErrors(m, errMsg(e)); });
       } }]
     });
+    function loadFolders() {
+      var v = $('#dtTo').value, scope = v.indexOf(':') > 0 ? v.split(':')[1] : '';
+      var keep = $('#dtF') ? $('#dtF').value : (preset.folderPath || '');
+      api('api_folderOptions', scope).then(function (fo) {
+        if (!$('#dtFolder')) return;
+        $('#dtFolder').innerHTML = folderField('dtF', keep, fo.root, fo.options);
+      }).catch(function () {});
+    }
+    $('#dtTo').onchange = loadFolders;
+    loadFolders();
   }).catch(function (e) { toast(errMsg(e), true); });
 }
 document.addEventListener('click', function (e) {
