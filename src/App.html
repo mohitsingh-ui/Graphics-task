@@ -3,6 +3,7 @@
 <head>
 <base target="_top">
 <?!= include_('Styles') ?>
+<?!= themeCss_() ?>
 <style>
   .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
   .side { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; z-index: 40; }
@@ -100,6 +101,7 @@
 <?!= include_('AppViews.js') ?>
 <?!= include_('AppTask.js') ?>
 <?!= include_('AppAdmin.js') ?>
+<?!= include_('AppCampaigns.js') ?>
 <script>
 var BOOT = <?!= bootJson ?>;
 startApp(BOOT.route || 'overview', BOOT.pre);

@@ -13,10 +13,65 @@ function apiPre(name) {
   return api(name);
 }
 
+/* ---------- instant screens ----------
+ * Read calls are remembered for 10 minutes. Re-opening a screen shows the
+ * remembered data at once and fetches fresh data in the background; if it
+ * changed, the screen quietly redraws. Any change you make (a "write" call)
+ * clears the memory, so you never see stale data after an edit. */
+var READ_APIS = { api_leaderDashboard: 1, api_designerDashboard: 1, api_listTasks: 1, api_getTask: 1, api_listApprovals: 1, api_listRewards: 1,
+  api_getReports: 1, api_listTeam: 1, api_listCampaigns: 1, api_getCampaign: 1, api_listCompletedRequests: 1, api_getSettings: 1, api_listBatchLinks: 1,
+  api_listThemes: 1, api_listTaskShares: 1 };
+// Calls that neither read a screen nor change anything.
+var PASS_APIS = { api_getThumbs: 1, api_getAsset: 1, api_getNotifications: 1, api_downloadApprovedZip: 1, api_exportCsv: 1, api_bootstrap: 1 };
+var VIEW_CACHE = {}, RAW_API = api;
+api = function (name) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  if (!READ_APIS[name]) { if (!PASS_APIS[name]) VIEW_CACHE = {}; return RAW_API.apply(null, arguments); }
+  var key = name + '|' + JSON.stringify(args), c = VIEW_CACHE[key], now = Date.now();
+  function fresh() {
+    return RAW_API.apply(null, [name].concat(args)).then(function (d) {
+      var j = JSON.stringify(d), was = VIEW_CACHE[key];
+      VIEW_CACHE[key] = { t: Date.now(), json: j };
+      return { d: d, changed: !!was && was.json !== j };
+    });
+  }
+  if (c && now - c.t < 600000) {
+    if (now - c.t > 2500 && !c.pending) {
+      var route = APP.route; c.pending = true;
+      fresh().then(function (r) {
+        var busy = document.querySelector('.modal-back, .lightbox') || /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName);
+        if (r.changed && APP.route === route && !busy) render(route, true);
+      }).catch(function () { /* keep showing what we have */ }).then(function () { c.pending = false; });
+    }
+    return Promise.resolve(JSON.parse(c.json));
+  }
+  return fresh().then(function (r) { return r.d; });
+};
+
+/** Hovering a task or campaign starts loading it, so the click opens instantly. */
+(function () {
+  var timer = null;
+  document.addEventListener('mouseover', function (e) {
+    var a = e.target.closest && e.target.closest('[data-go^="task/"], [data-go^="campaigns/"]');
+    if (!a) return;
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      var r = a.getAttribute('data-go'), id = r.split('/')[1];
+      if (!id) return;
+      (r.indexOf('task/') === 0 ? api('api_getTask', id) : api('api_getCampaign', id)).catch(function () {});
+    }, 120);
+  });
+  document.addEventListener('touchstart', function (e) {
+    var a = e.target.closest && e.target.closest('[data-go^="task/"]');
+    if (a) api('api_getTask', a.getAttribute('data-go').split('/')[1]).catch(function () {});
+  }, { passive: true });
+})();
+
 var NAV = {
   leader: [
     { r: 'overview', label: 'Overview', icon: 'home' },
     { r: 'requirements', label: 'Requirements', icon: 'inbox' },
+    { r: 'campaigns', label: 'Campaigns', icon: 'board' },
     { r: 'tasks', label: 'Tasks', icon: 'tasks' },
     { r: 'approvals', label: 'Creative Approvals', icon: 'check' },
     { r: 'reports', label: 'Reports', icon: 'chart' },
@@ -40,7 +95,7 @@ function startApp(initialRoute, pre) {
   $('#bellBtn').innerHTML = icon('bell');
   $('#menuBtn').onclick = function () { $('#side').classList.add('open'); $('#scrim').classList.add('open'); };
   $('#scrim').onclick = closeMenu;
-  $('#refreshBtn').onclick = function () { render(APP.route); loadNotifications(); };
+  $('#refreshBtn').onclick = function () { VIEW_CACHE = {}; render(APP.route); loadNotifications(); };
   $('#bellBtn').onclick = toggleNotifications;
   document.addEventListener('click', function (e) {
     var pop = $('#notifPop');
@@ -90,7 +145,7 @@ function go(route, replace) {
   render(route);
 }
 
-function render(route) {
+function render(route, soft) {
   APP.route = route;
   closeMenu();
   var parts = route.split('/');
@@ -100,8 +155,16 @@ function render(route) {
   $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === (name === 'task' ? 'tasks' : name)); });
   var token = ++APP.viewToken;
   var el = $('#view');
+  if (soft) {
+    // Background refresh: redraw in place, keep the scroll position, no spinner.
+    var y = window.scrollY;
+    VIEWS[name](arg, el, token);
+    setTimeout(function () { window.scrollTo(0, y); }, 0);
+    return;
+  }
   el.innerHTML = '<div class="loading-page"><span class="spinner"></span> Loading…</div>';
   window.scrollTo(0, 0);
+  el.classList.remove('view-in'); void el.offsetWidth; el.classList.add('view-in');
   VIEWS[name](arg, el, token);
 }
 

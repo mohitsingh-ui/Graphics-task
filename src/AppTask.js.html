@@ -106,7 +106,12 @@ function drawTask(el) {
     run(api('api_setFinalLink', t.taskId, v), v ? 'Final files link saved — the requester can download it now' : 'Link removed').then(function () { b.disabled = false; });
   };
   if ($('#notesSave')) $('#notesSave').onclick = function () { run(api('api_updateTask', t.taskId, { internalNotes: $('#notes').value }), 'Notes saved'); };
-  if ($('#splitBtn')) $('#splitBtn').onclick = splitModal;
+  if ($('#splitBtn')) $('#splitBtn').onclick = function () { directTaskModal({ requirementId: t.requirementId, requirementTitle: r.title || t.title, campaignId: d.campaign ? d.campaign.campaignId : '' }); };
+  if ($('#campSel')) $('#campSel').onchange = function () {
+    var v = this.value;
+    api('api_setRequestCampaign', t.requirementId, v).then(function () { toast(v ? 'Added to the campaign — its approved files moved to the campaign folder' : 'Removed from the campaign'); reloadTask(); })
+      .catch(function (e) { toast(errMsg(e), true); reloadTask(); });
+  };
   if ($('#refUpload')) $('#refUpload').onclick = function () { pickFiles(true, function (files) { uploadRefs(files); }); };
   $all('[data-cmp]', el).forEach(function (b) { b.onclick = function () { compareModal(b.getAttribute('data-cmp')); }; });
   $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved', reloadTask); }; });
@@ -202,7 +207,7 @@ function requestCard(d) {
   var req = 0, ok = 0;
   ps.forEach(function (p) { req += p.required; ok += p.approved; });
   var done = req && ok >= req;
-  return '<div class="card"><div class="card-h"><h3>Whole request</h3><span class="faint small">' + h(d.requirement.requirementId) + '</span></div><div class="card-b stack">' +
+  return '<div class="card"><div class="card-h"><h3>Whole request</h3>' + (APP.role === 'leader' ? '<button class="btn ghost sm" id="splitBtn">' + icon('plus') + ' Add task</button>' : '<span class="faint small">' + h(d.requirement.requirementId) + '</span>') + '</div><div class="card-b stack">' +
     '<div><div class="row between small"><span><b>' + ok + ' of ' + req + '</b> creatives approved</span><span class="faint">' + ps.length + ' designers</span></div>' +
     '<div style="margin-top:6px">' + progressBar(req ? ok / req * 100 : 0, done) + '</div></div>' +
     ps.map(function (p) {
@@ -223,17 +228,18 @@ function finalFilesCard(d) {
   return '<div class="card"><div class="card-h"><h3>Approved files</h3><span class="faint small">' + n + ' in this task' + (parts ? ' · request has ' + parts + ' parts' : '') + '</span></div><div class="card-b stack">' +
     '<button class="btn" id="zipTask"' + (n ? '' : ' disabled') + '>' + icon('download') + ' Download approved (.zip)</button>' +
     (parts ? '<button class="btn" id="zipReq">' + icon('download') + ' Download whole request (.zip)</button>' : '') +
-    (leader ? '<button class="btn primary" id="driveReq">' + icon('external') + ' Drive link for the whole request</button>' +
-      '<p class="faint small" style="margin:0">One folder for ' + h(d.requirement.requirementId) + ' with a sub-folder per category (Meta ads, banners…). Anyone with the link can download — no login.</p>' : '') +
+    (leader ? '<button class="btn primary" id="driveReq">' + icon('external') + (d.campaign ? ' Drive link for “' + h(d.campaign.name) + '”' : ' Drive link for the whole request') + '</button>' +
+      '<p class="faint small" style="margin:0">' + (d.campaign ? 'One folder for the whole campaign' : 'One folder for ' + h(d.requirement.requirementId)) + ' with a sub-folder per category (Meta ads, listing images…). Anyone with the link can download — no login.</p>' : '') +
     '</div></div>';
 }
 
 function driveFolderModal(id) {
-  var m = modal({ title: 'Drive folder for the whole request', body: '<div class="loading-page" style="padding:20px"><span class="spinner"></span> Putting the approved files in place…</div>', actions: [{ label: 'Close' }] });
+  var m = modal({ title: 'Drive folder', body: '<div class="loading-page" style="padding:20px"><span class="spinner"></span> Putting the approved files in place…</div>', actions: [{ label: 'Close' }] });
   function show(r) {
-    var msg = (r.title || 'Approved creatives') + ' (' + r.requirementId + ') — all approved creatives: ' + r.url;
+    var msg = (r.title || 'Approved creatives') + (r.kind === 'campaign' ? '' : ' (' + r.requirementId + ')') + ' — all approved creatives: ' + r.url;
     $('.modal-b', m.el).innerHTML =
-      '<p class="muted" style="margin-top:0"><b>' + r.total + '</b> approved creative(s) for ' + h(r.requirementId) + ', in these folders:</p>' +
+      '<p class="muted" style="margin-top:0">' + (r.kind === 'campaign' ? '<b>Campaign: ' + h(r.campaignName) + '</b> — ' + r.requests + ' request(s). ' : '') +
+        '<b>' + r.total + '</b> approved creative(s)' + (r.kind === 'campaign' ? '' : ' for ' + h(r.requirementId)) + ', in these folders:</p>' +
       '<div class="row wrap" style="gap:6px;margin-bottom:12px">' + r.categories.map(function (c) { return '<span class="badge plain">' + icon('file') + ' ' + h(c.name) + ' · ' + c.count + '</span>'; }).join('') + '</div>' +
       (r.shared ? '<div class="alert ok" style="margin-bottom:10px">Anyone with the link can open and download — no login. New approvals are added automatically.</div>' +
         '<div class="field"><div class="row" style="gap:8px"><input type="text" readonly id="dfUrl" value="' + h(r.url) + '"><button class="btn primary" id="dfCopy">Copy</button></div></div>' +
@@ -295,7 +301,11 @@ function progressCard(t) {
 
 function leaderSide(d) {
   var t = d.task;
-  return '<div class="card"><div class="card-h"><h3>Internal notes</h3><span class="faint small">Leaders only</span></div><div class="card-b stack">' +
+  var camp = '<div class="card"><div class="card-h"><h3>Campaign</h3>' + (d.campaign ? '<a href="#" class="small" data-go="campaigns/' + h(d.campaign.campaignId) + '">Open</a>' : '') + '</div><div class="card-b stack">' +
+    '<select id="campSel"><option value="">— Not in a campaign —</option>' + (d.campaigns || []).map(function (c) {
+      return '<option value="' + h(c.campaignId) + '"' + (d.campaign && d.campaign.campaignId === c.campaignId ? ' selected' : '') + '>' + h(c.name) + '</option>'; }).join('') + '</select>' +
+    '<span class="hint">Applies to the whole request (' + h(d.requirement.requirementId) + '). Its approved files go into the campaign’s Drive folder.</span></div></div>';
+  return camp + '<div class="card"><div class="card-h"><h3>Internal notes</h3><span class="faint small">Leaders only</span></div><div class="card-b stack">' +
     '<textarea id="notes" rows="4" maxlength="8000">' + h(t.internalNotes || '') + '</textarea><div><button class="btn sm" id="notesSave">Save notes</button></div></div></div>' +
     '<div class="card"><div class="card-h"><h3>Assignment history</h3></div><div class="card-b">' +
     (d.assignments.length ? '<ul class="timeline">' + d.assignments.map(function (a) {
@@ -419,14 +429,15 @@ function editModal() {
     body: f('title', 'Title', t.title) +
       '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
-      '<div class="grid-3">' + f('campaign', 'Campaign', t.campaign) + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
+      '<div class="grid-3">' + f('creativeType', 'Category (Drive folder)', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
+        '<datalist id="e_catL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
       f('instructions', 'Instructions', t.instructions, 'textarea') + f('referenceUrls', 'Reference links (one per line)', t.referenceUrls.join('\n'), 'textarea') +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: 'Save', cls: 'primary', onClick: function (close, m) {
         var patch = {};
-        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'campaign', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
+        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });

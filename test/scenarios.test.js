@@ -1112,6 +1112,103 @@ scenario('Designations and automatic points: approved creatives, first-time and 
   ok(call(LEADER, 'api_saveSettings', { pointsRejected: 0 }));
 });
 
+scenario('Completed requests list (with Drive link state) and points & rewards report', () => {
+  err(call(A, 'api_listCompletedRequests', {}), 'FORBIDDEN');
+  const list = ok(call(LEADER, 'api_listCompletedRequests', {}));
+  assert.ok(list.rows.length >= 1);
+  const sale = list.rows.find(x => x.title === 'Sale: 2 meta + 1 banner');
+  assert.ok(sale, 'divided sale request appears once all its parts are complete');
+  assert.strictEqual(sale.tasks, 2);
+  assert.strictEqual(sale.approved, 3); assert.strictEqual(sale.rejected, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(sale.categories)), [{ name: 'Meta ads', count: 2 }, { name: 'Website banners', count: 1 }]);
+  assert.strictEqual(sale.hasFolder, true);
+  assert.ok(list.rows.every((x, i, a) => i === 0 || a[i - 1].completedAt >= x.completedAt), 'newest first');
+  assert.strictEqual(ok(call(LEADER, 'api_listCompletedRequests', { q: 'sale: 2 meta' })).rows.length, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_listCompletedRequests', { from: future(30) })).rows.length, 0);
+  // reward / points report
+  const rep = ok(call(LEADER, 'api_getReports', {}));
+  const a = rep.points.people.find(x => x.email === A);
+  assert.ok(a.period > 0 && a.creatives.n > 0 && a.rank >= 1);
+  assert.ok(rep.points.given.length >= 1 && rep.points.rewardPoints > 0);
+  assert.ok(rep.points.badges.length >= 1);
+  const csv1 = ok(call(LEADER, 'api_exportCsv', 'points', {}));
+  assert.ok(csv1.csv.includes('Reward points') && csv1.csv.includes('Asha'));
+  const csv2 = ok(call(LEADER, 'api_exportCsv', 'rewards', {}));
+  assert.ok(csv2.csv.includes('Given at'));
+});
+
+scenario('Campaign: Diwali sale — department request + leader tasks + listing images split → one Drive folder', () => {
+  err(call(A, 'api_saveCampaign', { name: 'Diwali Sale' }), 'FORBIDDEN');
+  const c = ok(call(LEADER, 'api_saveCampaign', { name: 'Diwali Sale 2026' }));
+  err(call(LEADER, 'api_saveCampaign', { name: 'diwali sale 2026' }), 'VALIDATION');
+  // the form offers active campaigns; a department picks it
+  state.currentUser = '';
+  const cfg = ok(call('', 'api_getFormConfig'));
+  assert.ok(cfg.campaigns.some(x => x.campaignId === c.campaignId));
+  const abc = ok(call('', 'api_submitRequirement', { requesterName: 'ABC', department: 'Sales', email: 'abc2@example.org', brief: 'Diwali: 2 Meta', preferredDate: future(5), quantity: 2, campaignId: c.campaignId }));
+  const tAbc = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === abc.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tAbc, { assigneeEmail: A, dueDate: future(5), priority: 'High' }));
+  ok(call(LEADER, 'api_updateTask', tAbc, { creativeType: 'Meta ads' }));
+  // leader adds more Meta creatives to the same campaign, and listing images split across two designers
+  const meta2 = ok(call(LEADER, 'api_createDirectTask', { title: 'Diwali — extra Meta', assigneeEmail: B, dueDate: future(4), quantity: 1, category: 'Meta ads', campaignId: c.campaignId }));
+  const listA = ok(call(LEADER, 'api_createDirectTask', { title: 'Listing images — ghee', assigneeEmail: A, dueDate: future(4), quantity: 1, category: 'Listing images', campaignId: c.campaignId }));
+  const listB = ok(call(LEADER, 'api_createDirectTask', { title: 'Listing images — honey', assigneeEmail: B, dueDate: future(4), quantity: 1, category: 'Listing images', requirementId: listA.requirementId }));
+  assert.strictEqual(listB.requirementId, listA.requirementId, 'added to the existing request');
+  const done = (who, tid, title) => { const v = upload(who, { kind: 'version', taskId: tid, title }, title.replace(/\W+/g, '') + '.png', png(500)).versionId; ok(call(who, 'api_submitForApproval', tid, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', '')); };
+  done(A, tAbc, 'ABC Meta 1'); done(A, tAbc, 'ABC Meta 2');
+  done(B, meta2.taskId, 'Extra Meta 1');
+  done(A, listA.taskId, 'Ghee listing'); done(B, listB.taskId, 'Honey listing');
+  // one folder for the whole campaign
+  const f = ok(call(LEADER, 'api_finalFolder', c.campaignId, true));
+  assert.strictEqual(f.kind, 'campaign'); assert.strictEqual(f.total, 5); assert.strictEqual(f.requests, 3);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f.categories)), [{ name: 'Listing images', count: 2 }, { name: 'Meta ads', count: 3 }]);
+  const camp = env.ctx.dbGet_('Campaigns', c.campaignId);
+  const root = state.folders[camp.folderId];
+  assert.strictEqual(root.name, 'Diwali Sale 2026'); assert.strictEqual(root.sharing, 'ANYONE_WITH_LINK');
+  const names = folder => Object.values(state.files).filter(x => x.parent === Object.values(state.folders).find(y => y.parent === root.id && y.name === folder).id).map(x => x.name).sort();
+  assert.deepStrictEqual(names('Listing images'), ['Ghee listing V1.png', 'Honey listing V1.png']);
+  assert.deepStrictEqual(names('Meta ads'), ['ABC Meta 1 V1.png', 'ABC Meta 2 V1.png', 'Extra Meta 1 V1.png']);
+  // the same link from any request / task in the campaign, and for the department's requester
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', tAbc, false)).url, f.url);
+  assert.strictEqual(ok(call('', 'api_getMyRequests', [abc.trackToken])).requests[0].finalFolderUrl, f.url);
+  // campaign page + list
+  const g = ok(call(LEADER, 'api_getCampaign', c.campaignId));
+  assert.strictEqual(g.requestList.length, 3); assert.strictEqual(g.taskList.length, 4); assert.strictEqual(g.approved, 5);
+  assert.ok(ok(call(LEADER, 'api_listCampaigns')).some(x => x.campaignId === c.campaignId && x.approved === 5));
+  // zip of the campaign
+  const z = ok(call(LEADER, 'api_downloadApprovedZip', c.campaignId));
+  assert.strictEqual(z.count, 5); assert.ok(/Diwali Sale 2026/.test(z.fileName));
+  // an older request moved into the campaign brings its approved files along
+  const other = g.addable.find(x => x.title === 'Sale: 2 meta + 1 banner');
+  ok(call(LEADER, 'api_setRequestCampaign', other.requirementId, c.campaignId));
+  const f2 = ok(call(LEADER, 'api_finalFolder', c.campaignId, false));
+  assert.strictEqual(f2.total, 8);
+  assert.ok(f2.categories.some(x => x.name === 'Website banners'));
+  ok(call(LEADER, 'api_setRequestCampaign', other.requirementId, ''));
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', c.campaignId, false)).total, 5, 'moved back out');
+  // rename keeps the folder
+  ok(call(LEADER, 'api_saveCampaign', { campaignId: c.campaignId, name: 'Diwali Mega Sale' }));
+  assert.strictEqual(state.folders[camp.folderId].name, 'Diwali Mega Sale');
+});
+
+scenario('Themes: preset + custom accent applied to every page; validated', () => {
+  err(call(LEADER, 'api_saveSettings', { theme: 'neon' }), 'VALIDATION');
+  err(call(LEADER, 'api_saveSettings', { accentColor: 'red' }), 'VALIDATION');
+  assert.strictEqual(env.ctx.themeCss_(), '', 'default look adds nothing');
+  ok(call(LEADER, 'api_saveSettings', { theme: 'ocean' }));
+  env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(env.ctx.themeCss_().includes('--accent:#1f6fb2'));
+  ok(call(LEADER, 'api_saveSettings', { theme: 'midnight', accentColor: '#22aa88' }));
+  env.ctx.SETTINGS_MEMO_ = null;
+  const css = env.ctx.themeCss_();
+  assert.ok(css.includes('--bg:#131519') && css.includes('--accent:#22aa88'));
+  state.currentUser = '';
+  ['', 'review', 'batch', 'share'].forEach(p => { const html = env.ctx.doGet({ parameter: p ? { p } : {} }).html; assert.ok(html.includes('id="theme"'), 'theme on ' + (p || 'form')); });
+  assert.strictEqual(ok(call(LEADER, 'api_listThemes')).length, 7);
+  ok(call(LEADER, 'api_saveSettings', { theme: 'rosier', accentColor: '' }));
+  env.ctx.SETTINGS_MEMO_ = null;
+});
+
 scenario('Pages render: public form, review, app shell, no-access', () => {
   const pub = env.ctx.doGet({ parameter: {} });
   state.currentUser = '';

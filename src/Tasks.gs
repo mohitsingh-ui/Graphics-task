@@ -371,6 +371,8 @@ function api_getTask(taskId) {
       brandGuidelinesUrl: settings_().brandGuidelinesUrl
     };
     if (leader) {
+      out.campaign = req.campaignId ? { campaignId: req.campaignId, name: (dbGet_('Campaigns', req.campaignId) || {}).name || '' } : null;
+      out.campaigns = dbFind_('Campaigns', function (c) { return bool_(c.active) || c.campaignId === req.campaignId; }).map(function (c) { return { campaignId: c.campaignId, name: c.name }; });
       out.siblings = dbFind_('Tasks', function (x) { return x.requirementId === t.requirementId && x.taskId !== t.taskId; }).length;
       out.assignments = dbFind_('TaskAssignments', function (a) { return a.taskId === t.taskId; }).reverse()
         .map(function (a) { return Object.assign(pick_(a, ['assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate', 'dueTime', 'priority', 'note', 'assignedAt']),
@@ -471,7 +473,8 @@ function api_updateTask(taskId, patchIn) {
       startDate: function (v) { return date_(v, 'Start date', false); },
       priority: function (v) { return oneOf_(v, settings_().priorities, 'Priority'); },
       deliverablesRequired: function (v) { return String(int_(v, 1, 50, 'Deliverables required')); },
-      referenceUrls: function (v) { return urls_(v).join('\n'); }
+      referenceUrls: function (v) { return urls_(v).join('\n'); },
+      creativeType: function (v) { return str_(v, 80, 'Category', false); }
     };
     var patch = {};
     Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
@@ -807,16 +810,37 @@ function api_createDirectTask(input) {
     var category = str_(input.category, 80, 'Category', false);
     var department = str_(input.department, 100, 'Department', false) || 'Graphics team';
     var refs = urls_(input.referenceUrls);
+    var intoReq = str_(input.requirementId, 40, 'Request', false), intoCamp = str_(input.campaignId, 40, 'Campaign', false);
     return withLock_(function () {
       var m = userByEmail_(assignee);
       if (!m || !bool_(m.active)) throw AppError_('VALIDATION', 'Choose an active team member.');
-      var reqId = nextSeqId_('REQ'), taskId = nextSeqId_('GFX'), now = nowIso_();
+      var now = nowIso_();
+      if (intoReq) {
+        // Extra work inside an existing request: same folder, same Drive link, same tracking for the requester.
+        var req0 = dbGet_('Requirements', intoReq);
+        if (!req0) throw AppError_('NOT_FOUND', 'Request not found.');
+        var tid = nextSeqId_('GFX');
+        dbInsert_('Tasks', {
+          taskId: tid, requirementId: req0.requirementId, title: title, brief: brief, creativeType: category, purpose: '', campaign: '', product: '',
+          deliverablesRequired: String(qty), dimensions: '', formats: '', copyText: '', referenceUrls: refs.join('\n') || req0.referenceUrls,
+          assigneeEmail: '', assignedBy: '', assignedAt: '', startDate: '', dueDate: dueDate, dueTime: dueTime, priority: priority,
+          status: STATUS.READY, prevStatus: '', progress: '0', instructions: '', internalNotes: '', folderId: req0.folderId, completedAt: '',
+          dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now
+        });
+        if (req0.status === 'Completed') dbUpdate_('Requirements', req0.requirementId, { status: 'In work', updatedAt: now });
+        logActivity_(tid, u, 'created', '', STATUS.READY, 'added by the team leader to ' + req0.requirementId, 'team');
+        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false) });
+        return { taskId: tid, requirementId: req0.requirementId, campaignId: req0.campaignId || '' };
+      }
+      if (intoCamp && !dbGet_('Campaigns', intoCamp)) throw AppError_('NOT_FOUND', 'Campaign not found.');
+      var reqId = nextSeqId_('REQ'), taskId = nextSeqId_('GFX');
       var folder = DriveApp.getFolderById(ensureFolderId_('references', [String(new Date().getFullYear())])).createFolder(reqId);
       dbInsert_('Requirements', {
         requirementId: reqId, requesterName: u.name, department: department, email: '', phone: '', title: title, creativeType: '',
         purpose: '', brief: brief, campaign: '', product: '', quantity: String(qty), dimensions: '', platform: '', copyText: '',
         referenceUrls: refs.join('\n'), typeFields: '{}', preferredDate: dueDate, priorityRequested: priority, instructions: '',
-        folderId: folder.getId(), status: 'Received', notifiedAt: now, submittedAt: now, updatedAt: now, preferredTime: dueTime, submittedBy: u.email
+        folderId: folder.getId(), status: 'Received', notifiedAt: now, submittedAt: now, updatedAt: now, preferredTime: dueTime, submittedBy: u.email,
+        campaignId: intoCamp || ''
       });
       dbInsert_('Tasks', {
         taskId: taskId, requirementId: reqId, title: title, brief: brief, creativeType: category, purpose: '', campaign: '', product: '',
@@ -827,7 +851,7 @@ function api_createDirectTask(input) {
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
       assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false) });
-      return { taskId: taskId, requirementId: reqId };
+      return { taskId: taskId, requirementId: reqId, campaignId: intoCamp || '' };
     });
   });
 }

@@ -141,6 +141,12 @@ function api_saveSettings(patch) {
         if (!list.length) throw AppError_('VALIDATION', k + ' can’t be empty.');
         clean[k] = list.map(function (x) { return str_(x, 50, k, true); });
         if (k === 'allowedExtensions' || k === 'publicExtensions') clean[k] = clean[k].map(function (x) { return x.toLowerCase().replace(/^\./, ''); });
+      } else if (type === 'theme') {
+        clean[k] = oneOf_(String(v || 'rosier'), Object.keys(THEMES), 'Theme');
+      } else if (type === 'color') {
+        v = String(v || '').trim();
+        if (v && !/^#[0-9a-f]{6}$/i.test(v)) throw AppError_('VALIDATION', 'Colour must look like #a56312.');
+        clean[k] = v.toLowerCase();
       } else if (type === 'designations') {
         var ds = typeof v === 'string' ? parseJson_(v, null) : v;
         if (!Array.isArray(ds) || !ds.length || ds.length > 20) throw AppError_('VALIDATION', 'Add between 1 and 20 designations.');

@@ -89,6 +89,7 @@ function createEnv(opts = {}) {
       getUrl: () => 'https://drive.google.com/drive/folders/' + f.id,
       isTrashed: () => !!f.trashed,
       setTrashed: v => { f.trashed = !!v; },
+      setName: n => { f.name = n; },
       setSharing: (a, p) => { if (state.blockPublicSharing && a === 'ANYONE_WITH_LINK') throw new Error('Sharing blocked by admin'); f.sharing = a; },
       getSharingAccess: () => 'PRIVATE',
       getFiles: () => iter(Object.values(state.files).filter(x => x.parent === f.id && !x.trashed).map(fileApi)),

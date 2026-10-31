@@ -132,6 +132,7 @@ function computeReport_(range) {
       creativesRejected: decisionsIn.filter(function (d) { return d.decision === 'rejected'; }).length
     },
     designers: designers,
+    points: pointsReport_(r, ptsTable),
     byDepartment: groupCount(tasksCreatedIn, function (t) { return (reqMap[t.requirementId] || {}).department; }),
     byCreativeType: groupCount(tasksCreatedIn, function (t) { return t.creativeType; }),
     weekly: Object.keys(weekly).map(function (k) { return weekly[k]; }).sort(sortP),
@@ -141,6 +142,27 @@ function computeReport_(range) {
 
 function api_getReports(range) {
   return respond_(function () { requireLeader_(); return computeReport_(range); });
+}
+
+/** Points & rewards for the period: per-person breakdown, rewards given, badges used. */
+function pointsReport_(r, table) {
+  var people = dbFind_('Users', function (x) { return x.role === ROLES.DESIGNER || (table[x.email.toLowerCase()] && table[x.email.toLowerCase()].period); })
+    .map(function (x) {
+      var t = table[x.email.toLowerCase()] || { period: 0, total: 0, inPeriod: null };
+      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 } };
+      return { name: x.name, email: x.email, designation: x.designation || '', active: bool_(x.active), period: t.period, total: t.total,
+        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards };
+    }).sort(function (a, b) { return b.period - a.period || b.total - a.total; });
+  people.forEach(function (x, i) { x.rank = i + 1; });
+  var given = dbAll_('Rewards').filter(function (x) { return inRange_(x.givenAt, r); })
+    .sort(function (a, b) { return a.givenAt < b.givenAt ? 1 : -1; }).map(rewardDto_);
+  var badges = {};
+  given.forEach(function (g) { var b = badges[g.badgeLabel] || (badges[g.badgeLabel] = { label: g.badgeLabel, count: 0, points: 0 }); b.count++; b.points += g.points; });
+  return {
+    people: people, given: given,
+    badges: Object.keys(badges).map(function (k) { return badges[k]; }).sort(function (a, b) { return b.count - a.count; }),
+    rewardPoints: given.reduce(function (s, g) { return s + g.points; }, 0)
+  };
 }
 
 /** Days from assignment to completion, minus time spent on hold. */
@@ -158,6 +180,15 @@ function api_exportCsv(kind, range) {
       var rep = computeReport_(r);
       rows = [['Designer', 'Email', 'Designation', 'Points (period)', 'Creatives rejected', 'Creatives done (approved)', 'Creatives uploaded', 'Tasks assigned', 'Tasks completed', 'Avg completion (days)', 'Active now', 'Overdue now', 'Revision cycles', 'Approval rate %']]
         .concat(rep.designers.map(function (d) { return [d.name, d.email, d.designation, d.points, d.creativesRejected, d.creativesDone, d.creativesUploaded, d.assigned, d.completed, d.avgCompletionDays, d.activeNow, d.overdueNow, d.revisionCycles, d.approvalRate]; }));
+    } else if (kind === 'points') {
+      var pr = computeReport_(r).points;
+      rows = [['Rank', 'Designer', 'Email', 'Designation', 'Points in period', 'Points all time', 'Creatives approved', 'Creative points',
+        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points']]
+        .concat(pr.people.map(function (x) { return [x.rank, x.name, x.email, x.designation, x.period, x.total, x.creatives.n, x.creatives.pts,
+          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts]; }));
+    } else if (kind === 'rewards') {
+      rows = [['Given at', 'Designer', 'Email', 'Reward', 'Points', 'Message', 'Task', 'Given by']]
+        .concat(computeReport_(r).points.given.map(function (g) { return [g.givenAt, g.userName, g.userEmail, g.badgeLabel, g.points, g.reason, g.taskId, g.givenBy]; }));
     } else if (kind === 'decisions') {
       rows = [['Decided at', 'Task', 'Deliverable', 'Version', 'Decision', 'Reviewer', 'Reviewer email', 'Channel', 'Comment']];
       dbAll_('ApprovalDecisions').filter(function (d) { return inRange_(d.decidedAt, r); }).forEach(function (d) {

@@ -46,12 +46,18 @@ function pointsTable_(inPeriod) {
   var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
   function P(e) {
     e = String(e || '').toLowerCase();
-    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0 });
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0,
+      // the same, counted only inside the period: { n: how many, pts: points }
+      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 } } });
   }
   function add(e, pts, when, field, n) {
     if (!e) return;
     var x = P(e); x.total += pts; if (inPeriod(when)) x.period += pts;
     if (field) x[field] += (n === undefined ? pts : n);
+  }
+  function tally(e, kind, pts, when) {
+    if (!e || !inPeriod(when)) return;
+    var b = P(e).inPeriod[kind]; b.n++; b.pts += pts;
   }
   var versions = {}; dbAll_('CreativeVersions').forEach(function (v) { versions[v.versionId] = v; });
   var decByDel = {};
@@ -66,14 +72,16 @@ function pointsTable_(inPeriod) {
       var pts = designationPoints_(users[who]);
       add(who, pts, when, 'creativePts');
       P(who).creatives++;
+      tally(who, 'creatives', pts, when);
       var hadChanges = decs.some(function (x) { return x.decidedAt <= when && (x.decision === 'changes' || x.decision === 'rejected'); });
-      if (!hadChanges && Number(s.pointsFirstTime)) add(who, Number(s.pointsFirstTime), when, 'firstTime');
+      if (!hadChanges && Number(s.pointsFirstTime)) { add(who, Number(s.pointsFirstTime), when, 'firstTime'); tally(who, 'firstTime', Number(s.pointsFirstTime), when); }
     }
     decs.forEach(function (x) {
       if (x.decision !== 'rejected') return;
       var rv = versions[x.versionId]; if (!rv) return;
       var w = String(rv.uploadedBy).toLowerCase();
       P(w).rejected++;
+      tally(w, 'rejected', -(Number(s.pointsRejected) || 0), x.decidedAt);
       if (Number(s.pointsRejected)) add(w, -Number(s.pointsRejected), x.decidedAt);
     });
   });
@@ -81,10 +89,10 @@ function pointsTable_(inPeriod) {
     dbAll_('Tasks').forEach(function (t) {
       if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || !t.dueDate) return;
       var end = dueEnd_(t.dueDate, t.dueTime);
-      if (end && new Date(t.completedAt).getTime() <= end.getTime()) add(t.assigneeEmail, Number(s.pointsOnTime), t.completedAt, 'onTime', 1);
+      if (end && new Date(t.completedAt).getTime() <= end.getTime()) { add(t.assigneeEmail, Number(s.pointsOnTime), t.completedAt, 'onTime', 1); tally(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), t.completedAt); }
     });
   }
-  dbAll_('Rewards').forEach(function (r) { add(r.userEmail, Number(r.points) || 0, r.givenAt, 'rewards'); P(r.userEmail).rewardCount++; });
+  dbAll_('Rewards').forEach(function (r) { add(r.userEmail, Number(r.points) || 0, r.givenAt, 'rewards'); P(r.userEmail).rewardCount++; tally(r.userEmail, 'rewards', Number(r.points) || 0, r.givenAt); });
   return per;
 }
 

@@ -3,6 +3,7 @@
 <head>
 <base target="_top">
 <?!= include_('Styles') ?>
+<?!= themeCss_() ?>
 <style>
   body { background: var(--bg); }
   main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
@@ -276,6 +277,8 @@ function renderForm() {
     '<input type="time" id="preferredTime" name="preferredTime" step="900" aria-label="Deadline time (optional)" title="Optional time">' +
     '<span class="err hidden"></span></div>' +
 
+    ((CFG.campaigns || []).length ? '<div class="mrow" data-f="campaignId"><label class="mlabel" for="campaignId">Campaign</label>' +
+      '<select id="campaignId" name="campaignId"><option value="">Not part of a campaign</option>' + CFG.campaigns.map(function (c) { return '<option value="' + h(c.campaignId) + '">' + h(c.name) + '</option>'; }).join('') + '</select></div>' : '') +
     '<div class="mrow" data-f="quantity"><label class="mlabel" for="quantity">No. of creatives</label>' +
     '<input type="number" id="quantity" name="quantity" min="1" max="50" value="1" style="max-width:120px"><span class="err hidden"></span></div>' +
 

@@ -498,6 +498,93 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('48-my-points-designer');
     });
 
+    await step('Completed requirements tab with Drive link; points & rewards report', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="requirements"]');
+      await page.waitForSelector('text=Completed');
+      await page.click('.tabs >> text=Completed');
+      await page.waitForSelector('[data-dfolder]');
+      await shot('49-completed-requirements');
+      await page.fill('#dnQ', 'Meta ads set');
+      await page.click('#dnGo');
+      await page.waitForFunction(() => document.querySelectorAll('[data-dfolder]').length === 1);
+      await page.click('[data-dfolder]');
+      await page.waitForSelector('#dfUrl, #dfShare');
+      await page.click('.modal-f >> text=Close');
+      await page.click('[data-r="reports"]');
+      await page.waitForSelector('#pointsReport');
+      await page.locator('#pointsReport').scrollIntoViewIfNeeded();
+      await page.locator('#pointsReport').screenshot({ path: path.join(OUT, '50-points-rewards-report.png') });
+    });
+
+    await step('Campaign: create Diwali Sale, request from Sales + leader tasks, one Drive link; theme; instant revisit', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      await page.click('[data-r="campaigns"]');
+      await page.waitForSelector('#newCamp');
+      await page.click('#newCamp');
+      await page.fill('#cmN', 'Diwali Sale 2026');
+      await page.click('.modal-f >> text=Create');
+      await page.waitForSelector('#cpTask');
+      const cid = (await page.evaluate(() => APP.route)).split('/')[1];
+      // a department raises a request into the campaign from the public form
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'ABC', department: 'Sales', brief: 'Diwali Meta ads', preferredDate: future(5), quantity: 1, campaignId: cid }).data;
+      const tAbc = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tAbc, { assigneeEmail: A, dueDate: future(5), priority: 'High' });
+      env.call(LEADER, 'api_updateTask', tAbc, { creativeType: 'Meta ads' });
+      // leader adds listing images to the campaign from the campaign page
+      await page.click('#refreshBtn');
+      await page.waitForSelector('#cpTask');
+      await page.click('#cpTask');
+      await page.waitForSelector('#dtTo');
+      assert.ok((await page.inputValue('#dtTo')).startsWith('cmp:'), 'campaign pre-selected');
+      await page.fill('#dtT', 'Diwali listing images — ghee');
+      await page.selectOption('#dtA', 'bilal@rosierfoods.com');
+      await page.fill('#dtC', 'Listing images');
+      await page.fill('#dtD', future(4));
+      await shot('51-assign-into-campaign');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForSelector('#campSel');
+      const tList = (await page.textContent('#crumb')).split(' · ')[0].trim();
+      for (const [who, tid, title, hue] of [[A, tAbc, 'Diwali Meta 1', 20], ['bilal@rosierfoods.com', tList, 'Ghee listing', 90]]) {
+        const b = await bannerPng(title, hue);
+        const st = env.call(who, 'api_startUpload', { kind: 'version', taskId: tid, title, fileName: 'x.png', size: b.length }).data;
+        const v = env.call(who, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId;
+        env.call(who, 'api_submitForApproval', tid, [v]); env.call(LEADER, 'api_leaderDecision', v, 'approved', '');
+      }
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=campaigns/' + cid);
+      await page.waitForSelector('.cat-chip');
+      assert.ok((await page.textContent('main')).includes('Listing images'));
+      await shot('52-campaign-page');
+      await page.click('#cpDrive');
+      await page.waitForSelector('#dfShare');
+      await page.click('#dfShare');
+      await page.waitForSelector('#dfUrl');
+      assert.ok((await page.textContent('.modal')).includes('Campaign: Diwali Sale 2026'));
+      await shot('53-campaign-drive-link');
+      await page.click('.modal-f >> text=Close');
+      // instant revisit: second open of the campaign list is served from memory
+      await page.click('[data-r="campaigns"]');
+      await page.waitForSelector('.camp-card');
+      const t0 = Date.now();
+      await page.click('.camp-card');
+      await page.waitForSelector('#cpDrive');
+      assert.ok(Date.now() - t0 < 1500);
+      // theme: pick Ocean, save, reload
+      await page.click('[data-r="settings"]');
+      await page.waitForSelector('[data-th="ocean"]');
+      await page.click('[data-th="ocean"]');
+      await page.click('#saveSettings');
+      await page.waitForSelector('text=Settings saved');
+      await page.goto(BASE + '/page?as=' + LEADER);
+      await page.waitForSelector('.kpis');
+      const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+      assert.strictEqual(accent, '#1f6fb2');
+      await shot('54-theme-ocean');
+      env.call(LEADER, 'api_saveSettings', { theme: 'rosier', accentColor: '' });
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

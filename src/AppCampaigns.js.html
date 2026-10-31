@@ -1,0 +1,89 @@
+<script>
+/* AppCampaigns.js — campaigns (e.g. "Diwali Sale"): many requests + leader tasks, one Drive folder. */
+
+VIEWS.campaigns = function (arg, el, token) {
+  if (arg) return campaignDetail(arg, el, token);
+  setCrumb('Campaigns');
+  api('api_listCampaigns').then(function (list) {
+    if (stale(token)) return;
+    el.innerHTML = '<div class="page-h"><div><h1>Campaigns</h1><p>Group requests from every department and your own tasks under one name — all approved creatives land in one Drive folder, sorted by category.</p></div>' +
+      '<button class="btn primary" id="newCamp">' + icon('plus') + ' New campaign</button></div>' +
+      (list.length ? '<div class="camp-grid">' + list.map(function (c) {
+        var pct = c.required ? Math.min(100, Math.round(c.approved / c.required * 100)) : 0;
+        return '<div class="card camp-card' + (c.active ? '' : ' archived') + '" data-go="campaigns/' + h(c.campaignId) + '"><div class="card-b stack" style="gap:10px">' +
+          '<div class="row between"><h3>' + h(c.name) + '</h3>' + (c.active ? '' : '<span class="badge plain">Archived</span>') + (c.shared ? '<span class="badge s-approved">' + icon('link') + ' Shared</span>' : '') + '</div>' +
+          '<div class="small muted">' + c.requests + ' request(s)' + (c.departments.length ? ' · ' + h(c.departments.join(', ')) : '') + ' · ' + c.tasks + ' task(s)</div>' +
+          '<div><div class="row between small"><span><b>' + c.approved + '</b> of ' + c.required + ' creatives approved</span><span class="faint">' + pct + '%</span></div>' +
+          '<div style="margin-top:6px">' + progressBar(pct, pct >= 100) + '</div></div>' +
+          '<div class="row wrap" style="gap:4px">' + c.categories.map(function (x) { return '<span class="badge plain" style="font-size:11px">' + h(x.name) + ' · ' + x.count + '</span>'; }).join('') + '</div>' +
+          '</div></div>';
+      }).join('') + '</div>' : '<div class="card">' + emptyState('No campaigns yet.', 'Create one for a sale or launch, e.g. “Diwali Sale”, then add requests and tasks to it.', 'board') + '</div>');
+    wireGo(el);
+    $('#newCamp').onclick = function () { campaignModal(null); };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function campaignModal(c) {
+  modal({
+    title: c ? 'Rename campaign' : 'New campaign',
+    body: '<div class="field"><label class="req" for="cmN">Name</label><input type="text" id="cmN" maxlength="80" value="' + h(c ? c.name : '') + '" placeholder="e.g. Diwali Sale 2026"></div>' +
+      (c ? '<label class="check"><input type="checkbox" id="cmA"' + (c.active ? ' checked' : '') + '> Active (shown on the request form and when assigning)</label>' : '') +
+      '<div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: c ? 'Save' : 'Create', cls: 'primary', onClick: function (close, m) {
+      return api('api_saveCampaign', { campaignId: c ? c.campaignId : '', name: $('#cmN', m).value.trim(), active: c ? $('#cmA', m).checked : true })
+        .then(function (r) { close(); toast(c ? 'Saved' : 'Campaign created'); go('campaigns/' + r.campaignId); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }]
+  });
+}
+
+function campaignDetail(id, el, token) {
+  api('api_getCampaign', id).then(function (c) {
+    if (stale(token)) return;
+    setCrumb('Campaign · ' + c.name);
+    var pct = c.required ? Math.min(100, Math.round(c.approved / c.required * 100)) : 0;
+    el.innerHTML = '<div class="page-h"><div class="grow"><div class="faint small"><a href="#" data-go="campaigns">Campaigns</a> /</div><h1>' + h(c.name) + '</h1>' +
+      '<p>' + c.requests + ' request(s) · ' + c.tasks + ' task(s) · <b>' + c.approved + '</b> of ' + c.required + ' creatives approved</p></div>' +
+      '<div class="actionbar"><button class="btn primary" id="cpDrive">' + icon('external') + (c.shared ? ' Drive link' : ' Get Drive link') + '</button>' +
+      '<button class="btn" id="cpZip"' + (c.approved ? '' : ' disabled') + '>' + icon('download') + ' Download all (.zip)</button>' +
+      '<button class="btn" id="cpTask">' + icon('plus') + ' Assign a task</button><button class="btn" id="cpAdd">' + icon('inbox') + ' Add a request</button>' +
+      '<button class="btn ghost" id="cpEdit">Rename</button></div></div>' +
+      '<div style="margin-bottom:16px">' + progressBar(pct, pct >= 100) + '</div>' +
+      '<div class="card" style="margin-bottom:16px"><div class="card-h"><h3>In the Drive folder</h3><span class="faint small">One folder per category — everyone with the link sees all of them</span></div><div class="card-b row wrap" style="gap:8px">' +
+      (c.categories.length ? c.categories.map(function (x) { return '<span class="cat-chip">' + icon('file') + ' <b>' + h(x.name) + '</b> ' + x.count + '</span>'; }).join('') : '<span class="faint small">Nothing approved yet.</span>') + '</div></div>' +
+      '<div class="detail"><div class="stack">' +
+      '<div class="card"><div class="card-h"><h3>Tasks</h3><span class="faint small">' + c.taskList.length + '</span></div><div class="table-wrap">' +
+      (c.taskList.length ? '<table class="t"><thead><tr><th>Task</th><th>Category</th><th>Designer</th><th>Approved</th><th>Due</th><th>Status</th></tr></thead><tbody>' + c.taskList.map(function (t) {
+        return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' + h(t.taskId) + ' · ' + h(t.requirementId) + '</div></td>' +
+          '<td class="small">' + h(t.category || '—') + '</td><td class="small">' + h(t.assigneeName || 'Not assigned') + '</td><td>' + t.approved + '/' + t.required + '</td>' +
+          '<td class="small">' + (t.hold ? '<span class="faint">Paused</span>' : dueLabel(t)) + '</td><td>' + statusBadge(t.status) + '</td></tr>';
+      }).join('') + '</tbody></table>' : emptyState('No tasks yet.', 'Use “Assign a task” or add a request.')) + '</div></div></div>' +
+      '<div class="stack"><div class="card"><div class="card-h"><h3>Requests</h3></div><div class="card-b tight">' +
+      (c.requestList.length ? c.requestList.map(function (r) {
+        return '<div class="list-item" data-go="task/' + h(r.firstTaskId) + '"><div class="li-main"><div class="li-title">' + h(r.title) + '</div><div class="li-sub">' + h(r.requirementId) + ' · ' +
+          h(r.internal ? 'Your task' : r.department + ' · ' + r.requesterName) + ' · ' + r.approved + '/' + r.required + '</div></div>' +
+          '<button class="btn ghost sm" data-unlink="' + h(r.requirementId) + '" title="Remove from campaign">' + icon('x') + '</button></div>';
+      }).join('') : '<p class="faint small" style="padding:8px 16px">No requests yet.</p>') + '</div></div></div></div>';
+    wireGo(el);
+    $('#cpDrive').onclick = function () { driveFolderModal(c.campaignId); };
+    $('#cpZip').onclick = function () { zipDownload(c.campaignId, false, this); };
+    $('#cpTask').onclick = function () { directTaskModal({ campaignId: c.campaignId, campaignName: c.name }); };
+    $('#cpEdit').onclick = function () { campaignModal(c); };
+    $('#cpAdd').onclick = function () {
+      if (!c.addable.length) return toast('All requests are already in a campaign.', true);
+      modal({ title: 'Add a request to ' + c.name, body: '<p class="muted" style="margin-top:0">Its approved creatives move into the campaign’s Drive folder.</p><div class="field"><select id="cpR">' +
+        c.addable.map(function (r) { return '<option value="' + h(r.requirementId) + '">' + h(r.requirementId + ' · ' + r.title + (r.department ? ' · ' + r.department : '')) + '</option>'; }).join('') + '</select></div><div class="alert bad hidden" data-form-error></div>',
+        actions: [{ label: 'Cancel' }, { label: 'Add', cls: 'primary', onClick: function (close, m) {
+          return api('api_setRequestCampaign', $('#cpR', m).value, c.campaignId).then(function () { close(); toast('Added'); render(APP.route); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+        } }] });
+    };
+    $all('[data-unlink]', el).forEach(function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation();
+        confirmBox('Remove from campaign?', 'The request stays as it is; its approved files move back to its own folder.', 'Remove', true).then(function (y) {
+          if (y) api('api_setRequestCampaign', b.getAttribute('data-unlink'), '').then(function () { toast('Removed'); render(APP.route); }).catch(function (er) { toast(errMsg(er), true); });
+        });
+      };
+    });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+}
+</script>

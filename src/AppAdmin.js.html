@@ -48,11 +48,14 @@ VIEWS.reports = function (arg, el, token) {
             '<td>' + (d.avgCompletionDays === null ? '—' : d.avgCompletionDays + ' d') + '</td><td>' + d.activeNow + '</td><td' + (d.overdueNow ? ' class="overdue-flag"' : '') + '>' + d.overdueNow + '</td>' +
             '<td>' + d.revisionCycles + '</td><td>' + (d.approvalRate === null ? '—' : d.approvalRate + '%') + '</td></tr>';
         }).join('') + '</tbody></table>' : emptyState('No designer data yet.', '', 'users')) + '</div></div>' +
+      pointsSection(r.points) +
       '<div class="grid-2" style="margin-top:18px"><div class="card"><div class="card-h"><h3>Workload by department</h3></div><div class="card-b">' + bars(r.byDepartment, maxDept) + '</div></div>' +
       '<div class="card"><div class="card-h"><h3>Workload by creative type</h3></div><div class="card-b">' + bars(r.byCreativeType, maxType) + '</div></div></div>' +
       '<div class="card" style="margin-top:18px"><div class="card-h"><h3>Trends</h3><div class="seg" id="trSeg"><button data-t="weekly" class="on">Weekly</button><button data-t="monthly">Monthly</button></div></div><div id="trend">' + trend(r.weekly) + '</div></div>' +
       '<div class="card" style="margin-top:18px"><div class="card-b row wrap between"><div><b>Export</b><div class="faint small">CSV files for the selected date range.</div></div><div class="row wrap">' +
-      '<button class="btn" data-csv="tasks">' + icon('download') + ' Tasks</button><button class="btn" data-csv="designers">' + icon('download') + ' Designers</button><button class="btn" data-csv="decisions">' + icon('download') + ' Approval decisions</button></div></div></div>';
+      '<button class="btn" data-csv="tasks">' + icon('download') + ' Tasks</button><button class="btn" data-csv="designers">' + icon('download') + ' Designers</button><button class="btn" data-csv="decisions">' + icon('download') + ' Approval decisions</button>' +
+      '<button class="btn" data-csv="points">' + icon('download') + ' Points</button><button class="btn" data-csv="rewards">' + icon('download') + ' Rewards</button></div></div></div>';
+    wireGo(el);
     $('#rApply').onclick = function () {
       REPORT_RANGE = { from: $('#rf').value, to: $('#rt').value };
       if (!REPORT_RANGE.from || !REPORT_RANGE.to) return toast('Pick both dates.', true);
@@ -144,6 +147,30 @@ function userModal(u, domain, designations) {
   });
 }
 
+/** Reports: points earned and rewards given in the selected period. */
+function pointsSection(p) {
+  if (!p) return '';
+  var cell = function (b, neg) { return b && b.n ? b.n + (b.pts ? ' <span class="' + (neg ? 'neg' : 'pos') + '-pts">' + (b.pts > 0 ? '+' : '') + b.pts + '</span>' : '') : '<span class="faint">—</span>'; };
+  return '<div class="card" style="margin-top:18px" id="pointsReport"><div class="card-h"><h3>Points & rewards</h3><div class="row" style="gap:8px">' +
+    '<button class="btn sm" data-csv="points">' + icon('download') + ' Points CSV</button><button class="btn sm" data-csv="rewards">' + icon('download') + ' Rewards CSV</button></div></div>' +
+    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
+      p.people.map(function (x) {
+        return '<tr><td><span class="rank-dot' + (x.rank === 1 && x.period > 0 ? ' first' : '') + '">' + x.rank + '</span></td><td><b>' + h(x.name) + '</b>' + (x.active ? '' : ' <span class="faint small">(inactive)</span>') +
+          '<div class="faint small">' + h(x.designation || '—') + '</div></td><td><b style="font-size:15px">' + x.period + '</b></td>' +
+          '<td>' + cell(x.creatives) + '</td><td>' + cell(x.firstTime) + '</td><td>' + cell(x.onTime) + '</td><td>' + cell(x.rejected, true) + '</td><td>' + cell(x.rewards) + '</td>' +
+          '<td class="faint">' + x.total + '</td></tr>';
+      }).join('') + '</tbody></table>' : emptyState('No points in this range.', '', 'award')) + '</div>' +
+    '<div class="card-b" style="border-top:1px solid var(--line)"><div class="row between wrap" style="margin-bottom:8px"><b>Rewards given in this period</b>' +
+    '<span class="faint small">' + p.given.length + ' reward(s) · ' + p.rewardPoints + ' points</span></div>' +
+    (p.badges.length ? '<div class="row wrap" style="gap:6px;margin-bottom:10px">' + p.badges.map(function (b) { return '<span class="badge plain">' + icon('award') + ' ' + h(b.label) + ' × ' + b.count + '</span>'; }).join('') + '</div>' : '') +
+    (p.given.length ? '<ul class="reward-list">' + p.given.slice(0, 30).map(function (g) {
+      return '<li><span class="reward-badge">' + icon('award') + '</span><div class="grow"><div><b>' + h(g.userName) + '</b> · ' + h(g.badgeLabel) + ' <span class="pts">+' + g.points + '</span></div>' +
+        (g.reason ? '<div class="small muted">“' + h(g.reason) + '”</div>' : '') + '<div class="faint small">' + h(g.givenBy) + ' · ' + fmtDate(g.givenAt) +
+        (g.taskId ? ' · <a href="#" data-go="task/' + h(g.taskId) + '">' + h(g.taskId) + '</a>' : '') + '</div></div></li>';
+    }).join('') + '</ul>' + (p.given.length > 30 ? '<p class="faint small">Showing the latest 30 — download the Rewards CSV for all.</p>' : '') : '<p class="faint small" style="margin:0">No rewards given in this range.</p>') +
+    '</div></div>';
+}
+
 /* ================= REWARDS ================= */
 VIEWS.rewards = function (arg, el, token) {
   var leader = APP.role === 'leader';
@@ -226,6 +253,24 @@ function rewardModal(preset, after) {
   }).catch(function (e) { toast(errMsg(e), true); });
 }
 
+var THEME_SEL = null;
+/** Live preview: rewrites the theme <style> on this page only (Save makes it permanent for everyone). */
+function previewTheme(accent, dark) {
+  function rgb(x) { var n = parseInt(x.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+  function mix(c, to, t) { return '#' + c.map(function (v, i) { return ('0' + Math.round(v + (to[i] - v) * t).toString(16)).slice(-2); }).join(''); }
+  var a = rgb(accent), v = { '--accent': accent };
+  if (dark) {
+    Object.assign(v, { '--bg': '#131519', '--surface': '#1c1f25', '--surface-2': '#22262d', '--line': '#2f343c', '--line-strong': '#3c424c', '--text': '#eceae6', '--text-2': '#b7b2a9',
+      '--text-3': '#8d887f', '--muted-soft': '#2a2e35', '--accent-ink': mix(a, [255, 255, 255], .25), '--accent-soft': mix(a, [28, 31, 37], .78) });
+  } else {
+    Object.assign(v, { '--bg': '#f6f5f2', '--surface': '#ffffff', '--surface-2': '#faf9f6', '--line': '#e7e4dd', '--line-strong': '#d6d1c6', '--text': '#1f1d1a', '--text-2': '#5c5750',
+      '--text-3': '#8b857b', '--muted-soft': '#eeece7', '--accent-ink': mix(a, [0, 0, 0], .25), '--accent-soft': mix(a, [255, 255, 255], .88) });
+  }
+  var st = document.getElementById('theme');
+  if (!st) { st = document.createElement('style'); st.id = 'theme'; document.head.appendChild(st); }
+  st.textContent = ':root{' + Object.keys(v).map(function (k) { return k + ':' + v[k]; }).join(';') + '}';
+}
+
 /* ================= SETTINGS ================= */
 VIEWS.settings = function (arg, el, token) {
   setCrumb('Settings');
@@ -237,6 +282,10 @@ VIEWS.settings = function (arg, el, token) {
     var sec = function (title, inner) { return '<div class="card"><div class="card-h"><h3>' + h(title) + '</h3></div><div class="card-b stack">' + inner + '</div></div>'; };
     el.innerHTML = '<div class="page-h"><div><h1>Settings</h1><p>Portal configuration, review links, uploads and Google Drive.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>' +
       '<div class="two-col"><div class="stack">' +
+      sec('Look & feel', '<p class="muted small" style="margin:0">Colours for every page — the team app, request form, review links and shared pages. Preview is live; click Save to keep it.</p>' +
+        '<div class="theme-pick" id="themePick"></div>' +
+        '<div class="row wrap" style="gap:10px"><label class="small" for="s_accentPick">Custom accent colour</label><input type="color" id="s_accentPick" value="' + h(s.accentColor || '#a56312') + '" style="width:48px;height:34px;padding:2px">' +
+        '<label class="check small"><input type="checkbox" id="s_useAccent"' + (s.accentColor ? ' checked' : '') + '> Use it</label></div>') +
       sec('General', '<div class="grid-2">' + txt('companyName', 'Company name') + txt('portalName', 'Portal name') + '</div>' +
         txt('allowedDomain', 'Company email domain', 'Team members must use this domain. Anyone can raise requirements and approve creatives unless you tick the box below.') + chk('requireRequesterDomain', 'Only accept requirements from company email addresses (leave unticked to allow any email)')) +
       sec('Portal links', txt('publicUrl', 'Public web app URL', 'The …/exec URL of the deployment with access “Anyone”. Used in review links and emails.', 'url') +
@@ -280,6 +329,21 @@ VIEWS.settings = function (arg, el, token) {
       }).join('') + '</div></div></div>' +
       '</div></div>';
 
+    THEME_SEL = s.theme || 'rosier';
+    api('api_listThemes').then(function (list) {
+      $('#themePick').innerHTML = list.map(function (t) {
+        return '<button type="button" class="theme-sw' + (t.id === THEME_SEL ? ' on' : '') + (t.dark ? ' dark' : '') + '" data-th="' + h(t.id) + '" data-acc="' + h(t.accent) + '" data-dark="' + (t.dark ? 1 : 0) + '">' +
+          '<span class="sw" style="background:' + h(t.accent) + '"></span>' + h(t.label) + '</button>';
+      }).join('');
+      $all('[data-th]').forEach(function (b) { b.onclick = function () {
+        THEME_SEL = b.getAttribute('data-th');
+        $all('[data-th]').forEach(function (x) { x.classList.toggle('on', x === b); });
+        previewTheme(b.getAttribute('data-acc'), b.getAttribute('data-dark') === '1');
+      }; });
+    }).catch(function () {});
+    var acc = function () { if ($('#s_useAccent').checked) previewTheme($('#s_accentPick').value, THEME_SEL === 'midnight'); };
+    $('#s_accentPick').oninput = function () { $('#s_useAccent').checked = true; acc(); };
+    $('#s_useAccent').onchange = acc;
     var DES = (s.designations || []).slice();
     function drawDes() {
       $('#desigRows').innerHTML = '<div class="row small faint" style="gap:8px"><span class="grow">Designation</span><span style="width:110px">Points / creative</span><span style="width:36px"></span></div>' +
@@ -297,6 +361,8 @@ VIEWS.settings = function (arg, el, token) {
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
       ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      patch.theme = THEME_SEL || s.theme || 'rosier';
+      patch.accentColor = $('#s_useAccent').checked ? $('#s_accentPick').value : '';
       patch.creativeCategories = $('#s_creativeCategories').value.trim();
       ['pointsFirstTime', 'pointsOnTime', 'pointsRejected'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
       patch.designations = $all('#desigRows [data-dr]').map(function (r) { return { name: $('[data-k=n]', r).value.trim(), points: Number($('[data-k=p]', r).value) }; }).filter(function (x) { return x.name; });

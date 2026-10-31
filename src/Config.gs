@@ -12,7 +12,7 @@ var SCHEMA = {
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
@@ -40,11 +40,12 @@ var SCHEMA = {
   RequesterLinks: ['linkId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'lastUsedAt'],
   Rewards: ['rewardId', 'userEmail', 'badge', 'points', 'reason', 'taskId', 'givenBy', 'givenAt'],
   ReviewBatches: ['batchId', 'tokenHash', 'title', 'versionIds', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
+  Campaigns: ['campaignId', 'name', 'folderId', 'shared', 'active', 'createdBy', 'createdAt', 'updatedAt'],
   TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 7;
+var SCHEMA_VERSION = 8;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -141,6 +142,8 @@ var DEFAULT_SETTINGS = {
   pointsOnTime: 20,          // per task completed by its deadline (hold time not counted)
   pointsFirstTime: 5,        // per creative approved without any changes
   pointsRejected: 0,         // taken off per rejected creative (0 = no penalty)
+  theme: 'rosier',           // colour theme for every page (see THEMES)
+  accentColor: '',           // optional custom accent colour (#rrggbb) on top of the theme
   creativeTypes: [
     { id: 'social_post', label: 'Social media post', fields: [
       { key: 'platform', label: 'Platform', type: 'select', required: true,
@@ -195,7 +198,7 @@ var EDITABLE_SETTINGS = {
   sendReviewLinkToRequester: 'boolean', autoCompleteOnApproval: 'boolean', workloadThreshold: 'number',
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
-  creativeCategories: 'list', designations: 'designations', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number'
+  creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number'
 };
 
 /** Drive folders created under the root. */

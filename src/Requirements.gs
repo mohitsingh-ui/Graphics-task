@@ -18,7 +18,8 @@ function api_getFormConfig() {
       maxFiles: s.maxPublicFiles,
       maxFileMB: s.maxPublicUploadMB,
       extensions: s.publicExtensions,
-      chunkBytes: LIMITS.CHUNK_BYTES
+      chunkBytes: LIMITS.CHUNK_BYTES,
+      campaigns: dbFind_('Campaigns', function (c) { return bool_(c.active); }).map(function (c) { return { campaignId: c.campaignId, name: c.name }; })
     };
   });
 }
@@ -59,8 +60,10 @@ function api_submitRequirement(payload) {
       preferredDate: date_(payload.preferredDate, 'Deadline date', true),
       preferredTime: time_(payload.preferredTime, 'Deadline time', false),
       priorityRequested: str_(payload.priorityRequested, 20, 'Priority', false) || 'Medium',
-      instructions: str_(payload.instructions, LIMITS.TEXT_LONG, 'Additional instructions', false)
+      instructions: str_(payload.instructions, LIMITS.TEXT_LONG, 'Additional instructions', false),
+      campaignId: str_(payload.campaignId, 40, 'Campaign', false)
     };
+    if (r.campaignId) { var cmp = dbGet_('Campaigns', r.campaignId); if (!cmp || !bool_(cmp.active)) r.campaignId = ''; }
     if (s.priorities.indexOf(r.priorityRequested) === -1) r.priorityRequested = s.priorities[Math.min(1, s.priorities.length - 1)];
 
     if (s.requireRequesterDomain && s.allowedDomain && !member && r.email && r.email.split('@')[1] !== s.allowedDomain.toLowerCase()) {

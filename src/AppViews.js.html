@@ -170,7 +170,13 @@ function designerCard(t) {
 }
 
 /* ================= REQUIREMENTS (leader) ================= */
+function reqTabs(on) {
+  return '<div class="tabs" style="margin-bottom:14px"><button data-go="requirements" class="' + (on === 'in' ? 'on' : '') + '">Incoming</button>' +
+    '<button data-go="requirements/completed" class="' + (on === 'done' ? 'on' : '') + '">Completed</button></div>';
+}
+
 VIEWS.requirements = function (arg, el, token) {
+  if (arg === 'completed') return completedRequests(el, token);
   setCrumb('Incoming requirements');
   api('api_listTasks', { status: 'unassigned' }).then(function (rows) {
     if (stale(token)) return;
@@ -179,7 +185,7 @@ VIEWS.requirements = function (arg, el, token) {
     var publicUrl = APP.boot.publicUrl;
     el.innerHTML = '<div class="page-h"><div><h1>Incoming requirements</h1><p>Everything raised through the request form that still needs a designer.</p></div>' +
       '<div class="row wrap">' + (publicUrl ? '<button class="btn" id="copyForm">' + icon('link') + ' Copy request-form link</button>' : '') + newReqButton(true) + '</div></div>' +
-      '<div class="card"><div class="table-wrap">' + (rows.length ? '<table class="t"><thead><tr><th>Requirement</th><th>Requested by</th><th>Type</th><th>Qty</th><th>Wanted by</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>' +
+      reqTabs('in') + '<div class="card"><div class="table-wrap">' + (rows.length ? '<table class="t"><thead><tr><th>Requirement</th><th>Requested by</th><th>Type</th><th>Qty</th><th>Wanted by</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>' +
       rows.map(function (t) {
         return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' + h(t.requirementId) + ' · ' + h(t.taskId) + ' · ' + ago(t.createdAt) + '</div></td>' +
           '<td>' + h(t.requesterName) + '<div class="faint small">' + h(t.department) + '</div></td><td>' + h(t.creativeType) + '</td><td>' + h(t.deliverablesRequired) + '</td>' +
@@ -191,15 +197,57 @@ VIEWS.requirements = function (arg, el, token) {
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
 };
 
+var DONE_FILTER = { q: '', from: '', to: '' };
+
+/** Finished requests: what was delivered, Drive folder link, zip download. */
+function completedRequests(el, token) {
+  setCrumb('Completed requirements');
+  api('api_listCompletedRequests', DONE_FILTER).then(function (d) {
+    if (stale(token)) return;
+    el.innerHTML = '<div class="page-h"><div><h1>Completed requirements</h1><p>Every request whose work is finished. Share all its approved files with one Drive link.</p></div></div>' +
+      reqTabs('done') +
+      '<div class="card"><div class="filters"><input type="search" id="dnQ" placeholder="Search request, department, requester, designer…" value="' + h(DONE_FILTER.q) + '" style="flex:1;min-width:200px">' +
+      '<input type="date" id="dnF" value="' + h(DONE_FILTER.from) + '" style="width:auto" title="Completed from"><span class="faint">to</span><input type="date" id="dnT" value="' + h(DONE_FILTER.to) + '" style="width:auto" title="Completed to">' +
+      '<button class="btn" id="dnGo">Filter</button>' + (DONE_FILTER.q || DONE_FILTER.from || DONE_FILTER.to ? '<button class="btn ghost" id="dnClear">Clear</button>' : '') + '</div>' +
+      '<div class="table-wrap">' + (d.rows.length ? '<table class="t"><thead><tr><th>Request</th><th>Requested by</th><th>Delivered</th><th>Designers</th><th>Completed</th><th style="text-align:right">Files</th></tr></thead><tbody>' +
+        d.rows.map(function (r) {
+          return '<tr><td><a href="#" data-go="task/' + h(r.firstTaskId) + '" style="font-weight:500">' + h(r.title) + '</a><div class="faint small">' + h(r.requirementId) + (r.tasks > 1 ? ' · ' + r.tasks + ' tasks' : '') + '</div>' +
+            (r.campaignName ? '<a href="#" class="cat-chip" style="font-size:11px;padding:2px 8px;margin-top:4px" data-go="campaigns/' + h(r.campaignId) + '">' + h(r.campaignName) + '</a>' : '') + '</td>' +
+            '<td>' + h(r.requesterName) + '<div class="faint small">' + h(r.department) + '</div></td>' +
+            '<td><b>' + r.approved + '</b> approved' + (r.rejected ? ' <span class="faint small">· ' + r.rejected + ' rejected</span>' : '') +
+              '<div class="row wrap" style="gap:4px;margin-top:4px">' + r.categories.map(function (c) { return '<span class="badge plain" style="font-size:11px">' + h(c.name) + ' · ' + c.count + '</span>'; }).join('') + '</div></td>' +
+            '<td class="small">' + h(r.designers.join(', ') || '—') + '</td>' +
+            '<td class="small">' + fmtDate(r.completedAt) + '</td>' +
+            '<td style="text-align:right;white-space:nowrap"><button class="btn sm ' + (r.shared ? 'ok' : 'primary') + '" data-dfolder="' + h(r.requirementId) + '" title="' + (r.campaignName ? 'Link to the whole campaign folder' : 'Link to this request’s folder') + '">' + icon('external') + (r.shared ? ' Drive link' : ' Get Drive link') + '</button> ' +
+              '<button class="btn sm" data-dzip="' + h(r.requirementId) + '"' + (r.approved ? '' : ' disabled') + ' title="Download all approved as .zip">' + icon('download') + '</button></td></tr>';
+        }).join('') + '</tbody></table>' : emptyState(DONE_FILTER.q || DONE_FILTER.from ? 'No completed requests match.' : 'No completed requests yet.', 'Requests show up here once every task in them is completed.', 'check')) +
+      '</div>' + (d.total > d.rows.length ? '<p class="faint small" style="padding:8px 16px">Showing the latest ' + d.rows.length + ' of ' + d.total + '. Narrow it with the search or dates.</p>' : '') + '</div>';
+    wireGo(el);
+    var apply = function () { DONE_FILTER = { q: $('#dnQ').value.trim(), from: $('#dnF').value, to: $('#dnT').value }; render('requirements/completed'); };
+    $('#dnGo').onclick = apply;
+    $('#dnQ').onkeydown = function (e) { if (e.key === 'Enter') apply(); };
+    if ($('#dnClear')) $('#dnClear').onclick = function () { DONE_FILTER = { q: '', from: '', to: '' }; render('requirements/completed'); };
+    $all('[data-dfolder]', el).forEach(function (b) { b.onclick = function () { driveFolderModal(b.getAttribute('data-dfolder')); }; });
+    $all('[data-dzip]', el).forEach(function (b) { b.onclick = function () { zipDownload(b.getAttribute('data-dzip'), false, b); }; });
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+}
+
 /** Opens the request form as the signed-in leader (prefilled, in a new tab). */
 /** Leader: give a designer a task directly — no request form needed. */
-function directTaskModal() {
+function directTaskModal(preset) {
+  preset = preset || {};
   var team = [];
-  api('api_listTeam').then(function (d) {
+  Promise.all([api('api_listTeam'), api('api_listCampaigns')]).then(function (res) {
+    var d = res[0], camps = res[1].filter(function (c) { return c.active || c.campaignId === preset.campaignId; });
     team = d.users.filter(function (u) { return u.active; });
+    var addTo = '<div class="field"><label for="dtTo">Add to</label><select id="dtTo">' +
+      (preset.requirementId ? '<option value="req:' + h(preset.requirementId) + '" selected>This request — ' + h(preset.requirementId + ' · ' + (preset.requirementTitle || '')) + '</option>' : '') +
+      '<option value="">Its own new request</option>' +
+      camps.map(function (c) { return '<option value="cmp:' + h(c.campaignId) + '"' + (c.campaignId === preset.campaignId && !preset.requirementId ? ' selected' : '') + '>Campaign: ' + h(c.name) + '</option>'; }).join('') +
+      '</select><span class="hint">Everything in a campaign or request shares one Drive folder and one link.</span></div>';
     modal({
       title: 'Assign a task', wide: true,
-      body: '<div class="field"><label class="req" for="dtT">What’s the task?</label><input type="text" id="dtT" maxlength="150" placeholder="e.g. Instagram story for Monday’s ghee launch"></div>' +
+      body: addTo + '<div class="field"><label class="req" for="dtT">What’s the task?</label><input type="text" id="dtT" maxlength="150" placeholder="e.g. Instagram story for Monday’s ghee launch"></div>' +
         '<div class="field"><label for="dtB">Details</label><textarea id="dtB" rows="3" maxlength="8000" placeholder="Sizes, copy, references…"></textarea></div>' +
         '<div class="grid-2"><div class="field"><label class="req" for="dtA">Designer</label><select id="dtA"><option value="">Choose…</option>' + team.map(function (u) {
           return '<option value="' + h(u.email) + '">' + h(u.name) + (u.designation ? ' · ' + h(u.designation) : '') + ' — ' + u.activeTasks + ' active</option>'; }).join('') + '</select></div>' +
@@ -211,8 +259,10 @@ function directTaskModal() {
         '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
         '<div class="alert bad hidden" data-form-error></div>',
       actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
+        var to = $('#dtTo', m).value;
         var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
-          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value };
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value,
+          requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '' };
         if (!input.title) return fieldErrors(m, 'Give the task a title.');
         if (!input.assigneeEmail) return fieldErrors(m, 'Choose a designer.');
         if (!input.dueDate) return fieldErrors(m, 'Pick a due date.');
