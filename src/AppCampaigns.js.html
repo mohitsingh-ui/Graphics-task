@@ -45,7 +45,8 @@ function campaignDetail(id, el, token) {
       '<p>' + c.requests + ' request(s) · ' + c.tasks + ' task(s) · <b>' + c.approved + '</b> of ' + c.required + ' creatives approved</p></div>' +
       '<div class="actionbar"><button class="btn primary" id="cpDrive">' + icon('external') + (c.shared ? ' Drive link' : ' Get Drive link') + '</button>' +
       '<button class="btn" id="cpZip"' + (c.approved ? '' : ' disabled') + '>' + icon('download') + ' Download all (.zip)</button>' +
-      '<button class="btn" id="cpTask">' + icon('plus') + ' Assign a task</button><button class="btn" id="cpAdd">' + icon('inbox') + ' Add a request</button>' +
+      '<button class="btn" id="cpTask">' + icon('plus') + ' Assign a task</button><button class="btn" id="cpAddT">' + icon('list') + ' Add existing tasks</button>' +
+      '<button class="btn ghost" id="cpAdd">' + icon('inbox') + ' Add a request</button>' +
       '<button class="btn ghost" id="cpEdit">Rename</button></div></div>' +
       '<div style="margin-bottom:16px">' + progressBar(pct, pct >= 100) + '</div>' +
       '<div class="card" style="margin-bottom:16px"><div class="card-h"><h3>In the Drive folder</h3><span class="faint small">One folder per category — everyone with the link sees all of them</span></div><div class="card-b row wrap" style="gap:8px">' +
@@ -76,6 +77,7 @@ function campaignDetail(id, el, token) {
           return api('api_setRequestCampaign', $('#cpR', m).value, c.campaignId).then(function () { close(); toast('Added'); render(APP.route); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
         } }] });
     };
+    $('#cpAddT').onclick = function () { addTasksModal(c); };
     $all('[data-unlink]', el).forEach(function (b) {
       b.onclick = function (e) {
         e.stopPropagation();
@@ -85,5 +87,73 @@ function campaignDetail(id, el, token) {
       };
     });
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+}
+/** Leader: tick already-assigned tasks and pull them into this campaign. */
+function addTasksModal(c) {
+  var list = c.addableTasks || [];
+  if (!list.length) return toast('Every task is already in this campaign.', true);
+  var m = modal({ title: 'Add tasks to ' + c.name, wide: true,
+    body: '<p class="muted" style="margin-top:0">Pick tasks that are already assigned. Their approved creatives move into the campaign’s Drive folder, and new ones go straight there.</p>' +
+      '<input type="search" id="atQ" placeholder="Search task, title, designer, department…" style="width:100%;margin-bottom:8px">' +
+      '<div class="pick-list" id="atList">' + list.map(function (t) {
+        return '<label class="pick-row" data-hay="' + h([t.taskId, t.requirementId, t.title, t.assigneeName, t.department, t.inCampaign, t.status].join(' ').toLowerCase()) + '">' +
+          '<input type="checkbox" value="' + h(t.taskId) + '" data-same="' + t.sameRequest + '" data-req="' + h(t.requirementId) + '">' +
+          '<span class="grow"><b>' + h(t.title) + '</b><span class="faint small"> · ' + h(t.taskId) + ' · ' + h(t.assigneeName || 'Not assigned') + (t.department ? ' · ' + h(t.department) : '') + '</span>' +
+          (t.inCampaign ? '<br><span class="small" style="color:var(--warn)">Now in “' + h(t.inCampaign) + '” — will move here</span>' : '') + '</span>' + statusBadge(t.status) + '</label>';
+      }).join('') + '</div><p class="hint" id="atHint" style="margin-bottom:0"></p><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Add to campaign', cls: 'primary', onClick: function (close, mm) {
+      var ids = $all('#atList input:checked', mm).map(function (x) { return x.value; });
+      if (!ids.length) { fieldErrors(mm, 'Tick at least one task.'); return Promise.resolve(); }
+      return api('api_setTasksCampaign', ids, c.campaignId, '').then(function (res) { close(); toast(movedMsg(res)); render(APP.route); }).catch(function (e) { fieldErrors(mm, errMsg(e)); });
+    } }] });
+  var root = m.el;
+  $('#atQ', root).oninput = function () {
+    var q = this.value.toLowerCase().trim();
+    $all('#atList .pick-row', root).forEach(function (r) { r.style.display = !q || r.getAttribute('data-hay').indexOf(q) !== -1 ? '' : 'none'; });
+  };
+  $all('#atList input', root).forEach(function (x) { x.onchange = function () { $('#atHint', root).textContent = siblingHint($all('#atList input:checked', root)); }; });
+}
+
+/** "2 more tasks of REQ-… move with them" — campaigns hold whole requests. */
+function siblingHint(checked) {
+  var picked = {}, same = {}, extra = 0;
+  checked.forEach(function (x) { var r = x.getAttribute('data-req'); picked[r] = (picked[r] || 0) + 1; same[r] = Number(x.getAttribute('data-same')) || 0; });
+  Object.keys(picked).forEach(function (r) { extra += Math.max(0, same[r] + 1 - picked[r]); });
+  return extra ? extra + ' other task(s) from the same request(s) will come along, so the whole request stays in one folder.' : '';
+}
+
+function movedMsg(res) {
+  if (!res || !res.tasks) return 'Already in that campaign';
+  return res.tasks + ' task(s) now in “' + res.campaignName + '” — files go to its Drive folder';
+}
+
+/** Leader: choose a campaign (or type a new one) for the given tasks. */
+function campaignPickModal(taskIds, done) {
+  api('api_listCampaigns').then(function (list) {
+    var act = list.filter(function (x) { return x.active; });
+    var m = modal({ title: 'Add ' + taskIds.length + ' task(s) to a campaign',
+      body: '<p class="muted" style="margin-top:0">Everything approved goes into one Drive folder. Tasks from the same request move together.</p>' +
+        '<div class="field"><label>Campaign</label><select id="cpkSel">' + act.map(function (x) { return '<option value="' + h(x.campaignId) + '">' + h(x.name) + '</option>'; }).join('') +
+        '<option value="__new"' + (act.length ? '' : ' selected') + '>+ New campaign…</option></select></div>' +
+        '<div class="field' + (act.length ? ' hidden' : '') + '" id="cpkNewF"><label>New campaign name</label><input id="cpkNew" maxlength="80" placeholder="e.g. Diwali Sale 2026"></div>' +
+        '<div class="alert bad hidden" data-form-error></div>',
+      actions: [{ label: 'Cancel' }, { label: 'Add', cls: 'primary', onClick: function (close, mm) {
+        var v = $('#cpkSel', mm).value, nm = v === '__new' ? $('#cpkNew', mm).value.trim() : '';
+        if (v === '__new' && !nm) { fieldErrors(mm, 'Type a name for the new campaign.'); return Promise.resolve(); }
+        return api('api_setTasksCampaign', taskIds, v === '__new' ? '' : v, nm).then(function (res) { close(); toast(movedMsg(res)); if (done) done(res); }).catch(function (e) { fieldErrors(mm, errMsg(e)); });
+      } }] });
+    var root = m.el;
+    $('#cpkSel', root).onchange = function () { $('#cpkNewF', root).classList.toggle('hidden', this.value !== '__new'); if (this.value === '__new') $('#cpkNew', root).focus(); };
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+/** Leader: create a campaign and put this task's request into it in one step. */
+function campaignPickModalNew(taskId, done) {
+  modal({ title: 'New campaign', body: '<div class="field"><label>Campaign name</label><input id="cpnName" maxlength="80" placeholder="e.g. Diwali Sale 2026"></div>' +
+    '<p class="hint" style="margin:0">This task (and the rest of its request) goes into it; approved files move to its Drive folder.</p><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Create & add', cls: 'primary', onClick: function (close, mm) {
+      var nm = $('#cpnName', mm).value.trim();
+      if (!nm) { fieldErrors(mm, 'Type a name.'); return Promise.resolve(); }
+      return api('api_setTasksCampaign', [taskId], '', nm).then(function (res) { close(); toast(movedMsg(res)); if (done) done(res); }).catch(function (e) { fieldErrors(mm, errMsg(e)); });
+    } }] });
 }
 </script>

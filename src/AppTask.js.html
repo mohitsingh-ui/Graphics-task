@@ -118,6 +118,10 @@ function drawTask(el) {
   if ($('#splitBtn')) $('#splitBtn').onclick = function () { directTaskModal({ requirementId: t.requirementId, requirementTitle: r.title || t.title, campaignId: d.campaign ? d.campaign.campaignId : '' }); };
   if ($('#campSel')) $('#campSel').onchange = function () {
     var v = this.value;
+    if (v === '__new') {
+      this.value = d.campaign ? d.campaign.campaignId : '';
+      return campaignPickModalNew(t.taskId, reloadTask);
+    }
     api('api_setRequestCampaign', t.requirementId, v).then(function () { toast(v ? 'Added to the campaign — its approved files moved to the campaign folder' : 'Removed from the campaign'); reloadTask(); })
       .catch(function (e) { toast(errMsg(e), true); reloadTask(); });
   };
@@ -313,7 +317,8 @@ function leaderSide(d) {
   var t = d.task;
   var camp = '<div class="card"><div class="card-h"><h3>Campaign</h3>' + (d.campaign ? '<a href="#" class="small" data-go="campaigns/' + h(d.campaign.campaignId) + '">Open</a>' : '') + '</div><div class="card-b stack">' +
     '<select id="campSel"><option value="">— Not in a campaign —</option>' + (d.campaigns || []).map(function (c) {
-      return '<option value="' + h(c.campaignId) + '"' + (d.campaign && d.campaign.campaignId === c.campaignId ? ' selected' : '') + '>' + h(c.name) + '</option>'; }).join('') + '</select>' +
+      return '<option value="' + h(c.campaignId) + '"' + (d.campaign && d.campaign.campaignId === c.campaignId ? ' selected' : '') + '>' + h(c.name) + '</option>'; }).join('') +
+    '<option value="__new">+ New campaign…</option></select>' +
     '<span class="hint">Applies to the whole request (' + h(d.requirement.requirementId) + '). Its approved files go into the campaign’s Drive folder.</span></div></div>';
   return camp + '<div class="card"><div class="card-h"><h3>Internal notes</h3><span class="faint small">Leaders only</span></div><div class="card-b stack">' +
     '<textarea id="notes" rows="4" maxlength="8000">' + h(t.internalNotes || '') + '</textarea><div><button class="btn sm" id="notesSave">Save notes</button></div></div></div>' +

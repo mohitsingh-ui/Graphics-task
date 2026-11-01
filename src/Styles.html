@@ -321,4 +321,10 @@ tr.click { transition: background .1s; }
 .bonus-in input { width: 120px; } .bonus-in span { color: var(--text-3); font-size: 13px; }
 .bonus-badge { background: var(--accent-soft); color: var(--accent-ink); display: inline-flex; align-items: center; gap: 4px; }
 .bonus-badge svg { width: 12px; height: 12px; }
+.pick-list { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.pick-row:last-child { border-bottom: 0; }
+.pick-row:hover { background: var(--surface-2); }
+.pick-row input { width: 18px; height: 18px; accent-color: var(--accent, var(--ok)); flex: none; }
+.tk-pick { width: 17px; height: 17px; cursor: pointer; accent-color: var(--accent, var(--ok)); }
 </style>

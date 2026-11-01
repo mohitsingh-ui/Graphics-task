@@ -13,7 +13,7 @@ const { startHarness } = require('./ui-harness');
 const OUT = process.argv[2] || path.join(__dirname, 'screens');
 fs.mkdirSync(OUT, { recursive: true });
 const PORT = 8765, BASE = 'http://localhost:' + PORT;
-const LEADER = 'owner@rosierfoods.com', A = 'asha@rosierfoods.com';
+const LEADER = 'owner@rosierfoods.com', A = 'asha@rosierfoods.com', B = 'bilal@rosierfoods.com';
 let sharp; try { sharp = require('sharp'); } catch (e) { sharp = require('/opt/npm-tools/node_modules/sharp'); }
 function bannerPng(label, hue) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -654,6 +654,53 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.click('[data-r="rewards"]');
       await page.waitForSelector('.rank-hero');
       assert.ok((await page.textContent('.rank-hero')).includes('task bonuses'));
+    });
+
+    await step('Already-assigned tasks: tick on the Task board → Add to campaign (new); Add existing tasks on the campaign page; + New campaign on a task', async () => {
+      const t1 = env.call(LEADER, 'api_createDirectTask', { title: 'Holi Meta ad', assigneeEmail: A, dueDate: future(4), quantity: 1 }).data;
+      const t2 = env.call(LEADER, 'api_createDirectTask', { title: 'Holi listing', assigneeEmail: B, dueDate: future(4), quantity: 1 }).data;
+      const t3 = env.call(LEADER, 'api_createDirectTask', { title: 'Holi banner', assigneeEmail: B, dueDate: future(4), quantity: 1 }).data;
+      const t4 = env.call(LEADER, 'api_createDirectTask', { title: 'Navratri story', assigneeEmail: A, dueDate: future(4), quantity: 1 }).data;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=tasks');
+      await page.waitForSelector('#taskBulk');
+      assert.ok(await page.isDisabled('#tkCamp'));
+      await page.check('.tk-pick[data-tk="' + t1.taskId + '"]');
+      await page.check('.tk-pick[data-tk="' + t2.taskId + '"]');
+      assert.ok(page.url().includes('tasks'), 'ticking does not open the task');
+      assert.ok((await page.textContent('#tkCount')).includes('2'));
+      await page.click('#tkCamp');
+      await page.waitForSelector('#cpkSel');
+      await page.selectOption('#cpkSel', '__new');
+      await page.fill('#cpkNew', 'Holi Sale');
+      await shot('60-board-add-to-campaign');
+      await page.click('.modal-f >> text=Add');
+      await page.waitForSelector('.toast');
+      assert.ok((await page.textContent('.toast')).includes('Holi Sale'));
+      await page.waitForFunction(() => /Holi Sale/.test(document.querySelector('#taskOut').textContent));
+      await shot('61-board-campaign-chips');
+      const cid = env.call(LEADER, 'api_listCampaigns').data.find(c => c.name === 'Holi Sale').campaignId;
+      // campaign page: add an existing task with search
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=campaigns/' + cid);
+      await page.waitForSelector('#cpAddT');
+      await page.click('#cpAddT');
+      await page.waitForSelector('#atList');
+      await page.fill('#atQ', 'holi banner');
+      assert.ok(await page.isVisible('#atList input[value="' + t3.taskId + '"]'));
+      assert.ok(!(await page.isVisible('#atList input[value="' + t4.taskId + '"]')), 'search filters');
+      await page.check('#atList input[value="' + t3.taskId + '"]');
+      await shot('62-campaign-add-existing-tasks');
+      await page.click('.modal-f >> text=Add to campaign');
+      await page.waitForFunction(() => /Holi banner/.test(document.querySelector('#view').textContent));
+      assert.strictEqual(env.call(LEADER, 'api_getCampaign', cid).data.taskList.length, 3);
+      // task page: + New campaign…
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + t4.taskId);
+      await page.waitForSelector('#campSel');
+      await page.selectOption('#campSel', '__new');
+      await page.waitForSelector('#cpnName');
+      await page.fill('#cpnName', 'Navratri 2026');
+      await page.click('.modal-f >> text=Create & add');
+      await page.waitForFunction(() => { const s = document.querySelector('#campSel'); return s && s.options[s.selectedIndex].text === 'Navratri 2026'; });
+      await shot('63-task-new-campaign');
     });
 
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {

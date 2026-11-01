@@ -1293,6 +1293,53 @@ scenario('Task bonus points: leader sets extra points when assigning; paid when 
   assert.strictEqual(ok(call(A, 'api_getTask', d.taskId)).task.bonusPoints, '100');
 });
 
+scenario('Already-assigned tasks moved into a campaign (existing or new) → files land in one Drive folder', () => {
+  // two separate requests, assigned and partly approved before any campaign existed
+  const r1 = ok(call('', 'api_submitRequirement', { requesterName: 'Pia', department: 'Performance', brief: 'Holi Meta ads', preferredDate: future(5), quantity: 2 }));
+  const t1 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === r1.requirementId).taskId;
+  ok(call(LEADER, 'api_divideTask', t1, { parts: [{ assigneeEmail: A, count: 1 }, { assigneeEmail: B, count: 1 }], dueDate: future(5), priority: 'High' }));
+  const parts = ok(call(LEADER, 'api_listTasks', {})).filter(x => x.requirementId === r1.requirementId);
+  const pA = parts.find(x => x.assigneeEmail === A).taskId, pB = parts.find(x => x.assigneeEmail === B).taskId;
+  const solo = ok(call(LEADER, 'api_createDirectTask', { title: 'Holi listing', assigneeEmail: B, dueDate: future(4), quantity: 1, category: 'Listing images' }));
+  const v = upload(A, { kind: 'version', taskId: pA, title: 'Holi Meta A' }, 'a.png', png(300)).versionId;
+  ok(call(A, 'api_submitForApproval', pA, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  // not allowed for designers; needs tasks
+  err(call(A, 'api_setTasksCampaign', [pA], '', 'Holi'), 'FORBIDDEN');
+  err(call(LEADER, 'api_setTasksCampaign', [], '', 'Holi'), 'VALIDATION');
+  // tick one part of the divided request + the direct task, create "Holi Sale" on the spot
+  const res = ok(call(LEADER, 'api_setTasksCampaign', [pA, solo.taskId], '', 'Holi Sale'));
+  assert.strictEqual(res.campaignName, 'Holi Sale'); assert.strictEqual(res.requests, 2);
+  assert.strictEqual(res.tasks, 3, 'the other part of the same request comes along');
+  const cmp = ok(call(LEADER, 'api_listCampaigns')).find(x => x.name === 'Holi Sale');
+  const list = ok(call(LEADER, 'api_listTasks', {}));
+  [pA, pB, solo.taskId].forEach(id => assert.strictEqual(list.find(x => x.taskId === id).campaignName, 'Holi Sale'));
+  // the already-approved file moved into the campaign folder
+  const f = ok(call(LEADER, 'api_finalFolder', cmp.campaignId, false));
+  assert.strictEqual(f.total, 1); assert.strictEqual(f.requests, 2);
+  const camp = env.ctx.dbGet_('Campaigns', cmp.campaignId);
+  assert.ok(Object.values(state.files).some(x => x.name === 'Holi Meta A V1.png' && state.folders[x.parent] && (x.parent === camp.folderId || state.folders[x.parent].parent === camp.folderId)));
+  // new approvals go straight into the campaign folder
+  const w = upload(B, { kind: 'version', taskId: solo.taskId, title: 'Holi listing 1' }, 'l.png', png(300)).versionId;
+  ok(call(B, 'api_submitForApproval', solo.taskId, [w])); ok(call(LEADER, 'api_leaderDecision', w, 'approved', ''));
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', cmp.campaignId, false)).total, 2);
+  // same name again reuses the campaign, nothing to move
+  const again = ok(call(LEADER, 'api_setTasksCampaign', [pB], '', 'holi sale'));
+  assert.strictEqual(again.campaignId, cmp.campaignId); assert.strictEqual(again.tasks, 0);
+  // campaign page lists tasks that can be added, not the ones already in it
+  const other = ok(call(LEADER, 'api_saveCampaign', { name: 'Summer Sale' }));
+  const g = ok(call(LEADER, 'api_getCampaign', other.campaignId));
+  const row = g.addableTasks.find(x => x.taskId === pA);
+  assert.strictEqual(row.inCampaign, 'Holi Sale'); assert.strictEqual(row.sameRequest, 1);
+  assert.ok(!ok(call(LEADER, 'api_getCampaign', cmp.campaignId)).addableTasks.some(x => x.taskId === pA));
+  // move to an existing campaign by id, then out again
+  assert.strictEqual(ok(call(LEADER, 'api_setTasksCampaign', [solo.taskId], other.campaignId, '')).tasks, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', cmp.campaignId, false)).total, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', other.campaignId, false)).total, 1);
+  ok(call(LEADER, 'api_setTasksCampaign', [solo.taskId], '', ''));
+  assert.ok(!ok(call(LEADER, 'api_listTasks', {})).find(x => x.taskId === solo.taskId).campaignId);
+  err(call(LEADER, 'api_setTasksCampaign', [solo.taskId], 'CMP-NOPE', ''), 'NOT_FOUND');
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

@@ -330,7 +330,8 @@ VIEWS.tasks = function (arg, el, token) {
     TASK_UI.all = res[0];
     TASK_UI.team = res[1].users.filter(function (u) { return u.active; }).map(function (u) { return { email: u.email, name: u.name }; });
     var seen = {};
-    TASK_UI.campaigns = res[0].map(function (t) { return t.campaign; }).filter(function (c) { if (!c || seen[c]) return false; seen[c] = 1; return true; }).sort();
+    TASK_UI.sel = {};
+    TASK_UI.campaigns = res[0].reduce(function (a, t) { return a.concat([t.campaignName, t.campaign]); }, []).filter(function (c) { if (!c || seen[c]) return false; seen[c] = 1; return true; }).sort();
     drawFilters();
     drawTasks();
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
@@ -344,7 +345,7 @@ function drawFilters() {
     sel('fs', statuses, f.status) +
     sel('fp', [['', 'Any priority']].concat(APP.boot.priorities.map(function (p) { return [p, p]; })), f.priority) +
     sel('fa', [['', 'Any designer'], ['__none', 'Unassigned']].concat((TASK_UI.team || []).map(function (u) { return [u.email, u.name]; })), f.assignee) +
-    sel('fc', [['', 'Any campaign']].concat((TASK_UI.campaigns || []).map(function (c) { return [c, c]; })), f.campaign) +
+    sel('fc', [['', 'Any campaign'], ['__none', 'Not in a campaign']].concat((TASK_UI.campaigns || []).map(function (c) { return [c, c]; })), f.campaign) +
     '<label class="small faint">Due</label><input type="date" id="fdf" value="' + h(f.dueFrom || '') + '"><span class="faint">–</span><input type="date" id="fdt" value="' + h(f.dueTo || '') + '">' +
     '<button class="btn ghost sm" id="fclear">Clear</button>';
   function sel(id, opts, val) {
@@ -370,10 +371,11 @@ function filterTasks(rows) {
     if (f.priority && t.priority !== f.priority) return false;
     if (f.assignee === '__none' && t.assigneeEmail) return false;
     if (f.assignee && f.assignee !== '__none' && t.assigneeEmail !== f.assignee) return false;
-    if (f.campaign && t.campaign !== f.campaign) return false;
+    if (f.campaign === '__none' && t.campaignId) return false;
+    if (f.campaign && f.campaign !== '__none' && t.campaign !== f.campaign && t.campaignName !== f.campaign) return false;
     if (f.dueFrom && (!t.dueDate || t.dueDate < f.dueFrom)) return false;
     if (f.dueTo && (!t.dueDate || t.dueDate > f.dueTo)) return false;
-    if (q && [t.taskId, t.requirementId, t.title, t.campaign, t.product, t.requesterName, t.department, t.assigneeName].join(' ').toLowerCase().indexOf(q) === -1) return false;
+    if (q && [t.taskId, t.requirementId, t.title, t.campaign, t.campaignName, t.product, t.requesterName, t.department, t.assigneeName].join(' ').toLowerCase().indexOf(q) === -1) return false;
     return true;
   });
 }
@@ -412,11 +414,18 @@ function drawTasks() {
       return (x > y ? 1 : -1) * dir;
     });
     var th = function (k, label) { return '<th class="sortable" data-sort="' + k + '">' + h(label) + (key === k ? (dir > 0 ? ' ↑' : ' ↓') : '') + '</th>'; };
-    out.innerHTML = rows.length ? '<div class="table-wrap"><table class="t"><thead><tr>' + th('taskId', 'Task') + th('title', 'Title') + th('assigneeName', 'Designer') +
+    var picked = TASK_UI.sel || (TASK_UI.sel = {});
+    var nPick = rows.filter(function (t) { return picked[t.taskId]; }).length;
+    out.innerHTML = rows.length ? '<div class="bulkbar" id="taskBulk"><label class="row" style="gap:8px;cursor:pointer"><input type="checkbox" id="tkAll"' + (nPick && nPick === rows.length ? ' checked' : '') + '>' +
+      '<span class="small" id="tkCount">' + (nPick ? '<b>' + nPick + '</b> selected' : 'Tick tasks to put them into a campaign') + '</span></label>' +
+      '<button class="btn sm primary" id="tkCamp"' + (nPick ? '' : ' disabled') + '>' + icon('board') + ' Add to campaign</button></div>' +
+      '<div class="table-wrap"><table class="t"><thead><tr><th style="width:34px"></th>' + th('taskId', 'Task') + th('title', 'Title') + th('assigneeName', 'Designer') +
       th('priority', 'Priority') + th('dueDate', 'Due') + th('status', 'Status') + th('progress', 'Progress') + '<th>Creatives</th></tr></thead><tbody>' +
       rows.map(function (t) {
-        return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td class="mono">' + h(t.taskId) + '</td><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' +
-          h([t.campaign, t.department].filter(Boolean).join(' · ')) + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
+        return '<tr class="click" data-go="task/' + h(t.taskId) + '"><td data-nogo><input type="checkbox" class="tk-pick" data-tk="' + h(t.taskId) + '"' + (picked[t.taskId] ? ' checked' : '') + ' aria-label="Select ' + h(t.taskId) + '"></td>' +
+          '<td class="mono">' + h(t.taskId) + '</td><td><div style="font-weight:500">' + h(t.title) + '</div><div class="faint small">' +
+          h([t.campaign !== t.campaignName ? t.campaign : '', t.department].filter(Boolean).join(' · ')) +
+          (t.campaignName ? ' <span class="cat-chip" style="font-size:11px;padding:1px 7px">' + icon('board') + ' ' + h(t.campaignName) + '</span>' : '') + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
           '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + holdChip(t) + '</td>' +
           '<td><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="faint small">' + h(t.progress) + '%</span></div></td>' +
           '<td>' + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + '</td></tr>';
@@ -424,6 +433,27 @@ function drawTasks() {
     $all('th[data-sort]', out).forEach(function (x) {
       x.onclick = function () { var k = x.getAttribute('data-sort'); if (TASK_UI.sort === k) TASK_UI.dir *= -1; else { TASK_UI.sort = k; TASK_UI.dir = 1; } drawTasks(); };
     });
+    var syncBar = function () {
+      var n = rows.filter(function (t) { return picked[t.taskId]; }).length;
+      $('#tkCount').innerHTML = n ? '<b>' + n + '</b> selected' : 'Tick tasks to put them into a campaign';
+      $('#tkCamp').disabled = !n; $('#tkAll').checked = n > 0 && n === rows.length;
+    };
+    $all('td[data-nogo]', out).forEach(function (td) { td.onclick = function (e) { e.stopPropagation(); }; });
+    $all('.tk-pick', out).forEach(function (c) {
+      c.onclick = function (e) { e.stopPropagation(); };
+      c.onchange = function () { if (c.checked) picked[c.getAttribute('data-tk')] = 1; else delete picked[c.getAttribute('data-tk')]; syncBar(); };
+    });
+    if ($('#tkAll')) {
+      $('#tkAll').onchange = function () {
+        var on = this.checked;
+        rows.forEach(function (t) { if (on) picked[t.taskId] = 1; else delete picked[t.taskId]; });
+        $all('.tk-pick', out).forEach(function (c) { c.checked = on; }); syncBar();
+      };
+      $('#tkCamp').onclick = function () {
+        var ids = rows.filter(function (t) { return picked[t.taskId]; }).map(function (t) { return t.taskId; });
+        campaignPickModal(ids, function () { TASK_UI.sel = {}; render(APP.route, true); });
+      };
+    }
   }
   wireGo(out);
 }

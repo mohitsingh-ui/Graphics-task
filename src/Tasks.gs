@@ -266,6 +266,7 @@ function api_listTasks(filters) {
     var rows = isLeader_(u) ? dbAll_('Tasks') : dbFind_('Tasks', function (t) { return t.assigneeEmail === u.email; });
     var q = String(filters.q || '').toLowerCase().trim();
     var reqMap = {}; dbAll_('Requirements').forEach(function (r) { reqMap[r.requirementId] = r; });
+    var cmpMap = {}; if (isLeader_(u)) dbAll_('Campaigns').forEach(function (c) { cmpMap[c.campaignId] = c.name; });
     rows = rows.filter(function (t) {
       if (filters.status && filters.status !== 'all') {
         if (filters.status === 'open') { if (CLOSED.indexOf(t.status) !== -1) return false; }
@@ -289,7 +290,9 @@ function api_listTasks(filters) {
     });
     return rows.map(function (t) {
       var r = reqMap[t.requirementId] || {};
-      return taskDto_(t, u, Object.assign({ requesterName: r.requesterName || '', department: r.department || '' }, deliverableCounts_(t.taskId)));
+      var ex = { requesterName: r.requesterName || '', department: r.department || '' };
+      if (isLeader_(u) && r.campaignId) { ex.campaignId = r.campaignId; ex.campaignName = cmpMap[r.campaignId] || ''; }
+      return taskDto_(t, u, Object.assign(ex, deliverableCounts_(t.taskId)));
     });
   });
 }

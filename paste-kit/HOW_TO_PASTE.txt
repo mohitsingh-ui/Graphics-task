@@ -1,0 +1,18 @@
+SET UP BY HAND IN THE APPS SCRIPT EDITOR (no terminal needed)
+
+1. script.google.com → New project. Rename it "Graphics Team Portal".
+2. Project Settings (gear) → tick "Show appsscript.json manifest file in editor".
+   Time zone: (GMT+05:30) India Standard Time - Kolkata.
+3. Back in Editor:
+   - Open Code.gs, delete everything, paste ALL of Code.gs from this folder. Ctrl/Cmd+S.
+   - Open appsscript.json, replace with appsscript.json from this folder. Save.
+   - Files "+" → HTML → name it exactly:  Form       → paste Form.html      → Save
+   - Files "+" → HTML → name it exactly:  Review     → paste Review.html    → Save
+   - Files "+" → HTML → name it exactly:  App        → paste App.html       → Save
+   - Files "+" → HTML → name it exactly:  NoAccess   → paste NoAccess.html  → Save
+   (Type the name WITHOUT ".html" — the editor adds it.)
+4. Choose "setup" in the function dropdown → Run → allow permissions → "Setup complete".
+5. Deploy → New deployment → gear → Web app, twice:
+   public:   Execute as Me, access Anyone
+   internal: Execute as Me, access Anyone within rosierfoods.com
+6. Open the internal URL → Settings → Portal links → paste both URLs → Save.

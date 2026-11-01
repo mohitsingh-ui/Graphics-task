@@ -83,6 +83,7 @@ function api_getCampaign(campaignId) {
     out.addable = dbFind_('Requirements', function (r) { return !r.campaignId; })
       .sort(function (a, b) { return a.submittedAt < b.submittedAt ? 1 : -1; }).slice(0, 100)
       .map(function (r) { return { requirementId: r.requirementId, title: r.title, department: r.department }; });
+    out.addableTasks = addableTasks_(c.campaignId);
     return out;
   });
 }
@@ -126,6 +127,65 @@ function api_setRequestCampaign(id, campaignId) {
       fileInto_(finalFolder_(dbGet_('Requirements', req.requirementId)), tasks);
       tasks.forEach(function (t) { logActivity_(t.taskId, u, 'campaign', '', c ? c.name : '', c ? 'Added to campaign “' + c.name + '”' : 'Removed from campaign', 'team'); });
       return { campaignId: c ? c.campaignId : '' };
+    });
+  });
+}
+
+/** Tasks that could be added to a campaign (anything not cancelled and not already in it). */
+function addableTasks_(campaignId) {
+  var reqMap = {}, cmpMap = {};
+  dbAll_('Requirements').forEach(function (r) { reqMap[r.requirementId] = r; });
+  dbAll_('Campaigns').forEach(function (c) { cmpMap[c.campaignId] = c.name; });
+  var perReq = {};
+  dbAll_('Tasks').forEach(function (t) { if (t.status !== STATUS.CANCELLED) perReq[t.requirementId] = (perReq[t.requirementId] || 0) + 1; });
+  return dbFind_('Tasks', function (t) {
+    var r = reqMap[t.requirementId];
+    return r && t.status !== STATUS.CANCELLED && (r.campaignId || '') !== campaignId;
+  }).sort(function (a, b) { return (a.createdAt || '') < (b.createdAt || '') ? 1 : -1; }).slice(0, 300).map(function (t) {
+    var r = reqMap[t.requirementId];
+    return { taskId: t.taskId, requirementId: t.requirementId, title: t.title, status: t.status,
+      assigneeName: t.assigneeEmail ? displayName_(t.assigneeEmail) : '', department: r.department || '',
+      inCampaign: r.campaignId ? (cmpMap[r.campaignId] || '') : '', sameRequest: (perReq[t.requirementId] || 1) - 1 };
+  });
+}
+
+/**
+ * Leader: put already-assigned tasks into a campaign (or a new one named newName), so their files land in one Drive folder.
+ * Campaigns hold whole requests, so every task of the same request moves with it.
+ */
+function api_setTasksCampaign(taskIds, campaignId, newName) {
+  return respond_(function () {
+    var u = requireLeader_();
+    if (!Array.isArray(taskIds) || !taskIds.length) throw AppError_('VALIDATION', 'Pick at least one task.');
+    if (taskIds.length > 500) throw AppError_('VALIDATION', 'Too many tasks at once.');
+    return withLock_(function () {
+      var c = null;
+      newName = str_(newName, 80, 'Campaign name', false);
+      if (newName) {
+        c = dbFind_('Campaigns', function (x) { return x.name.toLowerCase() === newName.toLowerCase(); })[0];
+        if (!c) c = dbInsert_('Campaigns', { campaignId: 'CMP-' + uuid_().slice(0, 8).toUpperCase(), name: newName, folderId: '', shared: '', active: true,
+          createdBy: u.email, createdAt: nowIso_(), updatedAt: nowIso_() });
+      } else if (campaignId) {
+        c = dbGet_('Campaigns', str_(campaignId, 40, 'Campaign', true));
+        if (!c) throw AppError_('NOT_FOUND', 'Campaign not found.');
+      }
+      var reqIds = {}, order = [];
+      taskIds.forEach(function (id) {
+        var t = dbGet_('Tasks', str_(id, 40, 'Task', true));
+        if (!t) throw AppError_('NOT_FOUND', 'Task ' + id + ' not found.');
+        if (!reqIds[t.requirementId]) { reqIds[t.requirementId] = 1; order.push(t.requirementId); }
+      });
+      var target = c ? c.campaignId : '', moved = 0, requests = 0;
+      order.forEach(function (rid) {
+        var req = dbGet_('Requirements', rid);
+        if (!req || (req.campaignId || '') === target) return;
+        dbUpdate_('Requirements', rid, { campaignId: target, updatedAt: nowIso_() });
+        var tasks = dbFind_('Tasks', function (t) { return t.requirementId === rid && t.status !== STATUS.CANCELLED; });
+        fileInto_(finalFolder_(dbGet_('Requirements', rid)), tasks);
+        tasks.forEach(function (t) { logActivity_(t.taskId, u, 'campaign', '', c ? c.name : '', c ? 'Added to campaign “' + c.name + '”' : 'Removed from campaign', 'team'); });
+        moved += tasks.length; requests++;
+      });
+      return { campaignId: target, campaignName: c ? c.name : '', tasks: moved, requests: requests };
     });
   });
 }
