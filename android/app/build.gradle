@@ -1,0 +1,53 @@
+// Rosier Graphics Portal — a small Android launcher that opens the portal in Chrome.
+// Built by .github/workflows/android-apk.yml; the link, name and id are passed in with -P.
+plugins { id 'com.android.application' }
+
+def portalUrl  = (project.findProperty('portalUrl')  ?: 'https://example.com').toString().trim()
+def appLabel   = (project.findProperty('appLabel')   ?: 'Rosier Portal').toString().replaceAll(/[^A-Za-z0-9 &\-]/, '').trim()
+def appSuffix  = (project.findProperty('appSuffix')  ?: 'team').toString().replaceAll(/[^a-z]/, '')
+def buildNo    = (project.findProperty('buildNo')    ?: '1').toString().toInteger()
+
+android {
+    namespace 'com.rosierfoods.portal'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.rosierfoods.portal." + appSuffix
+        minSdk 21
+        targetSdk 34
+        versionCode buildNo
+        versionName "1." + buildNo
+        manifestPlaceholders = [portalUrl: portalUrl]
+        resValue 'string', 'app_name', appLabel
+    }
+
+    buildFeatures { resValues true }
+
+    // Icon set per app: icons/team or icons/request
+    sourceSets { main { res.srcDirs += ["../icons/" + appSuffix] } }
+
+    // One fixed key, so a new APK installs over the old one without uninstalling.
+    signingConfigs {
+        portal {
+            storeFile file('rosier-portal.keystore')
+            storePassword 'rosierportal'
+            keyAlias 'portal'
+            keyPassword 'rosierportal'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.portal
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}

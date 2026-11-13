@@ -12,7 +12,7 @@ var SCHEMA = {
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId', 'coOwners'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
@@ -20,7 +20,7 @@ var SCHEMA = {
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
     'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink',
-    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints'],
+    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -41,11 +41,14 @@ var SCHEMA = {
   Rewards: ['rewardId', 'userEmail', 'badge', 'points', 'reason', 'taskId', 'givenBy', 'givenAt'],
   ReviewBatches: ['batchId', 'tokenHash', 'title', 'versionIds', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
   Campaigns: ['campaignId', 'name', 'folderId', 'shared', 'active', 'createdBy', 'createdAt', 'updatedAt'],
-  TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt']
+  TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
+  // One row per team member: what they set on their own profile (kept out of Users so that table stays small).
+  Profiles: ['email', 'nickname', 'photo', 'portfolioUrl', 'bio', 'theme', 'accentColor', 'chatSeenAt', 'updatedAt'],
+  ChatMessages: ['messageId', 'authorEmail', 'text', 'fileId', 'fileName', 'mimeType', 'sizeBytes', 'createdAt', 'deletedAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 10;
+var SCHEMA_VERSION = 11;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -142,6 +145,11 @@ var DEFAULT_SETTINGS = {
   pointsOnTime: 20,          // per task completed by its deadline (hold time not counted)
   pointsFirstTime: 5,        // per creative approved without any changes
   pointsRejected: 0,         // taken off per rejected creative (0 = no penalty)
+  pointsReopen: 10,          // extra for the designer each time a finished task is reopened for changes (paid when it's finished again)
+  countEachSize: false,      // false: a creative made in 2–3 sizes earns points once; true: every size file counts as its own creative
+  allowPersonalTheme: true,  // team members may pick their own colours on their profile
+  teamChat: true,            // team chat on/off
+  emailRules: {},            // which automatic emails go out — see EMAIL_KINDS; missing key = on
   theme: 'rosier',           // colour theme for every page (see THEMES)
   accentColor: '',           // optional custom accent colour (#rrggbb) on top of the theme
   creativeTypes: [
@@ -198,8 +206,39 @@ var EDITABLE_SETTINGS = {
   sendReviewLinkToRequester: 'boolean', autoCompleteOnApproval: 'boolean', workloadThreshold: 'number',
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
-  creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number'
+  creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number',
+  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', emailRules: 'emailRules'
 };
+
+/**
+ * Every automatic email, for Settings → Emails. The leader turns each one on or off;
+ * in-app notifications (the bell) are always kept. "always" ones can't be turned off.
+ * who: team | requester
+ */
+var EMAIL_KINDS = [
+  { id: 'requirement_new', who: 'team', label: 'New request received', to: 'Team leaders' },
+  { id: 'task_assigned', who: 'team', label: 'Task assigned or moved to someone', to: 'The designer' },
+  { id: 'task_updated', who: 'team', label: 'Task details changed by the leader', to: 'The designer' },
+  { id: 'approval_submitted', who: 'team', label: 'Creatives sent for approval', to: 'Team leaders' },
+  { id: 'creative_approved', who: 'team', label: 'Creative approved', to: 'The designer' },
+  { id: 'creative_changes', who: 'team', label: 'Changes asked / creative rejected', to: 'The designer' },
+  { id: 'task_completed', who: 'team', label: 'Task completed', to: 'The designer' },
+  { id: 'task_reopened', who: 'team', label: 'Task reopened for changes', to: 'The designer' },
+  { id: 'task_status', who: 'team', label: 'Task on hold / resumed / status changed', to: 'The designer' },
+  { id: 'task_due', who: 'team', label: 'Due soon and overdue reminders', to: 'Designer (+ leaders when overdue)' },
+  { id: 'comment', who: 'team', label: 'New comment on a task', to: 'Designer / leaders' },
+  { id: 'reward', who: 'team', label: 'Reward received', to: 'The designer' },
+  { id: 'shared_info', who: 'team', label: 'Details received through a shared task link', to: 'Designer / leaders' },
+  { id: 'change_request', who: 'team', label: 'Requester asks changes / edits a request', to: 'Team leaders' },
+  { id: 'task_deleted', who: 'team', label: 'Task deleted', to: 'The designer' },
+  { id: 'team_invite', who: 'team', label: 'Welcome email when someone is added to the team', to: 'The new member' },
+  { id: 'req_received', who: 'requester', label: 'Confirmation with the reference ID', to: 'Requester' },
+  { id: 'req_review', who: 'requester', label: 'Creatives ready for their review', to: 'Requester' },
+  { id: 'req_hold', who: 'requester', label: '“We need something from you” (task on hold)', to: 'Requester' },
+  { id: 'req_ready', who: 'requester', label: 'Request completed — final files ready', to: 'Requester' },
+  { id: 'req_coowner', who: 'requester', label: 'Added as a co-owner of a request', to: 'The added person' },
+  { id: 'req_link', who: 'requester', label: 'Their “My requests” link when they ask for it', to: 'Requester', always: true }
+];
 
 /** Drive folders created under the root. */
 var DRIVE_FOLDERS = {

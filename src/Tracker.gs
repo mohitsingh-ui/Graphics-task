@@ -35,7 +35,13 @@ function trackKeys_(tokens) {
 }
 
 function ownsRequirement_(keys, r) {
-  return keys.indexOf(String(r.email || '').toLowerCase()) !== -1 || keys.indexOf(('req:' + r.requirementId).toLowerCase()) !== -1;
+  if (keys.indexOf(('req:' + r.requirementId).toLowerCase()) !== -1) return true;
+  return requesterEmails_(r).some(function (e) { return keys.indexOf(e) !== -1; });
+}
+
+/** Which of this link's emails owns the request (for "approved by"), or ''. */
+function ownerKey_(keys, r) {
+  return requesterEmails_(r).filter(function (e) { return keys.indexOf(e) !== -1; })[0] || '';
 }
 
 function trackEmail_(token) {
@@ -72,7 +78,7 @@ function api_getMyRequests(token) {
       var ids = {}; tasks.forEach(function (t) { ids[t.taskId] = true; });
       var dels = dbFind_('CreativeSubmissions', function (d) { return ids[d.taskId]; });
       var required = tasks.filter(function (t) { return t.status !== STATUS.CANCELLED; })
-        .reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0);
+        .reduce(function (s, t) { return s + filesRequired_(t); }, 0);
       var awaiting = [];
       dels.forEach(function (d) {
         if (d.status !== DSTATUS.AWAITING) return;
@@ -106,6 +112,9 @@ function api_getMyRequests(token) {
           return h ? { reason: h.holdReason, dept: h.holdDept, since: h.holdSince } : null;
         })(),
         reopened: tasks.some(function (t) { return t.reopenedAt && CLOSED.indexOf(t.status) === -1; }),
+        raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r),
+        canEdit: ['Completed', 'Cancelled'].indexOf(requesterStatus_(tasks)) === -1,
+        edit: { title: r.title, brief: r.brief, instructions: r.instructions || '', copyText: r.copyText || '', preferredDate: r.preferredDate || '', preferredTime: r.preferredTime || '' },
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
     });
@@ -200,12 +209,15 @@ function trackOpenRequest_(keys, id, reviewer, named) {
   if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
   var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
   if (!rq) throw AppError_('ALREADY_DECIDED', 'This creative is no longer waiting for review.');
-  var em = String(r.email || '').toLowerCase();
+  var em = ownerKey_(keys, r) || String(r.email || '').toLowerCase();
   if (em && (em === String(v.uploadedBy).toLowerCase() || em === String(t.assigneeEmail).toLowerCase())) {
     var me = userByEmail_(em);
     if (!(me && bool_(me.active) && me.role === ROLES.LEADER)) throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
   }
-  if (named) { reviewer.name = r.requesterName || ''; reviewer.email = r.email || ''; }
+  if (named) {
+    var raiser = em === String(r.email || '').toLowerCase();
+    reviewer.name = raiser ? r.requesterName || '' : (userByEmail_(em) || {}).name || em; reviewer.email = em || r.email || '';
+  }
   return rq;
 }
 
@@ -346,7 +358,7 @@ function api_sendTrackLink(email) {
     email = email_(email, 'Email', true);
     rateLimit_('tracksend:' + email, 3, 3600);
     rateLimit_('tracksend:all', 60, 600);
-    var has = dbFind_('Requirements', function (r) { return String(r.email).toLowerCase() === email; }).length > 0;
+    var has = dbFind_('Requirements', function (r) { return requesterEmails_(r).indexOf(email) !== -1; }).length > 0;
     if (has) {
       var token = withLock_(function () { return issueTrackToken_(email); });
       sendMail_(email, 'Your graphics requests', 'Here’s your private link to see all your requests and their status:\n\n' + trackUrl_(token) +
@@ -372,12 +384,151 @@ function api_setFinalLink(taskId, url) {
       if (url) {
         var req = dbGet_('Requirements', t.requirementId);
         notify_(leaderEmails_().filter(function (e) { return e !== u.email; }), 'final_link', 'Final files link added: ' + t.title, t.taskId + ' → ' + url, 'task/' + t.taskId, false);
-        if (req && req.email && (t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED)) {
-          sendMail_(req.email, 'Final files for “' + req.title + '”', 'Hi ' + req.requesterName + ',\n\nThe final files are ready to download:\n' + url,
+        if (req && (t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED)) {
+          mailRequesters_(req, 'req_ready', 'Final files for “' + req.title + '”', 'Hi ' + req.requesterName + ',\n\nThe final files are ready to download:\n' + url,
             { label: 'Open final files', url: url });
         }
       }
       return { finalLink: url };
+    });
+  });
+}
+
+
+/* ---------- co-owners: more than one person owns a request ---------- */
+
+var MAX_CO_OWNERS = 10;
+
+/**
+ * Adds a co-owner (caller holds the lock). They get their own "My requests"
+ * link by email and from then on see, edit and approve the request like the
+ * person who raised it.
+ */
+function addCoOwner_(r, email, byLabel) {
+  email = email_(email, 'Email', true);
+  var s = settings_();
+  if (s.requireRequesterDomain && s.allowedDomain && email.split('@')[1] !== String(s.allowedDomain).toLowerCase()) {
+    throw AppError_('VALIDATION', 'Only @' + s.allowedDomain + ' email addresses can be added.');
+  }
+  var list = coOwnersOf_(r);
+  if (requesterEmails_(r).indexOf(email) !== -1) throw AppError_('VALIDATION', email + ' already owns this request.');
+  if (list.length >= MAX_CO_OWNERS) throw AppError_('VALIDATION', 'Up to ' + MAX_CO_OWNERS + ' people can be added to one request.');
+  list.push(email);
+  dbUpdate_('Requirements', r.requirementId, { coOwners: list.join(','), updatedAt: nowIso_() });
+  dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; }).forEach(function (t) {
+    logActivity_(t.taskId, { email: byLabel, role: 'requester' }, 'co_owner', '', email, 'Added as a co-owner of the request', 'team');
+  });
+  if (s.emailNotifications && mailRule_('req_coowner')) {
+    var link = trackUrl_(issueTrackToken_(email));
+    sendMail_(email, 'You’ve been added to a graphics request (' + r.requirementId + ')',
+      'Hi,\n\n' + byLabel + ' added you as an owner of the request "' + r.title + '" (' + r.requirementId + ').\n\n' +
+      'You can follow it, edit the details and approve the creatives here:\n' + link, { label: 'Open my requests', url: link });
+  }
+  return list;
+}
+
+function removeCoOwner_(r, email, byLabel) {
+  email = String(email || '').toLowerCase().trim();
+  var list = coOwnersOf_(r);
+  if (list.indexOf(email) === -1) throw AppError_('NOT_FOUND', 'That person isn’t a co-owner of this request.');
+  list = list.filter(function (e) { return e !== email; });
+  dbUpdate_('Requirements', r.requirementId, { coOwners: list.join(','), updatedAt: nowIso_() });
+  dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; }).forEach(function (t) {
+    logActivity_(t.taskId, { email: byLabel, role: 'requester' }, 'co_owner', email, '', 'Removed as a co-owner', 'team');
+  });
+  return list;
+}
+
+function ownersDto_(r) { return { raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r) }; }
+
+/** Requester (or a co-owner) adds someone by email from "My requests". */
+function api_trackAddOwner(token, requirementId, email) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackowner:' + keys.join(',').slice(0, 120), 20, 3600);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      addCoOwner_(x.r, email, ownerKey_(keys, x.r) || x.r.requesterName || 'The requester');
+      return ownersDto_(dbGet_('Requirements', x.r.requirementId));
+    });
+  });
+}
+
+/** Any owner can take a co-owner off (also themselves). The person who raised it always stays. */
+function api_trackRemoveOwner(token, requirementId, email) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      removeCoOwner_(x.r, email, ownerKey_(keys, x.r) || 'The requester');
+      return ownersDto_(dbGet_('Requirements', x.r.requirementId));
+    });
+  });
+}
+
+/** Team leader adds or removes request owners from the task page. */
+function api_setRequestOwners(requirementId, input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    return withLock_(function () {
+      var r = dbGet_('Requirements', str_(requirementId, 40, 'Request', true));
+      if (!r) { var t = dbGet_('Tasks', requirementId); r = t && dbGet_('Requirements', t.requirementId); }
+      if (!r) throw AppError_('NOT_FOUND', 'Request not found.');
+      if (input.add) addCoOwner_(r, input.add, u.name + ' (graphics team)');
+      if (input.remove) removeCoOwner_(dbGet_('Requirements', r.requirementId), input.remove, u.email);
+      return ownersDto_(dbGet_('Requirements', r.requirementId));
+    });
+  });
+}
+
+/**
+ * Any owner edits their request from "My requests" (until it's finished).
+ * The brief, copy and instructions also update on the designers' tasks,
+ * unless the leader already rewrote them there. The team is told what changed.
+ */
+function api_trackEditRequest(token, requirementId, patchIn) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackedit:' + keys.join(',').slice(0, 120), 20, 3600);
+    patchIn = patchIn || {};
+    var allowed = {
+      title: function (v) { return str_(v, 150, 'Title', true); },
+      brief: function (v) { var b = str_(v, LIMITS.TEXT_LONG, 'Brief', true); if (b.length < 5) throw AppError_('VALIDATION', 'Describe what you need.'); return b; },
+      instructions: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Instructions', false); },
+      copyText: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Copy', false); },
+      preferredDate: function (v) { var d = date_(v, 'Needed by', true); if (d < isoDateOnly_()) throw AppError_('VALIDATION', 'The date can’t be in the past.'); return d; },
+      preferredTime: function (v) { return time_(v, 'Time', false); }
+    };
+    var labels = { title: 'title', brief: 'brief', instructions: 'instructions', copyText: 'copy', preferredDate: 'needed-by date', preferredTime: 'time' };
+    var patch = {};
+    Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId), r = x.r;
+      var all = dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; });
+      var st = requesterStatus_(all);
+      if (st === 'Completed') throw AppError_('INVALID_STATE', 'This request is finished. Use “Need changes?” to ask for changes.');
+      if (st === 'Cancelled') throw AppError_('INVALID_STATE', 'This request was cancelled.');
+      var changed = Object.keys(patch).filter(function (k) { return String(r[k] || '') !== String(patch[k]); });
+      if (!changed.length) return { changed: [] };
+      var p = {}; changed.forEach(function (k) { p[k] = patch[k]; });
+      p.updatedAt = nowIso_();
+      dbUpdate_('Requirements', r.requirementId, p);
+      var who = ownerKey_(keys, r) || r.requesterName || 'The requester';
+      var summary = 'Changed: ' + changed.map(function (k) { return labels[k]; }).join(', ') +
+        (p.preferredDate || p.preferredTime ? ' · now needed by ' + dueText_(p.preferredDate || r.preferredDate, p.preferredTime !== undefined ? p.preferredTime : r.preferredTime) : '');
+      x.tasks.forEach(function (t) {
+        var tp = {};
+        ['brief', 'copyText', 'instructions'].forEach(function (k) { if (p[k] !== undefined && String(t[k] || '') === String(r[k] || '')) tp[k] = p[k]; });
+        if (Object.keys(tp).length) { tp.updatedAt = nowIso_(); dbUpdate_('Tasks', t.taskId, tp); }
+        logActivity_(t.taskId, { email: who, role: 'requester' }, 'request_edited', '', '', summary + (p.brief ? '\n\nNew brief:\n' + p.brief : ''), 'team');
+      });
+      var mail = [];
+      x.tasks.forEach(function (t) { if (t.assigneeEmail && mail.indexOf(t.assigneeEmail) === -1) mail.push(t.assigneeEmail); });
+      leaderEmails_().forEach(function (e) { if (mail.indexOf(e) === -1) mail.push(e); });
+      notify_(mail, 'request_edited', 'Request updated: ' + (p.title || r.title), who + ' updated ' + r.requirementId + '.\n\n' + summary +
+        (p.brief ? '\n\nNew brief:\n' + p.brief.slice(0, 800) : ''), x.tasks[0] ? 'task/' + x.tasks[0].taskId : 'requirements', true);
+      return { changed: changed };
     });
   });
 }

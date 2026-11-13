@@ -1,0 +1,343 @@
+<script>
+/* AppPeople.js — profiles, points history and team chat (everyone on the team). */
+
+/* ================= PROFILE ================= */
+VIEWS.profile = function (arg, el, token) {
+  var email = arg ? decodeURIComponent(arg) : '';
+  api('api_getProfile', email).then(function (p) {
+    if (stale(token)) return;
+    setCrumb(p.mine ? 'My profile' : p.name);
+    var b = p.breakdown || {};
+    var hero = '<div class="card prof-hero"><div class="card-b row wrap" style="gap:18px;align-items:center">' +
+      '<div class="prof-photo" id="pfPhotoBox">' + avatar(p, 92) + '</div>' +
+      '<div class="grow" style="min-width:200px"><h1 style="margin:0">' + h(p.name) + (p.nickname ? ' <span class="faint" style="font-weight:400">“' + h(p.nickname) + '”</span>' : '') + '</h1>' +
+      '<div class="muted">' + h(p.designation || (p.role === 'leader' ? 'Team leader' : 'Designer')) + (p.role === 'leader' && p.designation ? ' · Team leader' : '') + '</div>' +
+      (p.bio ? '<p style="margin:8px 0 0">' + h(p.bio) + '</p>' : '') +
+      (p.portfolioUrl ? '<a class="btn sm" style="margin-top:10px" href="' + h(p.portfolioUrl) + '" target="_blank" rel="noopener">' + icon('external') + ' Portfolio</a>' : '') + '</div>' +
+      '<div class="prof-score"><div><b>' + (p.rank ? '#' + p.rank : '—') + '</b><span>rank of ' + (p.of || 0) + '</span></div><div><b>' + p.points + '</b><span>points</span></div><div><b>' + p.month + '</b><span>this month</span></div>' +
+      '<div><b>' + p.stats.active + '</b><span>open tasks</span></div><div><b>' + p.stats.completed + '</b><span>completed</span></div></div></div></div>';
+
+    var breakdown = '<div class="card"><div class="card-h"><h3>Points</h3><a href="#" data-go="history' + (p.mine ? '' : '/' + encodeURIComponent(p.email)) + '" class="small">' + icon('history').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Full history</a></div>' +
+      '<div class="rh-break" style="border-top:0">' +
+      '<div><b>' + (b.creatives || 0) + '</b><span>creatives approved</span><em>+' + (b.creativePts || 0) + '</em></div>' +
+      '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span></div>' +
+      '<div><b>' + (b.reopenCount || 0) + '</b><span>reopened & finished</span><em>+' + (b.reopen || 0) + '</em></div>' +
+      '<div><b>' + (b.rewardCount || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
+      '<div><b>' + (b.bonus || 0) + '</b><span>task bonus pts</span></div>' +
+      (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span></div>' : '') + '</div>' +
+      (p.recent && p.recent.length ? '<div class="card-b tight">' + p.recent.map(historyItem).join('') + '</div>' : '') + '</div>';
+
+    var grow = p.completeness ? '<div class="card"><div class="card-h"><h3>' + (p.mine ? 'Improve your profile' : 'Profile') + '</h3><span class="faint small">' + p.completeness.percent + '% complete</span></div><div class="card-b stack">' +
+      progressBar(p.completeness.percent, p.completeness.percent >= 100) +
+      '<ul class="checklist">' + p.completeness.items.map(function (i) { return '<li class="' + (i.done ? 'done' : '') + '">' + icon(i.done ? 'check' : 'plus') + ' ' + h(i.label) + '</li>'; }).join('') + '</ul>' +
+      ((p.tips || []).length ? '<div><b class="small">How to grow your points</b><ul class="tips">' + p.tips.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') + '</div></div>' : '';
+
+    var edit = p.mine ? '<div class="card" id="pfEdit"><div class="card-h"><h3>Edit profile</h3></div><div class="card-b stack">' +
+      '<div class="row wrap" style="gap:12px"><button class="btn" type="button" id="pfPick">' + icon('image') + ' ' + (p.photo ? 'Change photo' : 'Add photo') + '</button>' +
+      (p.photo ? '<button class="btn ghost" type="button" id="pfNoPhoto">Remove photo</button>' : '') + '<span class="faint small">JPG or PNG — it’s made small automatically.</span></div>' +
+      '<div class="grid-2"><div class="field"><label for="pfNick">Nickname</label><input type="text" id="pfNick" maxlength="40" value="' + h(p.nickname) + '" placeholder="What the team calls you"></div>' +
+      '<div class="field"><label for="pfUrl">Portfolio link</label><input id="pfUrl" type="url" maxlength="500" value="' + h(p.portfolioUrl) + '" placeholder="https://behance.net/…"></div></div>' +
+      '<div class="field"><label for="pfBio">About you</label><input type="text" id="pfBio" maxlength="300" value="' + h(p.bio) + '" placeholder="e.g. Packaging, type and bold colours"></div>' +
+      '<div><button class="btn primary" id="pfSave">Save profile</button></div></div></div>' : '';
+
+    var look = p.mine && p.allowPersonalTheme ? '<div class="card"><div class="card-h"><h3>Your colours</h3><span class="faint small">Only you see these</span></div><div class="card-b stack">' +
+      '<div class="theme-pick" id="pfThemes"><button type="button" class="theme-sw' + (!p.theme ? ' on' : '') + '" data-pth="">Team default</button>' + p.themes.map(function (t) {
+        return '<button type="button" class="theme-sw' + (t.id === p.theme ? ' on' : '') + (t.dark ? ' dark' : '') + '" data-pth="' + h(t.id) + '" data-acc="' + h(t.accent) + '" data-dark="' + (t.dark ? 1 : 0) + '"><span class="sw" style="background:' + h(t.accent) + '"></span>' + h(t.label) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="row wrap" style="gap:10px"><label class="small" for="pfAcc">Accent colour</label><input type="color" id="pfAcc" value="' + h(p.accentColor || '#a56312') + '" style="width:48px;height:34px;padding:2px">' +
+      '<label class="check small"><input type="checkbox" id="pfUseAcc"' + (p.accentColor ? ' checked' : '') + '> Use it</label><button class="btn sm primary" id="pfLookSave">Save colours</button></div></div></div>' : '';
+
+    var team = '<div class="card"><div class="card-h"><h3>The team</h3><span class="faint small">' + p.team.length + ' people</span></div><div class="card-b team-grid">' + p.team.map(function (x) {
+      return '<a href="#" class="team-card' + (x.email === p.email ? ' on' : '') + '" data-go="profile/' + encodeURIComponent(x.email) + '">' + avatar(x, 44) + '<span class="grow" style="min-width:0"><b class="ellipsis">' + h(x.name) + '</b>' +
+        '<span class="faint small ellipsis">' + h(x.nickname ? '“' + x.nickname + '” · ' : '') + h(x.designation || (x.role === 'leader' ? 'Team leader' : 'Designer')) + '</span></span>' +
+        (x.rank ? '<span class="tc-rank">#' + x.rank + '<small>' + x.points + ' pts</small></span>' : '') + '</a>';
+    }).join('') + '</div></div>';
+
+    el.innerHTML = hero + '<div class="detail" style="margin-top:14px"><div class="stack">' + breakdown + team + '</div><div class="stack">' + grow + edit + look + '</div></div>';
+    wireGo(el);
+    if (!p.mine) return;
+    var photo = p.photo;
+    $('#pfPick').onclick = function () {
+      pickImage(function (f) {
+        shrinkPhoto(f, 160).then(function (url) {
+          photo = url;
+          $('#pfPhotoBox').innerHTML = avatar({ photo: url }, 92);
+          toast('Photo ready — click Save profile');
+        }).catch(function () { toast('That image couldn’t be read. Try a JPG or PNG.', true); });
+      });
+    };
+    if ($('#pfNoPhoto')) $('#pfNoPhoto').onclick = function () { photo = ''; $('#pfPhotoBox').innerHTML = avatar({ name: p.name }, 92); };
+    $('#pfSave').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_saveProfile', { nickname: $('#pfNick').value, portfolioUrl: $('#pfUrl').value.trim(), bio: $('#pfBio').value, photo: photo || '' }).then(function () {
+        toast('Profile saved');
+        APP.boot.user.nickname = $('#pfNick').value.trim(); APP.boot.user.photo = photo || ''; drawMe();
+        render('profile', true);
+      }).catch(function (e) { toast(errMsg(e), true); }).then(function () { btn.disabled = false; });
+    };
+    if (!$('#pfThemes')) return;
+    var pth = p.theme || '';
+    $all('[data-pth]').forEach(function (bt) {
+      bt.onclick = function () {
+        pth = bt.getAttribute('data-pth');
+        $all('[data-pth]').forEach(function (x) { x.classList.toggle('on', x === bt); });
+        if (pth) previewTheme($('#pfUseAcc').checked ? $('#pfAcc').value : bt.getAttribute('data-acc'), bt.getAttribute('data-dark') === '1');
+        else toast('Team default is used after you save');
+      };
+    });
+    $('#pfAcc').oninput = function () { $('#pfUseAcc').checked = true; if (pth) { var bt = $('[data-pth="' + pth + '"]'); previewTheme(this.value, bt && bt.getAttribute('data-dark') === '1'); } };
+    $('#pfLookSave').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_saveProfile', { theme: pth, accentColor: pth && $('#pfUseAcc').checked ? $('#pfAcc').value : '' }).then(function () {
+        toast('Colours saved — reloading');
+        setTimeout(function () { try { window.top.location.reload(); } catch (e) { location.reload(); } }, 600);
+      }).catch(function (e) { toast(errMsg(e), true); btn.disabled = false; });
+    };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function pickImage(cb) {
+  var i = document.createElement('input'); i.type = 'file'; i.accept = 'image/png,image/jpeg,image/webp';
+  i.onchange = function () { if (i.files[0]) cb(i.files[0]); };
+  i.click();
+}
+
+/** Square-crops and shrinks a photo to size×size JPEG (a few KB) in the browser. */
+function shrinkPhoto(file, size) {
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var s = Math.min(img.width, img.height), c = document.createElement('canvas');
+      c.width = c.height = size;
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
+/* ================= POINTS HISTORY ================= */
+var HIST = { kind: '', from: '', to: '' };
+
+function historyItem(x) {
+  var neg = x.points < 0;
+  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : 'check') + '</span>' +
+    '<div class="grow" style="min-width:0"><div class="ellipsis"><b>' + h(x.label) + '</b>' + (x.name && APP.role === 'leader' ? ' <span class="faint">· ' + h(x.name) + '</span>' : '') + '</div>' +
+    '<div class="faint small ellipsis">' + fmtDateTime(x.when) + (x.taskId ? ' · <a href="#" data-go="task/' + h(x.taskId) + '">' + h(x.taskId) + '</a> ' + h(x.taskTitle) : '') + (x.note ? ' · ' + h(x.note) : '') + '</div></div>' +
+    '<b class="' + (neg ? 'neg' : 'pos') + '-pts hist-pts">' + (neg ? '' : '+') + x.points + '</b></div>';
+}
+
+VIEWS.history = function (arg, el, token) {
+  var leader = APP.role === 'leader';
+  if (arg) HIST.email = decodeURIComponent(arg); else if (!leader) HIST.email = '';
+  setCrumb('Points history');
+  api('api_pointsHistory', { email: HIST.email || '', kind: HIST.kind, from: HIST.from, to: HIST.to }).then(function (d) {
+    if (stale(token)) return;
+    var who = leader ? (d.people.filter(function (x) { return x.email === HIST.email; })[0] || {}).name : '';
+    el.innerHTML = '<div class="page-h"><div><h1>Points history</h1><p>' + (leader ? (who ? 'Every point ' + h(who) + ' earned or lost, newest first.' : 'Every point earned or lost by the team, newest first.') :
+      'Every point you earned or lost, newest first.') + '</p></div><button class="btn" id="hCsv">' + icon('download') + ' CSV</button></div>' +
+      '<div class="card"><div class="filters">' +
+      (leader ? '<select id="hP"><option value="">Everyone</option>' + d.people.map(function (x) { return '<option value="' + h(x.email) + '"' + (x.email === HIST.email ? ' selected' : '') + '>' + h(x.name) + '</option>'; }).join('') + '</select>' : '') +
+      '<select id="hK"><option value="">All types</option>' + Object.keys(d.kinds).map(function (k) { return '<option value="' + k + '"' + (k === HIST.kind ? ' selected' : '') + '>' + h(d.kinds[k]) + '</option>'; }).join('') + '</select>' +
+      '<input type="date" id="hF" value="' + h(HIST.from) + '" aria-label="From"><span class="faint">to</span><input type="date" id="hT" value="' + h(HIST.to) + '" aria-label="To">' +
+      '<button class="btn" id="hGo">Apply</button>' + (HIST.from || HIST.to || HIST.kind || HIST.email ? '<button class="btn ghost" id="hClr">Clear</button>' : '') + '</div>' +
+      '<div class="card-b row wrap" style="gap:8px;border-bottom:1px solid var(--line)"><span class="badge plain"><b>' + d.total + '</b>&nbsp;points · ' + d.count + ' entries</span>' +
+      d.byKind.map(function (k) { return '<span class="badge plain">' + h(k.label) + ' × ' + k.n + ' <span class="' + (k.points < 0 ? 'neg' : 'pos') + '-pts" style="margin-left:4px">' + (k.points < 0 ? '' : '+') + k.points + '</span></span>'; }).join('') + '</div>' +
+      '<div class="card-b tight">' + (d.rows.length ? d.rows.map(historyItem).join('') : emptyState('Nothing here yet.', 'Points appear as creatives are approved and tasks finish.', 'award')) +
+      (d.truncated ? '<p class="faint small" style="padding:8px 16px">Showing the latest 600 — download the CSV for everything.</p>' : '') + '</div></div>';
+    wireGo(el);
+    var read = function () { HIST.kind = $('#hK').value; HIST.from = $('#hF').value; HIST.to = $('#hT').value; if ($('#hP')) HIST.email = $('#hP').value; };
+    $('#hGo').onclick = function () { read(); render('history'); };
+    if ($('#hP')) $('#hP').onchange = function () { read(); render('history'); };
+    $('#hK').onchange = function () { read(); render('history'); };
+    if ($('#hClr')) $('#hClr').onclick = function () { HIST = { kind: '', from: '', to: '', email: '' }; render('history'); };
+    $('#hCsv').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_exportCsv', 'history', { from: HIST.from || '2000-01-01', to: HIST.to || todayIso(), email: HIST.email || '', kind: HIST.kind })
+        .then(function (x) { downloadText(x.fileName, x.csv); }).catch(function (e) { toast(errMsg(e), true); }).then(function () { btn.disabled = false; });
+    };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+/* ================= TEAM CHAT ================= */
+var CHAT = null;
+
+VIEWS.chat = function (arg, el, token) {
+  setCrumb('Team chat');
+  if (APP.chatTimer) { clearInterval(APP.chatTimer); APP.chatTimer = null; }
+  api('api_chatList', {}).then(function (d) {
+    if (stale(token)) return;
+    CHAT = { list: d.messages, people: d.people, now: d.now, me: d.me, leader: d.leader, more: d.more, thumbs: {}, sending: 0 };
+    el.innerHTML = '<div class="chat card"><div class="chat-h"><div><b>Team chat</b><div class="faint small">Everyone on the graphics team · share references, links and updates · nothing is emailed</div></div>' +
+      '<div class="chat-people">' + Object.keys(d.people).filter(function (k) { return d.people[k].active; }).slice(0, 8).map(function (k) { return avatar(d.people[k], 26); }).join('') + '</div></div>' +
+      '<div class="chat-list" id="chatList"></div>' +
+      '<div class="chat-in"><button class="btn ghost icon" id="chatAtt" title="Share a file or image" aria-label="Attach">' + icon('clip') + '</button>' +
+      '<textarea id="chatTxt" rows="1" maxlength="2000" placeholder="Message the team…  (Enter to send, Shift+Enter for a new line)"></textarea>' +
+      '<button class="btn primary icon" id="chatSend" aria-label="Send">' + icon('send') + '</button></div></div>';
+    drawChat(true);
+    navCount('chat', 0);
+    seenChat();
+    var ta = $('#chatTxt');
+    ta.oninput = function () { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; };
+    ta.onkeydown = function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); } };
+    $('#chatSend').onclick = sendChat;
+    $('#chatAtt').onclick = function () { pickFiles(true, function (files) { sendChatFiles(files); }); };
+    // Paste a screenshot straight into the chat.
+    ta.onpaste = function (e) {
+      var items = (e.clipboardData && e.clipboardData.files) ? Array.prototype.slice.call(e.clipboardData.files) : [];
+      if (items.length) { e.preventDefault(); sendChatFiles(items.map(function (f, i) { return f.name && f.name !== 'image.png' ? f : new File([f], 'screenshot-' + Date.now() + (i ? '-' + i : '') + '.png', { type: f.type || 'image/png' }); })); }
+    };
+    APP.chatTimer = setInterval(pollChat, 4000);
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function linkify(text) {
+  return h(text).replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"])/g, function (u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>'; });
+}
+
+function chatTime(iso) { var d = new Date(iso); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+function chatDay(iso) {
+  var d = new Date(iso), t = new Date(), y = new Date(Date.now() - 864e5);
+  if (d.toDateString() === t.toDateString()) return 'Today';
+  if (d.toDateString() === y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
+}
+
+function drawChat(toBottom) {
+  var box = $('#chatList');
+  if (!box || !CHAT) return;
+  var near = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  var day = '', prev = null, html = CHAT.more ? '<div class="chat-more"><button class="btn sm ghost" id="chatOlder">Load earlier messages</button></div>' : '';
+  if (!CHAT.list.length) html += '<div class="chat-empty">' + icon('chat') + '<b>Say hello to the team</b><span>Share references, Pinterest boards, screenshots and quick updates here.</span></div>';
+  CHAT.list.forEach(function (m) {
+    var dd = chatDay(m.createdAt);
+    if (dd !== day) { html += '<div class="chat-day"><span>' + h(dd) + '</span></div>'; day = dd; prev = null; }
+    var mine = m.author === CHAT.me, p = CHAT.people[m.author] || { name: m.author };
+    var grouped = prev && prev.author === m.author && (new Date(m.createdAt) - new Date(prev.createdAt)) < 5 * 60000;
+    var body = m.deleted ? '<i class="faint">Message deleted</i>' :
+      (m.file ? (m.file.isImage ? '<button class="chat-img" data-cimg="' + h(m.messageId) + '">' + (CHAT.thumbs[m.messageId] ? '<img src="' + h(CHAT.thumbs[m.messageId]) + '" alt="' + h(m.file.name) + '">' : '<span class="spinner"></span>') + '</button>' :
+        '<button class="chat-file" data-cfile="' + h(m.messageId) + '">' + icon('file') + '<span class="ellipsis">' + h(m.file.name) + '</span><span class="faint small">' + fmtSize(m.file.size) + '</span>' + icon('download') + '</button>') : '') +
+      (m.text ? '<div class="chat-text">' + linkify(m.text) + '</div>' : '');
+    html += '<div class="msg' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') + '" data-mid="' + h(m.messageId) + '">' +
+      (mine ? '' : '<span class="msg-av">' + (grouped ? '' : avatar(p, 30)) + '</span>') +
+      '<div class="bubble">' + (!mine && !grouped ? '<div class="msg-who">' + h(p.nickname || p.name) + (p.nickname ? ' <span class="faint">' + h(p.name) + '</span>' : '') + '</div>' : '') +
+      body + '<div class="msg-meta">' + chatTime(m.createdAt) + (!m.deleted && (mine || CHAT.leader) ? ' <button class="msg-del" data-cdel="' + h(m.messageId) + '" title="Delete" aria-label="Delete message">' + icon('trash') + '</button>' : '') + '</div></div></div>';
+    prev = m;
+  });
+  if (CHAT.sending) html += '<div class="msg mine"><div class="bubble faint small"><span class="spinner" style="width:12px;height:12px"></span> Sending ' + CHAT.sending + ' file(s)…</div></div>';
+  box.innerHTML = html;
+  if (toBottom || near) box.scrollTop = box.scrollHeight;
+  if ($('#chatOlder')) $('#chatOlder').onclick = loadOlder;
+  $all('[data-cdel]', box).forEach(function (b) {
+    b.onclick = function () {
+      confirmBox('Delete this message?', 'It’s removed for everyone.', 'Delete', true).then(function (y) {
+        if (!y) return;
+        api('api_chatDelete', b.getAttribute('data-cdel')).then(pollChat).catch(function (e) { toast(errMsg(e), true); });
+      });
+    };
+  });
+  $all('[data-cfile]', box).forEach(function (b) {
+    b.onclick = function () {
+      b.disabled = true; toast('Preparing download…');
+      api('api_getAsset', 'chat', b.getAttribute('data-cfile'), 'original').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); })
+        .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+    };
+  });
+  var imgs = CHAT.list.filter(function (m) { return !m.deleted && m.file && m.file.isImage; });
+  $all('[data-cimg]', box).forEach(function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute('data-cimg');
+      gallery(imgs.map(function (m) {
+        var p = CHAT.people[m.author] || { name: m.author };
+        return { id: m.messageId, title: m.file.name, sub: (p.nickname || p.name) + ' · ' + fmtDateTime(m.createdAt), status: '',
+          load: function () { return api('api_getAsset', 'chat', m.messageId, 'preview'); },
+          download: function () { return api('api_getAsset', 'chat', m.messageId, 'original'); } };
+      }), { start: Math.max(0, imgs.map(function (m) { return m.messageId; }).indexOf(id)) });
+    };
+  });
+  loadChatThumbs();
+}
+
+function fmtSize(n) { n = Number(n) || 0; return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+function loadChatThumbs() {
+  var need = CHAT.list.filter(function (m) { return !m.deleted && m.file && m.file.isImage && CHAT.thumbs[m.messageId] === undefined; }).slice(-24);
+  if (!need.length) return;
+  need.forEach(function (m) { CHAT.thumbs[m.messageId] = null; });
+  api('api_getThumbs', need.map(function (m) { return { kind: 'chat', id: m.messageId }; })).then(function (map) {
+    need.forEach(function (m) {
+      var url = map['chat:' + m.messageId];
+      CHAT.thumbs[m.messageId] = url || '';
+      var b = $('[data-cimg="' + m.messageId + '"]');
+      if (b) b.innerHTML = url ? '<img src="' + h(url) + '" alt="">' : icon('image') + '<span class="small">' + h(m.file.name) + '</span>';
+    });
+  }).catch(function () {});
+}
+
+function mergeChat(msgs) {
+  var byId = {}, changed = false;
+  CHAT.list.forEach(function (m, i) { byId[m.messageId] = i; });
+  msgs.forEach(function (m) {
+    if (byId[m.messageId] !== undefined) { if (JSON.stringify(CHAT.list[byId[m.messageId]]) !== JSON.stringify(m)) { CHAT.list[byId[m.messageId]] = m; changed = true; } }
+    else { CHAT.list.push(m); changed = true; }
+  });
+  if (changed) CHAT.list.sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1; });
+  return changed;
+}
+
+function pollChat() {
+  if (!CHAT || APP.route !== 'chat' || document.hidden || CHAT.polling) return;
+  CHAT.polling = true;
+  api('api_chatList', { since: CHAT.now }).then(function (d) {
+    CHAT.now = d.now;
+    var fromOthers = d.messages.some(function (m) { return m.author !== CHAT.me && !m.deleted; });
+    if (mergeChat(d.messages)) drawChat(false);
+    if (fromOthers) seenChat();
+  }).catch(function () { /* try again next tick */ }).then(function () { if (CHAT) CHAT.polling = false; });
+}
+
+function seenChat() { if (CHAT) api('api_chatSeen', CHAT.now).catch(function () {}); }
+
+function loadOlder() {
+  var first = CHAT.list[0];
+  if (!first) return;
+  api('api_chatList', { before: first.createdAt }).then(function (d) {
+    var box = $('#chatList'), h0 = box.scrollHeight;
+    CHAT.more = d.more;
+    Object.assign(CHAT.people, d.people || {});
+    mergeChat(d.messages);
+    drawChat(false);
+    box.scrollTop = box.scrollHeight - h0;
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+
+function sendChat() {
+  var ta = $('#chatTxt'), v = ta.value.trim();
+  if (!v) return;
+  ta.value = ''; ta.style.height = 'auto';
+  var temp = { messageId: 'tmp-' + Date.now(), author: CHAT.me, text: v, createdAt: new Date().toISOString(), deleted: false, file: null, pending: true };
+  CHAT.list.push(temp); drawChat(true);
+  api('api_chatSend', v).then(function (m) {
+    CHAT.list = CHAT.list.filter(function (x) { return x !== temp; });
+    mergeChat([m]); drawChat(true);
+  }).catch(function (e) {
+    CHAT.list = CHAT.list.filter(function (x) { return x !== temp; }); drawChat(false);
+    ta.value = v; toast(errMsg(e), true);
+  });
+}
+
+function sendChatFiles(files) {
+  var bad = files.map(checkFile).filter(Boolean);
+  if (bad.length) return toast(bad[0], true);
+  var cap = $('#chatTxt').value.trim();
+  $('#chatTxt').value = '';
+  CHAT.sending += files.length; drawChat(true);
+  runPool(files, 3, function (f, i) {
+    return uploadFile(f, { kind: 'chat', caption: i === 0 ? cap : '' }).then(function (res) {
+      CHAT.sending--; if (res && res.message) mergeChat([res.message]); drawChat(true);
+    }).catch(function (e) { CHAT.sending--; drawChat(false); toast(f.name + ': ' + errMsg(e), true); });
+  });
+}
+</script>

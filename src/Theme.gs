@@ -21,9 +21,18 @@ function mix_(rgb, to, t) { return '#' + rgb.map(function (c, i) { var v = Math.
 function themeCss_() {
   var s;
   try { s = settings_(); } catch (e) { return ''; }
-  var th = THEMES[s.theme] || THEMES.rosier;
-  var accent = hexRgb_(s.accentColor) || hexRgb_(th.accent);
-  if (!th.dark && s.theme === 'rosier' && !s.accentColor) return '';
+  var themeId = s.theme, accentHex = s.accentColor;
+  // A team member's own colours (Profile → Look & feel), when the leader allows it.
+  if (s.allowPersonalTheme) {
+    try {
+      var em = activeEmail_();
+      var pf = em ? dbGet_('Profiles', em) : null;
+      if (pf && pf.theme && THEMES[pf.theme]) { themeId = pf.theme; accentHex = pf.accentColor || ''; }
+    } catch (e) { /* fall back to the team theme */ }
+  }
+  var th = THEMES[themeId] || THEMES.rosier;
+  var accent = hexRgb_(accentHex) || hexRgb_(th.accent);
+  if (!th.dark && themeId === 'rosier' && !accentHex) return '';
   var v = {};
   if (th.dark) {
     v = { '--bg': '#131519', '--surface': '#1c1f25', '--surface-2': '#22262d', '--line': '#2f343c', '--line-strong': '#3c424c',
@@ -46,7 +55,7 @@ function themeCss_() {
 
 function api_listThemes() {
   return respond_(function () {
-    requireLeader_();
+    currentUser_();
     return Object.keys(THEMES).map(function (k) { return { id: k, label: THEMES[k].label, accent: THEMES[k].accent, dark: !!THEMES[k].dark }; });
   });
 }

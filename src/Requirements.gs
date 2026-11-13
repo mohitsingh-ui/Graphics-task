@@ -162,7 +162,7 @@ function notifyNewRequirement_(requirementId) {
     req.requesterName + ' (' + req.department + ') needs ' + req.quantity + ' creative(s) by ' + dueText_(req.preferredDate, req.preferredTime) +
     '.\n\n' + String(req.brief).slice(0, 400) + '\n\n' + files + ' reference file(s) attached.',
     task ? 'task/' + task.taskId : 'requirements');
-  if (settings_().emailRequesterOnSubmit && req.email) {
+  if (settings_().emailRequesterOnSubmit && req.email && mailRule_('req_received') && settings_().emailNotifications) {
     var link = trackUrl_(issueTrackToken_(req.email));
     sendMail_(req.email, 'We’ve got your request (' + requirementId + ')',
       'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" has reached the graphics team.\n' +

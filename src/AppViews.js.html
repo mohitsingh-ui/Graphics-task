@@ -164,7 +164,7 @@ function designerCard(t) {
   return '<div class="tcard" data-go="task/' + h(t.taskId) + '">' +
     '<div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
     '<div class="tc-title">' + h(t.title) + '</div>' + (Number(t.bonusPoints) ? '<span class="badge bonus-badge" style="align-self:flex-start">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts on completion</span>' : '') +
-    '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + ' creatives approved</div>' +
+    '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' files approved (' + t.sizeList.length + ' sizes)' : ' creatives approved') + '</div>' +
     '<div class="row between"><span>' + statusBadge(t.status) + holdChip(t) + '</span><span class="small">Due ' + dueLabel(t) + '</span></div>' +
     '<div class="row"><div class="grow">' + progressBar(t.progress, t.status === 'Completed') + '</div><span class="faint small">' + h(t.progress) + '%</span></div></div>';
 }
@@ -259,14 +259,14 @@ function directTaskModal(preset) {
         '<div class="grid-3"><div class="field"><label class="req" for="dtD">Due date</label><input type="date" id="dtD" min="' + todayIso() + '"></div>' +
         '<div class="field"><label for="dtTm">Time</label><input type="time" id="dtTm" step="900"></div>' +
         '<div class="field"><label for="dtQ">No. of creatives</label><input type="number" id="dtQ" min="1" max="50" value="1"></div></div>' +
-        bonusField('dtBp', preset.bonusPoints || '') +
+        sizesField('dtSz', '') + bonusField('dtBp', preset.bonusPoints || '') +
         '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
         '<div class="alert bad hidden" data-form-error></div>',
       actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
         var to = $('#dtTo', m).value;
         var fp = $('#dtF', m) ? $('#dtF', m).value.trim() : '';
         var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
-          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value,
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value, sizes: $('#dtSz', m).value,
           requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '', folderPath: fp };
         if (!input.category && fp) input.category = fp.split('/').pop().trim();
         if (!input.title) return fieldErrors(m, 'Give the task a title.');
@@ -428,7 +428,7 @@ function drawTasks() {
           (t.campaignName ? ' <span class="cat-chip" style="font-size:11px;padding:1px 7px">' + icon('board') + ' ' + h(t.campaignName) + '</span>' : '') + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
           '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + holdChip(t) + '</td>' +
           '<td><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="faint small">' + h(t.progress) + '%</span></div></td>' +
-          '<td>' + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + '</td></tr>';
+          '<td>' + h(t.deliverablesApproved) + '/' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' <span class="faint small">files</span>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>' : emptyState('No tasks match these filters.', 'Try clearing a filter.', 'tasks');
     $all('th[data-sort]', out).forEach(function (x) {
       x.onclick = function () { var k = x.getAttribute('data-sort'); if (TASK_UI.sort === k) TASK_UI.dir *= -1; else { TASK_UI.sort = k; TASK_UI.dir = 1; } drawTasks(); };

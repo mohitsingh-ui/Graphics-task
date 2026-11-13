@@ -149,9 +149,9 @@ function pointsReport_(r, table) {
   var people = dbFind_('Users', function (x) { return x.role === ROLES.DESIGNER || (table[x.email.toLowerCase()] && table[x.email.toLowerCase()].period); })
     .map(function (x) {
       var t = table[x.email.toLowerCase()] || { period: 0, total: 0, inPeriod: null };
-      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 } };
+      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } };
       return { name: x.name, email: x.email, designation: x.designation || '', active: bool_(x.active), period: t.period, total: t.total,
-        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 } };
+        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 }, reopen: p.reopen || { n: 0, pts: 0 } };
     }).sort(function (a, b) { return b.period - a.period || b.total - a.total; });
   people.forEach(function (x, i) { x.rank = i + 1; });
   var given = dbAll_('Rewards').filter(function (x) { return inRange_(x.givenAt, r); })
@@ -173,7 +173,7 @@ function workDays_(t) {
 /** CSV text for download. kind: tasks | designers | decisions */
 function api_exportCsv(kind, range) {
   return respond_(function () {
-    requireLeader_();
+    if (kind !== 'history') requireLeader_();   // anyone can download their own points history
     var r = reportRange_(range);
     var rows;
     if (kind === 'designers') {
@@ -183,9 +183,14 @@ function api_exportCsv(kind, range) {
     } else if (kind === 'points') {
       var pr = computeReport_(r).points;
       rows = [['Rank', 'Designer', 'Email', 'Designation', 'Points in period', 'Points all time', 'Creatives approved', 'Creative points',
-        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points']]
+        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points', 'Reopened tasks', 'Reopen points']]
         .concat(pr.people.map(function (x) { return [x.rank, x.name, x.email, x.designation, x.period, x.total, x.creatives.n, x.creatives.pts,
-          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts]; }));
+          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts, x.reopen.n, x.reopen.pts]; }));
+    } else if (kind === 'history') {
+      var hh = pointsHistory_(currentUser_(), { from: r.from, to: r.to, email: range && range.email, kind: range && range.kind });
+      var nm = {}; dbAll_('Users').forEach(function (x) { nm[x.email.toLowerCase()] = x.name; });
+      rows = [['Date', 'Designer', 'Email', 'Type', 'Points', 'What', 'Task', 'Task title', 'Note']]
+        .concat(hh.rows.map(function (x) { return [x.when, nm[x.email] || x.email, x.email, POINT_KINDS[x.kind], x.points, x.label, x.taskId, x.taskTitle, x.note]; }));
     } else if (kind === 'rewards') {
       rows = [['Given at', 'Designer', 'Email', 'Reward', 'Points', 'Message', 'Task', 'Given by']]
         .concat(computeReport_(r).points.given.map(function (g) { return [g.givenAt, g.userName, g.userEmail, g.badgeLabel, g.points, g.reason, g.taskId, g.givenBy]; }));

@@ -63,7 +63,7 @@ function api_startUpload(ctx) {
   return respond_(function () {
     ctx = ctx || {};
     var s = settings_();
-    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version', 'share'], 'Upload type');
+    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version', 'share', 'chat'], 'Upload type');
     var rec = { kind: kind, received: 0, sigChecked: false };
     var folderId;
 
@@ -94,6 +94,14 @@ function api_startUpload(ctx) {
       rec.from = str_(ctx.uploaderName, 100, 'Your name', false);
       rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, s.maxPublicUploadMB);
       folderId = sx.task.folderId || ensureFolderId_('references', [String(new Date().getFullYear()), sx.task.requirementId]);
+    } else if (kind === 'chat') {
+      // A file shared in team chat (a reference, a screenshot, a draft).
+      var cu = requireChat_();
+      rateLimit_('chatupload:' + cu.email, 30, 600);
+      rec.owner = cu.email;
+      rec.caption = str_(ctx.caption, 2000, 'Message', false);
+      rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, Math.min(s.maxUploadMB, 100));
+      folderId = ensureFolderId_('references', ['Team chat', String(new Date().getFullYear())]);
     } else {
       var u = currentUser_();
       var task = requireTask_(u, ctx.taskId);
@@ -208,6 +216,14 @@ function completeUpload_(uploadId, rec, user, file) {
     try { DriveApp.getFileById(file.id).setTrashed(true); } catch (e) { console.warn('Could not remove rejected upload ' + file.id); }
     throw AppError_('VALIDATION', bad);
   }
+  if (rec.kind === 'chat') {
+    return withLock_(function () {
+      var m = dbInsert_('ChatMessages', { messageId: 'MSG-' + uuid_(), authorEmail: rec.owner, text: rec.caption || '', fileId: file.id, fileName: rec.file.name,
+        mimeType: rec.file.mime, sizeBytes: String(rec.file.size), createdAt: nowIso_(), deletedAt: '' });
+      markChatSeen_(rec.owner, m.createdAt);
+      return { done: true, message: chatDto_(m) };
+    });
+  }
   if (rec.kind === 'share') {
     return withLock_(function () {
       var att = dbInsert_('ReferenceFiles', {
@@ -288,6 +304,7 @@ function assetRef_(u, kind, id) {
     requireTask_(u, task.taskId);
     return { fileId: a.fileId, mime: a.mimeType, size: a.sizeBytes, name: a.fileName };
   }
+  if (kind === 'chat') return chatAssetRef_(u, id);
   throw AppError_('VALIDATION', 'Unknown file.');
 }
 

@@ -331,6 +331,92 @@ tr.click { transition: background .1s; }
 .pick-row:hover { background: var(--surface-2); }
 .pick-row input { width: 18px; height: 18px; accent-color: var(--accent, var(--ok)); flex: none; }
 .tk-pick { width: 17px; height: 17px; cursor: pointer; accent-color: var(--accent, var(--ok)); }
+
+/* ---- avatars & profile ---- */
+.avatar { border-radius: 50%; object-fit: cover; flex: none; display: inline-block; vertical-align: middle; background: var(--muted-soft); }
+.avatar.ini { display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; letter-spacing: .02em; }
+.prof-hero .card-b { padding: 20px; }
+.prof-score { display: grid; grid-template-columns: repeat(5, auto); gap: 4px 18px; text-align: center; }
+.prof-score b { display: block; font-size: 22px; font-weight: 600; }
+.prof-score span { font-size: 12px; color: var(--text-3); }
+.checklist, .tips { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.checklist li { display: flex; gap: 8px; align-items: center; color: var(--text-2); }
+.checklist li svg { width: 15px; height: 15px; color: var(--text-3); }
+.checklist li.done { color: var(--text-3); text-decoration: line-through; }
+.checklist li.done svg { color: var(--ok); }
+.tips li { padding: 8px 10px; background: var(--surface-2); border-radius: 8px; border-left: 3px solid var(--accent); }
+.team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.team-card { display: flex; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: inherit; text-decoration: none; min-width: 0; }
+.team-card:hover, .team-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.team-card b, .team-card span.small { display: block; }
+.tc-rank { text-align: right; font-weight: 600; font-size: 14px; }
+.tc-rank small { display: block; font-weight: 400; font-size: 11px; color: var(--text-3); }
+.lb-av { margin-right: 8px; }
+/* ---- points history ---- */
+.hist-row { display: flex; gap: 10px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+.hist-row:last-child { border-bottom: 0; }
+.hist-ic { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; background: var(--ok-soft); color: var(--ok); }
+.hist-ic svg { width: 14px; height: 14px; }
+.hist-ic.k-rewards { background: var(--accent-soft); color: var(--accent-ink); }
+.hist-ic.k-rejected { background: var(--bad-soft); color: var(--bad); }
+.hist-ic.k-reopen, .hist-ic.k-bonus { background: var(--info-soft); color: var(--info); }
+.hist-pts { font-size: 15px; white-space: nowrap; }
+/* ---- team chat ---- */
+.chat { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 420px; overflow: hidden; }
+.chat-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.chat-people { display: flex; }
+.chat-people .avatar { margin-left: -6px; border: 2px solid var(--surface); }
+.chat-list { flex: 1; overflow-y: auto; padding: 14px 16px; background: var(--surface-2); display: flex; flex-direction: column; gap: 2px; }
+.chat-day { text-align: center; margin: 10px 0 6px; }
+.chat-day span { font-size: 11.5px; background: var(--surface); border: 1px solid var(--line); color: var(--text-3); padding: 2px 10px; border-radius: 99px; }
+.chat-more { text-align: center; margin-bottom: 6px; }
+.chat-empty { margin: auto; text-align: center; color: var(--text-3); display: grid; gap: 4px; justify-items: center; }
+.chat-empty svg { width: 34px; height: 34px; }
+.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 78%; margin-top: 8px; }
+.msg.grouped { margin-top: 2px; }
+.msg.mine { align-self: flex-end; flex-direction: row-reverse; }
+.msg-av { width: 30px; flex: none; }
+.bubble { background: var(--surface); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px; padding: 7px 10px 5px; min-width: 60px; box-shadow: var(--shadow); position: relative; }
+.msg.mine .bubble { background: var(--accent-soft); border-color: transparent; border-radius: 14px 14px 4px 14px; }
+.msg-who { font-size: 12px; font-weight: 600; color: var(--accent-ink); margin-bottom: 2px; }
+.msg-who .faint { font-weight: 400; }
+.chat-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.45; }
+.chat-text a { color: var(--info); text-decoration: underline; }
+.msg-meta { font-size: 10.5px; color: var(--text-3); text-align: right; margin-top: 2px; display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
+.msg-del { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--text-3); opacity: 0; }
+.msg-del svg { width: 12px; height: 12px; }
+.msg:hover .msg-del, .msg-del:focus { opacity: 1; }
+.chat-img { display: block; border: 0; padding: 0; background: var(--muted-soft); border-radius: 10px; overflow: hidden; cursor: zoom-in; min-width: 120px; min-height: 80px; margin-bottom: 4px; }
+.chat-img img { display: block; max-width: min(320px, 60vw); max-height: 280px; }
+.chat-img .spinner { margin: 30px 50px; }
+.chat-file { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); background: var(--surface-2); border-radius: 10px; padding: 8px 10px; cursor: pointer; max-width: 300px; margin-bottom: 4px; color: inherit; font: inherit; }
+.chat-file svg { width: 16px; height: 16px; flex: none; }
+.chat-in { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.chat-in textarea { flex: 1; resize: none; min-height: 40px; max-height: 140px; border-radius: 20px; padding: 9px 14px; }
+.chat-in .btn.icon { height: 40px; width: 40px; border-radius: 50%; }
+/* ---- request owners ---- */
+.owner-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; }
+.owner-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; background: var(--muted-soft); border-radius: 99px; padding: 2px 4px 2px 10px; }
+.owner-chip button { border: 0; background: none; cursor: pointer; padding: 2px; color: var(--text-3); display: inline-flex; }
+.owner-chip button svg { width: 12px; height: 12px; }
+.email-rules { width: 100%; border-collapse: collapse; font-size: 13px; }
+.email-rules td { padding: 7px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.email-rules tr.grp td { font-weight: 600; padding-top: 14px; color: var(--text-2); text-align: left; }
+.email-rules tr:not(.grp) td:last-child { text-align: right; white-space: nowrap; }
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; background: var(--line-strong); border-radius: 99px; transition: .15s; cursor: pointer; }
+.switch span:before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+.switch input:checked + span { background: var(--ok); }
+.switch input:checked + span:before { transform: translateX(16px); }
+.switch input:disabled + span { opacity: .55; cursor: not-allowed; }
+@media (max-width: 700px) {
+  .prof-score { grid-template-columns: repeat(3, auto); width: 100%; }
+  .msg { max-width: 92%; }
+  .chat { height: calc(100vh - 96px); border-radius: 0; margin: -16px -12px; }
+}
+#pfThemes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+#pfThemes .theme-sw { width: 100%; margin: 0; }
 </style>
 
 <?!= themeCss_() ?>
@@ -347,6 +433,9 @@ tr.click { transition: background .1s; }
   .nav a .cnt { margin-left: auto; font-size: 11px; background: var(--bad); color: #fff; border-radius: 999px; padding: 0 6px; min-width: 18px; text-align: center; }
   .side .me { margin-top: auto; border-top: 1px solid var(--line); padding: 12px 8px 0; font-size: 12.5px; }
   .side .me b { display: block; font-weight: 500; }
+  .me-link { display: flex; gap: 10px; align-items: center; color: inherit; text-decoration: none; border-radius: 8px; padding: 4px; margin: -4px; }
+  .me-link:hover { background: var(--surface-2); }
+  .me-link span.faint { display: block; }
   .top { height: 60px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 30; }
   .top .crumb { font-weight: 600; font-size: 15px; flex: 1; min-width: 0; }
   .content { padding: 24px; max-width: 1360px; width: 100%; margin: 0 auto; }
@@ -526,8 +615,24 @@ var ICONS = {
   chevR: 'M9 18l6-6-6-6',
   award: 'M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.2 13.9 7 22l5-3 5 3-1.2-8.1',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
-  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'
+  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21',
+  chat: 'M21 12a8 8 0 0 1-11.7 7.1L4 20l1-4.6A8 8 0 1 1 21 12z',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  clip: 'M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L10 17.8a1.7 1.7 0 0 1-2.4-2.4L15 8',
+  history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3',
+  mail: 'M3 6h18v12H3zM3 6l9 7 9-7',
+  palette: 'M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.7 0-.5-.2-.8-.5-1.1-.3-.3-.5-.7-.5-1.1 0-.9.8-1.6 1.7-1.6H16a5 5 0 0 0 5-5C21 6.6 17 3 12 3zM7.5 12a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM10 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM14.5 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'
 };
+
+/** Round photo, or initials on a colour when there's no photo. size in px. */
+function avatar(p, size) {
+  size = size || 32;
+  var name = (p && (p.nickname || p.name)) || '?';
+  if (p && p.photo && /^data:image\/(jpeg|png|webp);base64,/.test(p.photo)) return '<img class="avatar" src="' + h(p.photo) + '" alt="" style="width:' + size + 'px;height:' + size + 'px">';
+  var ini = String(name).trim().split(/\s+/).map(function (w) { return w.charAt(0); }).join('').slice(0, 2).toUpperCase();
+  var hue = 0; for (var i = 0; i < name.length; i++) hue = (hue * 31 + name.charCodeAt(i)) % 360;
+  return '<span class="avatar ini" style="width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * .4) + 'px;background:hsl(' + hue + ',45%,46%)">' + h(ini) + '</span>';
+}
 function icon(name) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (ICONS[name] || '') + '"/></svg>';
 }
@@ -882,9 +987,10 @@ function apiPre(name) {
  * clears the memory, so you never see stale data after an edit. */
 var READ_APIS = { api_leaderDashboard: 1, api_designerDashboard: 1, api_listTasks: 1, api_getTask: 1, api_listApprovals: 1, api_listRewards: 1,
   api_getReports: 1, api_listTeam: 1, api_listCampaigns: 1, api_getCampaign: 1, api_listCompletedRequests: 1, api_getSettings: 1, api_listBatchLinks: 1,
-  api_listThemes: 1, api_listTaskShares: 1, api_folderOptions: 1 };
+  api_listThemes: 1, api_listTaskShares: 1, api_folderOptions: 1, api_getProfile: 1, api_pointsHistory: 1 };
 // Calls that neither read a screen nor change anything.
-var PASS_APIS = { api_getThumbs: 1, api_getAsset: 1, api_getNotifications: 1, api_downloadApprovedZip: 1, api_exportCsv: 1, api_bootstrap: 1 };
+var PASS_APIS = { api_getThumbs: 1, api_getAsset: 1, api_getNotifications: 1, api_downloadApprovedZip: 1, api_exportCsv: 1, api_bootstrap: 1,
+  api_chatList: 1, api_chatSeen: 1, api_chatSend: 1, api_chatDelete: 1 };
 var VIEW_CACHE = {}, RAW_API = api;
 api = function (name) {
   var args = Array.prototype.slice.call(arguments, 1);
@@ -938,15 +1044,24 @@ var NAV = {
     { r: 'approvals', label: 'Creative Approvals', icon: 'check' },
     { r: 'reports', label: 'Reports', icon: 'chart' },
     { r: 'rewards', label: 'Leaderboard', icon: 'award' },
+    { r: 'chat', label: 'Team chat', icon: 'chat', chat: true },
     { r: 'team', label: 'Team Management', icon: 'users' },
     { r: 'settings', label: 'Settings', icon: 'settings' }
   ],
   designer: [
     { r: 'overview', label: 'My Dashboard', icon: 'home' },
     { r: 'tasks', label: 'My Tasks', icon: 'tasks' },
-    { r: 'rewards', label: 'My Points', icon: 'award' }
+    { r: 'rewards', label: 'My Points', icon: 'award' },
+    { r: 'chat', label: 'Team chat', icon: 'chat', chat: true },
+    { r: 'profile', label: 'My Profile', icon: 'user' }
   ]
 };
+/** Pages reached from links rather than the menu. */
+var EXTRA_ROUTES = ['task', 'history', 'profile'];
+
+function navItems() {
+  return NAV[APP.role === 'leader' ? 'leader' : 'designer'].filter(function (n) { return !n.chat || (APP.boot && APP.boot.teamChat); });
+}
 
 var VIEWS = {}; // filled by AppViews / AppTask / AppAdmin: VIEWS[name] = function (arg, el, token)
 
@@ -972,11 +1087,11 @@ function startApp(initialRoute, pre) {
     $('#brandName').textContent = b.companyName || 'Graphics';
     $('#brandSub').textContent = APP.role === 'leader' ? 'Team leader' : 'Designer';
     $('#brandMark').textContent = (b.companyName || 'G').charAt(0);
-    $('#me').innerHTML = '<b>' + h(b.user.name) + '</b><span class="faint">' + h(b.user.email) + '</span>';
+    drawMe();
     buildNav();
     go(initialRoute || 'overview', true);
     loadNotifications();
-    setInterval(loadNotifications, 90000);
+    setInterval(loadNotifications, 45000);
   }).catch(function (e) {
     $('#view').innerHTML = '<div class="card" style="max-width:520px;margin:40px auto"><div class="card-b"><h2>Can’t open the portal</h2><p class="muted" style="margin-top:6px">' + h(errMsg(e)) + '</p></div></div>';
   });
@@ -984,8 +1099,16 @@ function startApp(initialRoute, pre) {
 
 function closeMenu() { $('#side').classList.remove('open'); $('#scrim').classList.remove('open'); }
 
+/** Bottom of the menu: your photo + name; click to open your profile. */
+function drawMe() {
+  var u = APP.boot.user;
+  $('#me').innerHTML = '<a href="#" class="me-link" data-me>' + avatar(u, 34) + '<span class="grow" style="min-width:0"><b class="ellipsis">' + h(u.name) + (u.nickname ? ' <span class="faint" style="font-weight:400">· ' + h(u.nickname) + '</span>' : '') + '</b>' +
+    '<span class="faint ellipsis">' + h(u.email) + '</span></span></a>';
+  $('[data-me]').onclick = function (e) { e.preventDefault(); go('profile'); };
+}
+
 function buildNav() {
-  $('#nav').innerHTML = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) {
+  $('#nav').innerHTML = navItems().map(function (n) {
     return '<a href="#" data-r="' + n.r + '">' + icon(n.icon) + '<span>' + h(n.label) + '</span><span class="cnt hidden" data-cnt="' + n.r + '"></span></a>';
   }).join('');
   $all('#nav a').forEach(function (a) { a.onclick = function (e) { e.preventDefault(); go(a.getAttribute('data-r')); }; });
@@ -1012,14 +1135,17 @@ function render(route, soft) {
   closeMenu();
   var parts = route.split('/');
   var name = parts[0], arg = parts.slice(1).join('/');
-  var allowed = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) { return n.r; }).concat(['task']);
+  var allowed = navItems().map(function (n) { return n.r; }).concat(EXTRA_ROUTES);
+  if (name !== 'chat' && APP.chatTimer) { clearInterval(APP.chatTimer); APP.chatTimer = null; }
   if (allowed.indexOf(name) === -1 || !VIEWS[name]) name = 'overview';
-  $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === (name === 'task' ? 'tasks' : name)); });
+  var navOn = name === 'task' ? 'tasks' : name === 'history' ? 'rewards' : name === 'profile' && arg ? (APP.role === 'leader' ? 'team' : 'rewards') : name;
+  $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === navOn); });
   var token = ++APP.viewToken;
   var el = $('#view');
   if (soft) {
     // Background refresh: redraw in place, keep the scroll position, no spinner.
     var y = window.scrollY;
+    el.classList.remove('view-in');
     VIEWS[name](arg, el, token);
     setTimeout(function () { window.scrollTo(0, y); }, 0);
     return;
@@ -1045,6 +1171,7 @@ function viewError(el, e) {
 function loadNotifications() {
   return apiPre('api_getNotifications').then(function (n) {
     APP.notifs = n;
+    if (APP.route !== 'chat') navCount('chat', n.chatUnread || 0);
     var b = $('#bellBtn');
     var d = $('.dotc', b);
     if (n.unread) { if (!d) { d = document.createElement('span'); d.className = 'dotc'; b.appendChild(d); } d.textContent = n.unread > 9 ? '9+' : n.unread; }
@@ -1282,7 +1409,7 @@ function designerCard(t) {
   return '<div class="tcard" data-go="task/' + h(t.taskId) + '">' +
     '<div class="row between"><span class="mono faint">' + h(t.taskId) + '</span>' + priorityBadge(t.priority) + '</div>' +
     '<div class="tc-title">' + h(t.title) + '</div>' + (Number(t.bonusPoints) ? '<span class="badge bonus-badge" style="align-self:flex-start">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts on completion</span>' : '') +
-    '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + ' creatives approved</div>' +
+    '<div class="tc-meta">' + (t.campaign ? h(t.campaign) + ' · ' : '') + h(t.deliverablesApproved) + '/' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' files approved (' + t.sizeList.length + ' sizes)' : ' creatives approved') + '</div>' +
     '<div class="row between"><span>' + statusBadge(t.status) + holdChip(t) + '</span><span class="small">Due ' + dueLabel(t) + '</span></div>' +
     '<div class="row"><div class="grow">' + progressBar(t.progress, t.status === 'Completed') + '</div><span class="faint small">' + h(t.progress) + '%</span></div></div>';
 }
@@ -1377,14 +1504,14 @@ function directTaskModal(preset) {
         '<div class="grid-3"><div class="field"><label class="req" for="dtD">Due date</label><input type="date" id="dtD" min="' + todayIso() + '"></div>' +
         '<div class="field"><label for="dtTm">Time</label><input type="time" id="dtTm" step="900"></div>' +
         '<div class="field"><label for="dtQ">No. of creatives</label><input type="number" id="dtQ" min="1" max="50" value="1"></div></div>' +
-        bonusField('dtBp', preset.bonusPoints || '') +
+        sizesField('dtSz', '') + bonusField('dtBp', preset.bonusPoints || '') +
         '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
         '<div class="alert bad hidden" data-form-error></div>',
       actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
         var to = $('#dtTo', m).value;
         var fp = $('#dtF', m) ? $('#dtF', m).value.trim() : '';
         var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
-          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value,
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value, sizes: $('#dtSz', m).value,
           requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '', folderPath: fp };
         if (!input.category && fp) input.category = fp.split('/').pop().trim();
         if (!input.title) return fieldErrors(m, 'Give the task a title.');
@@ -1546,7 +1673,7 @@ function drawTasks() {
           (t.campaignName ? ' <span class="cat-chip" style="font-size:11px;padding:1px 7px">' + icon('board') + ' ' + h(t.campaignName) + '</span>' : '') + '</div></td><td>' + (t.assigneeName ? h(t.assigneeName) : '<span class="faint">—</span>') + '</td>' +
           '<td>' + priorityBadge(t.priority) + '</td><td>' + dueLabel(t) + '</td><td>' + statusBadge(t.status) + holdChip(t) + '</td>' +
           '<td><div class="row">' + progressBar(t.progress, t.status === 'Completed') + '<span class="faint small">' + h(t.progress) + '%</span></div></td>' +
-          '<td>' + h(t.deliverablesApproved) + '/' + h(t.deliverablesRequired) + '</td></tr>';
+          '<td>' + h(t.deliverablesApproved) + '/' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' <span class="faint small">files</span>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>' : emptyState('No tasks match these filters.', 'Try clearing a filter.', 'tasks');
     $all('th[data-sort]', out).forEach(function (x) {
       x.onclick = function () { var k = x.getAttribute('data-sort'); if (TASK_UI.sort === k) TASK_UI.dir *= -1; else { TASK_UI.sort = k; TASK_UI.dir = 1; } drawTasks(); };
@@ -1861,7 +1988,7 @@ function drawTask(el) {
     '<div class="page-h"><div class="grow"><div class="row wrap" style="margin-bottom:6px"><span class="mono faint">' + h(t.taskId) + '</span>' + statusBadge(t.status) + priorityBadge(t.priority) +
     (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') +
     (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
-    '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.deliverablesRequired) + ' creative(s) approved' + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
+    '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' files' : ' creative(s)') + ' approved' + ((t.sizeList || []).length > 1 ? ' <span class="faint">(' + sizesLine(t) + ')</span>' : '') + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
     '<div class="actionbar">' + actions + '</div></div>' +
 
     (changes.length ? '<div class="alert bad" style="margin-bottom:16px"><b>Changes requested</b>' + changes.map(function (c) {
@@ -1923,6 +2050,21 @@ function drawTask(el) {
   };
   if ($('#notesSave')) $('#notesSave').onclick = function () { run(api('api_updateTask', t.taskId, { internalNotes: $('#notes').value }), 'Notes saved'); };
   if ($('#splitBtn')) $('#splitBtn').onclick = function () { directTaskModal({ requirementId: t.requirementId, requirementTitle: r.title || t.title, campaignId: d.campaign ? d.campaign.campaignId : '' }); };
+  if ($('#addOwner')) $('#addOwner').onclick = function () {
+    modal({ title: 'Add a co-owner', body: '<p class="muted" style="margin-top:0">They get an email with their own “My requests” link and can follow, edit and approve this request like ' + h(r.requesterName || 'the requester') + '.</p>' +
+      '<div class="field"><label for="ownE">Email</label><input type="email" id="ownE" maxlength="254" placeholder="name@company.com"></div><div class="alert bad hidden" data-form-error></div>',
+      actions: [{ label: 'Cancel' }, { label: 'Add', cls: 'primary', onClick: function (close, m) {
+        return api('api_setRequestOwners', r.requirementId, { add: $('#ownE', m).value }).then(function () { close(); toast('Added — they’ll get an email'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+      } }] });
+  };
+  $all('[data-rmown]', el).forEach(function (b) {
+    b.onclick = function () {
+      var e = b.getAttribute('data-rmown');
+      confirmBox('Remove ' + e + '?', 'They won’t see this request any more.', 'Remove', true).then(function (y) {
+        if (y) api('api_setRequestOwners', r.requirementId, { remove: e }).then(function () { toast('Removed'); reloadTask(); }).catch(function (er) { toast(errMsg(er), true); });
+      });
+    };
+  });
   if ($('#campSel')) $('#campSel').onchange = function () {
     var v = this.value;
     if (v === '__new') {
@@ -2006,7 +2148,7 @@ function deliverablesCard(d) {
   d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.request && v.request.status === 'Open') waiting.push(v.versionId); }); });
   var bulk = (leader && waiting.length ? '<button class="btn sm" id="shareAll" data-ids="' + h(waiting.join(',')) + '">' + icon('link') + ' Share for review</button>' : '') +
     (leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '');
-  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.filter(function (x) { return x.status !== 'Rejected'; }).length + ' of ' + h(d.task.deliverablesRequired) + ' required</span></div></div><div class="card-b">' + body + '</div></div>';
+  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.filter(function (x) { return x.status !== 'Rejected'; }).length + ' of ' + h(d.task.filesRequired || d.task.deliverablesRequired) + ((d.task.sizeList || []).length > 1 ? ' files (' + (d.task.sizeList || []).length + ' sizes each)' : ' required') + '</span></div></div><div class="card-b">' + body + '</div></div>';
 }
 
 function activityTimeline(d) {
@@ -2099,6 +2241,11 @@ function sideCard(d) {
   var t = d.task, r = d.requirement, leader = APP.role === 'leader';
   return '<div class="card"><div class="card-h"><h3>Details</h3></div><div class="card-b"><dl class="kv">' +
     '<dt>Requested by</dt><dd>' + h(r.requesterName) + '<div class="faint small">' + h(r.department) + '</div><div class="small"><a href="mailto:' + h(r.email) + '">' + h(r.email) + '</a>' + (r.phone ? ' · ' + h(r.phone) : '') + '</div></dd>' +
+    ((r.coOwners || []).length || leader ? '<dt>Also owned by</dt><dd><div class="owner-chips">' + (r.coOwners || []).map(function (e) {
+      return '<span class="owner-chip">' + h(e) + (leader ? '<button type="button" data-rmown="' + h(e) + '" aria-label="Remove ' + h(e) + '">' + icon('x') + '</button>' : '') + '</span>'; }).join('') +
+      (leader ? '<button type="button" class="btn ghost sm" id="addOwner">' + icon('plus') + ' Add person</button>' : '') + '</div>' +
+      '<div class="faint small">Co-owners see the request in My requests, can edit it and approve creatives.</div></dd>' : '') +
+    ((t.sizeList || []).length ? '<dt>Sizes</dt><dd>' + t.sizeList.map(function (z) { return '<span class="badge plain" style="margin:0 4px 4px 0">' + h(z) + '</span>'; }).join('') + ((t.sizeList || []).length > 1 ? '<div class="faint small">' + sizesLine(t) + '</div>' : '') + '</dd>' : '') +
     '<dt>Submitted</dt><dd>' + fmtDateTime(r.submittedAt) + '</dd>' +
     '<dt>Wanted by</dt><dd>' + fmtDue(r.preferredDate, r.preferredTime) + ' <span class="faint small">(' + h(r.priorityRequested) + ')</span></dd>' +
     (leader ? '<dt>Designer</dt><dd>' + (t.assigneeName ? h(t.assigneeName) + '<div class="faint small">' + h(t.assigneeEmail) + '</div>' : '<span class="faint">Not assigned</span>') + '</dd>' +
@@ -2162,6 +2309,20 @@ function folderField(id, value, root, options) {
     '<span class="hint">Pick a folder already used here or type a new one. Use / for sub-folders. Everything lands in one Drive link.</span></div>';
 }
 
+/** Sizes for every creative, e.g. desktop + mobile. Each size is its own file; together they count as one creative. */
+function sizesField(id, value) {
+  var v = Array.isArray(value) ? value.join('\n') : (value || '');
+  return '<div class="field"><label for="' + id + '">Sizes for each creative <span class="faint">(optional)</span></label>' +
+    '<textarea id="' + id + '" rows="2" maxlength="700" placeholder="One per line, e.g.\nDesktop 1920×600\nMobile 768×900">' + h(v) + '</textarea>' +
+    '<span class="hint">The designer uploads every creative in each size. ' + (APP.boot.countEachSize ? 'Each size file earns points as its own creative (Settings).' : 'All sizes of one creative count as <b>one creative</b> for points.') + '</span></div>';
+}
+
+/** "5 creatives × 2 sizes = 10 files" */
+function sizesLine(t) {
+  var n = (t.sizeList || []).length;
+  return n > 1 ? h(t.deliverablesRequired) + ' creative(s) × ' + n + ' sizes = <b>' + h(t.filesRequired) + ' files</b>' : '';
+}
+
 /** Optional bonus the designer earns when the task is completed. */
 function bonusField(id, value) {
   return '<div class="field"><label for="' + id + '">Bonus points on completion <span class="faint">(optional)</span></label>' +
@@ -2184,13 +2345,14 @@ function assignModal() {
       '<div class="field"><label>Due time</label><input type="time" id="adt" step="900" value="' + h(t.dueTime || '') + '"><span class="hint">Empty = end of day</span></div></div>' +
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
       folderField('afo', t.folderPath || t.creativeType || '', TASK.folderRoot, TASK.folderOptions) +
+      sizesField('asz', t.sizeList) +
       bonusField('abp', t.bonusPoints) +
       '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
       '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
-        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value };
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value };
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
@@ -2216,6 +2378,7 @@ function divideModal() {
       '<div class="grid-3"><div class="field"><label class="req">Due date</label><input type="date" id="dvDate" value="' + h(t.dueDate) + '"></div>' +
       '<div class="field"><label>Due time</label><input type="time" id="dvTime" step="900" value="' + h(t.dueTime || '') + '"></div>' +
       '<div class="field"><label class="req">Priority</label><select id="dvPri">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
+      sizesField('dvSz', t.sizeList) +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: 'Divide & assign', cls: 'primary', onClick: function (close, el) {
@@ -2225,7 +2388,7 @@ function divideModal() {
         var seen = {};
         if (parts.some(function (p) { if (seen[p.assigneeEmail]) return true; seen[p.assigneeEmail] = 1; return false; })) return fieldErrors(el, 'Each designer should appear only once.');
         if (!$('#dvDate', el).value) return fieldErrors(el, 'Pick a due date.');
-        return api('api_divideTask', t.taskId, { parts: parts, dueDate: $('#dvDate', el).value, dueTime: $('#dvTime', el).value, priority: $('#dvPri', el).value })
+        return api('api_divideTask', t.taskId, { parts: parts, dueDate: $('#dvDate', el).value, dueTime: $('#dvTime', el).value, priority: $('#dvPri', el).value, sizes: $('#dvSz', el).value })
           .then(function (r) { close(); toast('Divided into ' + r.taskIds.length + ' tasks and assigned'); loadNotifications(); reloadTask(); })
           .catch(function (e) { fieldErrors(el, errMsg(e)); });
       }
@@ -2271,7 +2434,7 @@ function editModal() {
       '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
       folderField('e_folderPath', t.folderPath || '', TASK.folderRoot, TASK.folderOptions) +
-      bonusField('e_bonusPoints', t.bonusPoints) +
+      bonusField('e_bonusPoints', t.bonusPoints) + sizesField('e_sizes', t.sizeList) +
       '<div class="grid-3">' + f('creativeType', 'Category', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
         '<datalist id="e_catL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
@@ -2280,7 +2443,7 @@ function editModal() {
     actions: [{ label: 'Cancel' }, {
       label: 'Save', cls: 'primary', onClick: function (close, m) {
         var patch = {};
-        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'folderPath', 'bonusPoints', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
+        ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'folderPath', 'bonusPoints', 'sizes', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
@@ -2466,6 +2629,8 @@ function uploadModal(deliverableId) {
   var m = modal({
     title: 'Upload creative', wide: false, sticky: true,
     body:
+      ((t.sizeList || []).length > 1 ? '<div class="alert info small" style="margin-bottom:4px"><b>Upload each creative in every size:</b> ' + t.sizeList.map(h).join(' · ') +
+        '. Name each file with its size, e.g. “Banner 1 — ' + h(t.sizeList[0]) + '”. ' + sizesLine(t) + '.</div>' : '') +
       '<div class="grid-2"><div class="field"><label>Task</label><input type="text" readonly value="' + h(t.taskId) + '"></div>' +
       '<div class="field"><label>This upload is</label><select id="u_target"><option value="">A new creative</option>' + dels.map(function (x) {
         return '<option value="' + h(x.deliverableId) + '"' + (x.deliverableId === pre ? ' selected' : '') + '>New version of: ' + h(x.title) + ' (now V' + h(x.latestVersionNo) + ')</option>';
@@ -2699,7 +2864,7 @@ VIEWS.team = function (arg, el, token) {
       '<button class="btn primary" id="addUser">' + icon('plus') + ' Add team member</button></div>' +
       '<div class="card"><div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Role</th><th>Active tasks</th><th>Completed</th><th>Status</th><th></th></tr></thead><tbody>' +
       d.users.map(function (u) {
-        return '<tr><td><b>' + h(u.name) + '</b><div class="faint small">' + h(u.email) + '</div></td><td>' + (u.role === 'leader' ? 'Team leader' : 'Designer') + (u.designation ? '<div class="faint small">' + h(u.designation) + '</div>' : '') + '</td>' +
+        return '<tr><td><a href="#" class="row" style="gap:10px;color:inherit;text-decoration:none" data-go="profile/' + encodeURIComponent(u.email) + '">' + avatar(u, 34) + '<span><b>' + h(u.name) + '</b>' + (u.nickname ? ' <span class="faint">“' + h(u.nickname) + '”</span>' : '') + '<div class="faint small">' + h(u.email) + '</div></span></a></td><td>' + (u.role === 'leader' ? 'Team leader' : 'Designer') + (u.designation ? '<div class="faint small">' + h(u.designation) + '</div>' : '') + '</td>' +
           '<td>' + u.activeTasks + '</td><td>' + u.completed + '</td><td>' + (u.active ? '<span class="badge s-approved">Active</span>' : '<span class="badge s-cancelled">Deactivated</span>') + '</td>' +
           '<td style="text-align:right;white-space:nowrap"><button class="btn sm ghost" data-edit="' + h(u.email) + '">Edit</button>' +
           (u.email === APP.boot.user.email ? '' : '<button class="btn sm ' + (u.active ? 'danger' : '') + '" data-toggle="' + h(u.email) + '" data-active="' + (u.active ? '1' : '0') + '">' + (u.active ? 'Deactivate' : 'Reactivate') + '</button>') + '</td></tr>';
@@ -2710,6 +2875,7 @@ VIEWS.team = function (arg, el, token) {
           '<button class="btn ghost sm" style="height:22px;padding:0 6px" data-dept="' + h(x.departmentId) + '" data-name="' + h(x.name) + '" data-dactive="' + (x.active ? '1' : '0') + '">' + (x.active ? 'Hide' : 'Show') + '</button></span>';
       }).join('') + '<p class="faint small" style="width:100%;margin:6px 0 0">Departments appear in the requirement form dropdown.</p></div></div>';
 
+    wireGo(el);
     $('#addUser').onclick = function () { userModal(null, d.allowedDomain, d.designations); };
     $all('[data-edit]', el).forEach(function (b) { b.onclick = function () { userModal(d.users.filter(function (u) { return u.email === b.getAttribute('data-edit'); })[0], d.allowedDomain, d.designations); }; });
     $all('[data-toggle]', el).forEach(function (b) {
@@ -2768,12 +2934,12 @@ function pointsSection(p) {
   if (!p) return '';
   var cell = function (b, neg) { return b && b.n ? b.n + (b.pts ? ' <span class="' + (neg ? 'neg' : 'pos') + '-pts">' + (b.pts > 0 ? '+' : '') + b.pts + '</span>' : '') : '<span class="faint">—</span>'; };
   return '<div class="card" style="margin-top:18px" id="pointsReport"><div class="card-h"><h3>Points & rewards</h3><div class="row" style="gap:8px">' +
-    '<button class="btn sm" data-csv="points">' + icon('download') + ' Points CSV</button><button class="btn sm" data-csv="rewards">' + icon('download') + ' Rewards CSV</button></div></div>' +
-    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Task bonus</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
+    '<button class="btn sm" data-go="history">' + icon('history') + ' Points history</button><button class="btn sm" data-csv="points">' + icon('download') + ' Points CSV</button><button class="btn sm" data-csv="rewards">' + icon('download') + ' Rewards CSV</button></div></div>' +
+    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Task bonus</th><th title="Reopened tasks finished again">Reopened</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
       p.people.map(function (x) {
-        return '<tr><td><span class="rank-dot' + (x.rank === 1 && x.period > 0 ? ' first' : '') + '">' + x.rank + '</span></td><td><b>' + h(x.name) + '</b>' + (x.active ? '' : ' <span class="faint small">(inactive)</span>') +
+        return '<tr class="click" data-go="history/' + encodeURIComponent(x.email) + '" title="See ' + h(x.name) + '’s points history"><td><span class="rank-dot' + (x.rank === 1 && x.period > 0 ? ' first' : '') + '">' + x.rank + '</span></td><td><b>' + h(x.name) + '</b>' + (x.active ? '' : ' <span class="faint small">(inactive)</span>') +
           '<div class="faint small">' + h(x.designation || '—') + '</div></td><td><b style="font-size:15px">' + x.period + '</b></td>' +
-          '<td>' + cell(x.creatives) + '</td><td>' + cell(x.firstTime) + '</td><td>' + cell(x.onTime) + '</td><td>' + cell(x.rejected, true) + '</td><td>' + cell(x.rewards) + '</td>' +
+          '<td>' + cell(x.creatives) + '</td><td>' + cell(x.firstTime) + '</td><td>' + cell(x.onTime) + '</td><td>' + cell(x.rejected, true) + '</td><td>' + cell(x.bonus) + '</td><td>' + cell(x.reopen) + '</td><td>' + cell(x.rewards) + '</td>' +
           '<td class="faint">' + x.total + '</td></tr>';
       }).join('') + '</tbody></table>' : emptyState('No points in this range.', '', 'award')) + '</div>' +
     '<div class="card-b" style="border-top:1px solid var(--line)"><div class="row between wrap" style="margin-bottom:8px"><b>Rewards given in this period</b>' +
@@ -2802,10 +2968,12 @@ VIEWS.rewards = function (arg, el, token) {
       (r.onTime ? '<div>+' + r.onTime + ' for each task completed by its deadline (time on hold isn’t counted)</div>' : '') +
       (r.rejected ? '<div>−' + r.rejected + ' for each rejected creative</div>' : '') +
       '<div>+ bonus points the leader sets on big tasks, paid when the task is completed</div>' +
+      (r.reopen ? '<div>+' + r.reopen + ' each time a finished task is reopened for changes, once you finish it again</div>' : '') +
+      '<div>' + (r.countEachSize ? 'Every size of a creative counts as its own creative' : 'A creative made in several sizes (e.g. desktop + mobile) counts as one creative') + '</div>' +
       '<div>+ reward points from the team leader</div></div></div>';
     var board = '<div class="card"><div class="card-h"><h3>Leaderboard</h3><span class="faint small">This month · all time</span></div><div class="card-b">' +
       (d.leaderboard.length ? '<ol class="lboard">' + d.leaderboard.map(function (x) {
-        return '<li' + (x.email === APP.boot.user.email ? ' class="me"' : '') + '><span class="rank">' + x.rank + '</span><span class="grow"><span class="lb-name">' + h(x.name) +
+        return '<li class="click' + (x.email === APP.boot.user.email ? ' me' : '') + '" data-go="profile/' + encodeURIComponent(x.email) + '"><span class="rank">' + x.rank + '</span>' + avatar(x, 30).replace('class="avatar', 'class="lb-av avatar') + '<span class="grow"><span class="lb-name">' + h(x.name) + (x.nickname ? ' <span class="faint" style="font-weight:400">“' + h(x.nickname) + '”</span>' : '') +
           (x.rank === 1 && x.total > 0 ? ' ' + icon('award') : '') + '</span>' + (x.designation ? '<span class="faint small lb-des">' + h(x.designation) + '</span>' : '') + '</span>' +
           '<span class="small faint" title="This month">' + x.month + '</span><b title="All time">' + x.total + '</b><span class="faint small">pts</span></li>';
       }).join('') + '</ol>' : emptyState('No designers yet.')) + '</div></div>';
@@ -2824,12 +2992,13 @@ VIEWS.rewards = function (arg, el, token) {
       '<div><b>' + (r.firstTime ? Math.round((b.firstTime || 0) / r.firstTime) : 0) + '</b><span>approved first time</span><em>+' + (b.firstTime || 0) + '</em></div>' +
       '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span><em>+' + (b.onTimePts || 0) + '</em></div>' +
       '<div><b>' + (b.bonusCount || 0) + '</b><span>task bonuses</span><em>+' + (b.bonus || 0) + '</em></div>' +
+      '<div><b>' + (b.reopenCount || 0) + '</b><span>reopened & finished</span><em>+' + (b.reopen || 0) + '</em></div>' +
       '<div><b>' + (me.count || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
       (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span>' + (b.rejectedPts ? '<em class="neg">−' + b.rejectedPts + '</em>' : '<em class="faint">no penalty</em>') + '</div>' : '') +
       '</div></div>';
     el.innerHTML = '<div class="page-h"><div><h1>' + (leader ? 'Leaderboard & rewards' : 'My points') + '</h1><p>' +
       (leader ? 'Points add up automatically from approved work. Give rewards for extra recognition.' : 'Where you stand in the team, and how you earned your points.') + '</p></div>' +
-      (leader ? '<button class="btn primary" id="giveR">' + icon('award') + ' Give a reward</button>' : '') + '</div>' +
+      '<div class="row wrap"><button class="btn" data-go="history">' + icon('history') + ' Points history</button>' + (leader ? '<button class="btn primary" id="giveR">' + icon('award') + ' Give a reward</button>' : '') + '</div></div>' +
       mine + '<div class="detail" style="margin-top:14px"><div class="stack">' + board + history + '</div><div class="stack">' + rulesHtml + '</div></div>';
     wireGo(el);
     if ($('#giveR')) $('#giveR').onclick = function () { rewardModal(null, function () { render('rewards'); }); };
@@ -2915,18 +3084,32 @@ VIEWS.settings = function (arg, el, token) {
           return '<option value="' + o[0] + '"' + (s.reviewerIdentity === o[0] ? ' selected' : '') + '>' + h(o[1]) + '</option>';
         }).join('') + '</select></div>' +
         txt('tokenExpiryDays', 'Link expiry (days)', '1–90. Links also stop working once a decision is made or a newer version is sent.', 'number') +
-        chk('allowReviewerDownload', 'Let reviewers download the file (up to 20 MB)') + chk('sendReviewLinkToRequester', 'Email review links to the requester automatically')) +
+        chk('allowReviewerDownload', 'Let reviewers download the file (up to 20 MB)') + '<p class="faint small" style="margin:0">Emailing review links to requesters is under <b>Emails</b>.</p>') +
       sec('Workflow', chk('autoCompleteOnApproval', 'Mark tasks Completed automatically once every required creative is approved') +
         '<div class="grid-2">' + txt('workloadThreshold', 'Workload alert at (active tasks)', '', 'number') + txt('dueSoonHours', 'Due-soon reminder (hours before)', '', 'number') + '</div>' +
         txt('priorities', 'Priorities (comma separated, highest last)', 'Used in the form and on tasks.')) +
-      sec('Notifications', chk('emailNotifications', 'Send email notifications (in-app notifications are always on)') + chk('emailRequesterOnSubmit', 'Email requesters a confirmation with their reference ID') +
+      sec('Emails', chk('emailNotifications', 'Send automatic emails (master switch — the bell in the portal always works)') +
+        '<p class="muted small" style="margin:0">Choose which emails go out. Turned-off ones still show in the portal’s bell for the team.</p>' +
+        '<table class="email-rules" id="emailRules">' + ['team', 'requester'].map(function (grp) {
+          return '<tr class="grp"><td colspan="3">' + (grp === 'team' ? 'To the graphics team' : 'To requesters (other departments)') + '</td></tr>' +
+            (d.emailKinds || []).filter(function (k) { return k.who === grp; }).map(function (k) {
+              var on = k.always || ((s.emailRules || {})[k.id] !== false && !(k.id === 'req_received' && s.emailRequesterOnSubmit === false) && !(k.id === 'req_review' && s.sendReviewLinkToRequester === false));
+              return '<tr><td>' + h(k.label) + (k.always ? ' <span class="faint small">(always — they asked for it)</span>' : '') + '</td><td class="faint small">' + h(k.to) + '</td>' +
+                '<td><label class="switch" title="' + (on ? 'On' : 'Off') + '"><input type="checkbox" data-er="' + h(k.id) + '"' + (on ? ' checked' : '') + (k.always ? ' disabled' : '') + '><span></span></label></td></tr>';
+            }).join('');
+        }).join('') + '</table>' +
+        '<div class="row wrap" style="gap:8px"><button class="btn sm" type="button" id="erAllOn">All on</button><button class="btn sm" type="button" id="erTeamOff">Team emails off</button></div>' +
         '<p class="faint small" style="margin:0">Emails remaining today on this Google account: <b>' + (d.mailQuotaRemaining === null ? 'unknown' : d.mailQuotaRemaining) + '</b></p>') +
+      sec('Team features', chk('teamChat', 'Team chat — one group chat for everyone on the team (no emails)') +
+        chk('allowPersonalTheme', 'Let team members pick their own colours on their profile (only they see them)')) +
       sec('Uploads', '<div class="grid-3">' + txt('maxUploadMB', 'Team max file size (MB)', '', 'number') + txt('maxPublicUploadMB', 'Requester max file size (MB)', '', 'number') + txt('maxPublicFiles', 'Requester max files', '', 'number') + '</div>' +
         txt('allowedExtensions', 'File types the team can upload') + txt('publicExtensions', 'File types requesters can attach')) +
       sec('Points & designations', '<p class="muted small" style="margin:0">Points are worked out automatically. Each approved creative earns points by the designer’s designation; bonuses for first-time approvals and on-time tasks; reward points come on top.</p>' +
         '<div id="desigRows" class="stack" style="gap:6px"></div><div><button class="btn sm" id="desigAdd" type="button">' + icon('plus') + ' Add designation</button></div>' +
         '<div class="grid-3">' + txt('pointsFirstTime', 'Bonus: approved first time', 'Per creative, no changes asked', 'number') + txt('pointsOnTime', 'Bonus: task on time', 'Per task completed by its deadline', 'number') +
-        txt('pointsRejected', 'Minus per rejected creative', '0 = no penalty', 'number') + '</div>') +
+        txt('pointsRejected', 'Minus per rejected creative', '0 = no penalty', 'number') + '</div>' +
+        '<div class="grid-3">' + txt('pointsReopen', 'Bonus: reopened task finished', 'Each time a finished task is reopened for changes; paid when it’s finished again', 'number') + '</div>' +
+        chk('countEachSize', 'Count every size as its own creative (off: a creative made in 2–3 sizes — e.g. desktop + mobile — earns points once)')) +
       sec('Creative categories (Drive folders)', txt('creativeCategories', 'Categories (comma separated)', 'Each request’s Drive folder gets one sub-folder per category, e.g. Meta ads, Website banners, Listing images.')) +
       sec('Creative types & form fields', '<p class="muted small" style="margin:0">Each type can add its own questions to the request form. Field types: text, textarea, number, select (with options).</p>' +
         '<textarea id="s_creativeTypes" rows="16" class="mono" spellcheck="false">' + h(JSON.stringify(s.creativeTypes, null, 2)) + '</textarea>') +
@@ -2962,6 +3145,8 @@ VIEWS.settings = function (arg, el, token) {
     var acc = function () { if ($('#s_useAccent').checked) previewTheme($('#s_accentPick').value, THEME_SEL === 'midnight'); };
     $('#s_accentPick').oninput = function () { $('#s_useAccent').checked = true; acc(); };
     $('#s_useAccent').onchange = acc;
+    $('#erAllOn').onclick = function () { $all('[data-er]').forEach(function (c) { c.checked = true; }); };
+    $('#erTeamOff').onclick = function () { (d.emailKinds || []).forEach(function (k) { var c = $('[data-er="' + k.id + '"]'); if (c && k.who === 'team' && !k.always) c.checked = false; }); };
     var DES = (s.designations || []).slice();
     function drawDes() {
       $('#desigRows').innerHTML = '<div class="row small faint" style="gap:8px"><span class="grow">Designation</span><span style="width:110px">Points / creative</span><span style="width:36px"></span></div>' +
@@ -2978,18 +3163,22 @@ VIEWS.settings = function (arg, el, token) {
       var patch = {};
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
-      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'sendReviewLinkToRequester', 'autoCompleteOnApproval', 'emailNotifications', 'emailRequesterOnSubmit'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'autoCompleteOnApproval', 'emailNotifications', 'teamChat', 'allowPersonalTheme', 'countEachSize'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      // The per-email switches below replace the two older checkboxes.
+      patch.emailRequesterOnSubmit = true; patch.sendReviewLinkToRequester = true;
+      patch.emailRules = {};
+      $all('[data-er]').forEach(function (c) { if (!c.disabled) patch.emailRules[c.getAttribute('data-er')] = c.checked; });
       patch.theme = THEME_SEL || s.theme || 'rosier';
       patch.accentColor = $('#s_useAccent').checked ? $('#s_accentPick').value : '';
       patch.creativeCategories = $('#s_creativeCategories').value.trim();
-      ['pointsFirstTime', 'pointsOnTime', 'pointsRejected'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
+      ['pointsFirstTime', 'pointsOnTime', 'pointsRejected', 'pointsReopen'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
       patch.designations = $all('#desigRows [data-dr]').map(function (r) { return { name: $('[data-k=n]', r).value.trim(), points: Number($('[data-k=p]', r).value) }; }).filter(function (x) { return x.name; });
       if (!patch.designations.length) return toast('Add at least one designation.', true);
       try { JSON.parse(patch.creativeTypes); } catch (e) { return toast('Creative types isn’t valid JSON: ' + e.message, true); }
       var b = this; b.disabled = true;
       api('api_saveSettings', patch).then(function () {
         toast('Settings saved');
-        return api('api_bootstrap').then(function (bt) { APP.boot = bt; });
+        return api('api_bootstrap').then(function (bt) { APP.boot = bt; buildNav(); });
       }).catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
     };
   }).catch(function (e) { if (!stale(token)) viewError(el, e); });
@@ -3153,6 +3342,350 @@ function campaignPickModalNew(taskId, done) {
       if (!nm) { fieldErrors(mm, 'Type a name.'); return Promise.resolve(); }
       return api('api_setTasksCampaign', [taskId], '', nm).then(function (res) { close(); toast(movedMsg(res)); if (done) done(res); }).catch(function (e) { fieldErrors(mm, errMsg(e)); });
     } }] });
+}
+</script>
+
+<script>
+/* AppPeople.js — profiles, points history and team chat (everyone on the team). */
+
+/* ================= PROFILE ================= */
+VIEWS.profile = function (arg, el, token) {
+  var email = arg ? decodeURIComponent(arg) : '';
+  api('api_getProfile', email).then(function (p) {
+    if (stale(token)) return;
+    setCrumb(p.mine ? 'My profile' : p.name);
+    var b = p.breakdown || {};
+    var hero = '<div class="card prof-hero"><div class="card-b row wrap" style="gap:18px;align-items:center">' +
+      '<div class="prof-photo" id="pfPhotoBox">' + avatar(p, 92) + '</div>' +
+      '<div class="grow" style="min-width:200px"><h1 style="margin:0">' + h(p.name) + (p.nickname ? ' <span class="faint" style="font-weight:400">“' + h(p.nickname) + '”</span>' : '') + '</h1>' +
+      '<div class="muted">' + h(p.designation || (p.role === 'leader' ? 'Team leader' : 'Designer')) + (p.role === 'leader' && p.designation ? ' · Team leader' : '') + '</div>' +
+      (p.bio ? '<p style="margin:8px 0 0">' + h(p.bio) + '</p>' : '') +
+      (p.portfolioUrl ? '<a class="btn sm" style="margin-top:10px" href="' + h(p.portfolioUrl) + '" target="_blank" rel="noopener">' + icon('external') + ' Portfolio</a>' : '') + '</div>' +
+      '<div class="prof-score"><div><b>' + (p.rank ? '#' + p.rank : '—') + '</b><span>rank of ' + (p.of || 0) + '</span></div><div><b>' + p.points + '</b><span>points</span></div><div><b>' + p.month + '</b><span>this month</span></div>' +
+      '<div><b>' + p.stats.active + '</b><span>open tasks</span></div><div><b>' + p.stats.completed + '</b><span>completed</span></div></div></div></div>';
+
+    var breakdown = '<div class="card"><div class="card-h"><h3>Points</h3><a href="#" data-go="history' + (p.mine ? '' : '/' + encodeURIComponent(p.email)) + '" class="small">' + icon('history').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Full history</a></div>' +
+      '<div class="rh-break" style="border-top:0">' +
+      '<div><b>' + (b.creatives || 0) + '</b><span>creatives approved</span><em>+' + (b.creativePts || 0) + '</em></div>' +
+      '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span></div>' +
+      '<div><b>' + (b.reopenCount || 0) + '</b><span>reopened & finished</span><em>+' + (b.reopen || 0) + '</em></div>' +
+      '<div><b>' + (b.rewardCount || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
+      '<div><b>' + (b.bonus || 0) + '</b><span>task bonus pts</span></div>' +
+      (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span></div>' : '') + '</div>' +
+      (p.recent && p.recent.length ? '<div class="card-b tight">' + p.recent.map(historyItem).join('') + '</div>' : '') + '</div>';
+
+    var grow = p.completeness ? '<div class="card"><div class="card-h"><h3>' + (p.mine ? 'Improve your profile' : 'Profile') + '</h3><span class="faint small">' + p.completeness.percent + '% complete</span></div><div class="card-b stack">' +
+      progressBar(p.completeness.percent, p.completeness.percent >= 100) +
+      '<ul class="checklist">' + p.completeness.items.map(function (i) { return '<li class="' + (i.done ? 'done' : '') + '">' + icon(i.done ? 'check' : 'plus') + ' ' + h(i.label) + '</li>'; }).join('') + '</ul>' +
+      ((p.tips || []).length ? '<div><b class="small">How to grow your points</b><ul class="tips">' + p.tips.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') + '</div></div>' : '';
+
+    var edit = p.mine ? '<div class="card" id="pfEdit"><div class="card-h"><h3>Edit profile</h3></div><div class="card-b stack">' +
+      '<div class="row wrap" style="gap:12px"><button class="btn" type="button" id="pfPick">' + icon('image') + ' ' + (p.photo ? 'Change photo' : 'Add photo') + '</button>' +
+      (p.photo ? '<button class="btn ghost" type="button" id="pfNoPhoto">Remove photo</button>' : '') + '<span class="faint small">JPG or PNG — it’s made small automatically.</span></div>' +
+      '<div class="grid-2"><div class="field"><label for="pfNick">Nickname</label><input type="text" id="pfNick" maxlength="40" value="' + h(p.nickname) + '" placeholder="What the team calls you"></div>' +
+      '<div class="field"><label for="pfUrl">Portfolio link</label><input id="pfUrl" type="url" maxlength="500" value="' + h(p.portfolioUrl) + '" placeholder="https://behance.net/…"></div></div>' +
+      '<div class="field"><label for="pfBio">About you</label><input type="text" id="pfBio" maxlength="300" value="' + h(p.bio) + '" placeholder="e.g. Packaging, type and bold colours"></div>' +
+      '<div><button class="btn primary" id="pfSave">Save profile</button></div></div></div>' : '';
+
+    var look = p.mine && p.allowPersonalTheme ? '<div class="card"><div class="card-h"><h3>Your colours</h3><span class="faint small">Only you see these</span></div><div class="card-b stack">' +
+      '<div class="theme-pick" id="pfThemes"><button type="button" class="theme-sw' + (!p.theme ? ' on' : '') + '" data-pth="">Team default</button>' + p.themes.map(function (t) {
+        return '<button type="button" class="theme-sw' + (t.id === p.theme ? ' on' : '') + (t.dark ? ' dark' : '') + '" data-pth="' + h(t.id) + '" data-acc="' + h(t.accent) + '" data-dark="' + (t.dark ? 1 : 0) + '"><span class="sw" style="background:' + h(t.accent) + '"></span>' + h(t.label) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="row wrap" style="gap:10px"><label class="small" for="pfAcc">Accent colour</label><input type="color" id="pfAcc" value="' + h(p.accentColor || '#a56312') + '" style="width:48px;height:34px;padding:2px">' +
+      '<label class="check small"><input type="checkbox" id="pfUseAcc"' + (p.accentColor ? ' checked' : '') + '> Use it</label><button class="btn sm primary" id="pfLookSave">Save colours</button></div></div></div>' : '';
+
+    var team = '<div class="card"><div class="card-h"><h3>The team</h3><span class="faint small">' + p.team.length + ' people</span></div><div class="card-b team-grid">' + p.team.map(function (x) {
+      return '<a href="#" class="team-card' + (x.email === p.email ? ' on' : '') + '" data-go="profile/' + encodeURIComponent(x.email) + '">' + avatar(x, 44) + '<span class="grow" style="min-width:0"><b class="ellipsis">' + h(x.name) + '</b>' +
+        '<span class="faint small ellipsis">' + h(x.nickname ? '“' + x.nickname + '” · ' : '') + h(x.designation || (x.role === 'leader' ? 'Team leader' : 'Designer')) + '</span></span>' +
+        (x.rank ? '<span class="tc-rank">#' + x.rank + '<small>' + x.points + ' pts</small></span>' : '') + '</a>';
+    }).join('') + '</div></div>';
+
+    el.innerHTML = hero + '<div class="detail" style="margin-top:14px"><div class="stack">' + breakdown + team + '</div><div class="stack">' + grow + edit + look + '</div></div>';
+    wireGo(el);
+    if (!p.mine) return;
+    var photo = p.photo;
+    $('#pfPick').onclick = function () {
+      pickImage(function (f) {
+        shrinkPhoto(f, 160).then(function (url) {
+          photo = url;
+          $('#pfPhotoBox').innerHTML = avatar({ photo: url }, 92);
+          toast('Photo ready — click Save profile');
+        }).catch(function () { toast('That image couldn’t be read. Try a JPG or PNG.', true); });
+      });
+    };
+    if ($('#pfNoPhoto')) $('#pfNoPhoto').onclick = function () { photo = ''; $('#pfPhotoBox').innerHTML = avatar({ name: p.name }, 92); };
+    $('#pfSave').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_saveProfile', { nickname: $('#pfNick').value, portfolioUrl: $('#pfUrl').value.trim(), bio: $('#pfBio').value, photo: photo || '' }).then(function () {
+        toast('Profile saved');
+        APP.boot.user.nickname = $('#pfNick').value.trim(); APP.boot.user.photo = photo || ''; drawMe();
+        render('profile', true);
+      }).catch(function (e) { toast(errMsg(e), true); }).then(function () { btn.disabled = false; });
+    };
+    if (!$('#pfThemes')) return;
+    var pth = p.theme || '';
+    $all('[data-pth]').forEach(function (bt) {
+      bt.onclick = function () {
+        pth = bt.getAttribute('data-pth');
+        $all('[data-pth]').forEach(function (x) { x.classList.toggle('on', x === bt); });
+        if (pth) previewTheme($('#pfUseAcc').checked ? $('#pfAcc').value : bt.getAttribute('data-acc'), bt.getAttribute('data-dark') === '1');
+        else toast('Team default is used after you save');
+      };
+    });
+    $('#pfAcc').oninput = function () { $('#pfUseAcc').checked = true; if (pth) { var bt = $('[data-pth="' + pth + '"]'); previewTheme(this.value, bt && bt.getAttribute('data-dark') === '1'); } };
+    $('#pfLookSave').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_saveProfile', { theme: pth, accentColor: pth && $('#pfUseAcc').checked ? $('#pfAcc').value : '' }).then(function () {
+        toast('Colours saved — reloading');
+        setTimeout(function () { try { window.top.location.reload(); } catch (e) { location.reload(); } }, 600);
+      }).catch(function (e) { toast(errMsg(e), true); btn.disabled = false; });
+    };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function pickImage(cb) {
+  var i = document.createElement('input'); i.type = 'file'; i.accept = 'image/png,image/jpeg,image/webp';
+  i.onchange = function () { if (i.files[0]) cb(i.files[0]); };
+  i.click();
+}
+
+/** Square-crops and shrinks a photo to size×size JPEG (a few KB) in the browser. */
+function shrinkPhoto(file, size) {
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var s = Math.min(img.width, img.height), c = document.createElement('canvas');
+      c.width = c.height = size;
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
+/* ================= POINTS HISTORY ================= */
+var HIST = { kind: '', from: '', to: '' };
+
+function historyItem(x) {
+  var neg = x.points < 0;
+  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : 'check') + '</span>' +
+    '<div class="grow" style="min-width:0"><div class="ellipsis"><b>' + h(x.label) + '</b>' + (x.name && APP.role === 'leader' ? ' <span class="faint">· ' + h(x.name) + '</span>' : '') + '</div>' +
+    '<div class="faint small ellipsis">' + fmtDateTime(x.when) + (x.taskId ? ' · <a href="#" data-go="task/' + h(x.taskId) + '">' + h(x.taskId) + '</a> ' + h(x.taskTitle) : '') + (x.note ? ' · ' + h(x.note) : '') + '</div></div>' +
+    '<b class="' + (neg ? 'neg' : 'pos') + '-pts hist-pts">' + (neg ? '' : '+') + x.points + '</b></div>';
+}
+
+VIEWS.history = function (arg, el, token) {
+  var leader = APP.role === 'leader';
+  if (arg) HIST.email = decodeURIComponent(arg); else if (!leader) HIST.email = '';
+  setCrumb('Points history');
+  api('api_pointsHistory', { email: HIST.email || '', kind: HIST.kind, from: HIST.from, to: HIST.to }).then(function (d) {
+    if (stale(token)) return;
+    var who = leader ? (d.people.filter(function (x) { return x.email === HIST.email; })[0] || {}).name : '';
+    el.innerHTML = '<div class="page-h"><div><h1>Points history</h1><p>' + (leader ? (who ? 'Every point ' + h(who) + ' earned or lost, newest first.' : 'Every point earned or lost by the team, newest first.') :
+      'Every point you earned or lost, newest first.') + '</p></div><button class="btn" id="hCsv">' + icon('download') + ' CSV</button></div>' +
+      '<div class="card"><div class="filters">' +
+      (leader ? '<select id="hP"><option value="">Everyone</option>' + d.people.map(function (x) { return '<option value="' + h(x.email) + '"' + (x.email === HIST.email ? ' selected' : '') + '>' + h(x.name) + '</option>'; }).join('') + '</select>' : '') +
+      '<select id="hK"><option value="">All types</option>' + Object.keys(d.kinds).map(function (k) { return '<option value="' + k + '"' + (k === HIST.kind ? ' selected' : '') + '>' + h(d.kinds[k]) + '</option>'; }).join('') + '</select>' +
+      '<input type="date" id="hF" value="' + h(HIST.from) + '" aria-label="From"><span class="faint">to</span><input type="date" id="hT" value="' + h(HIST.to) + '" aria-label="To">' +
+      '<button class="btn" id="hGo">Apply</button>' + (HIST.from || HIST.to || HIST.kind || HIST.email ? '<button class="btn ghost" id="hClr">Clear</button>' : '') + '</div>' +
+      '<div class="card-b row wrap" style="gap:8px;border-bottom:1px solid var(--line)"><span class="badge plain"><b>' + d.total + '</b>&nbsp;points · ' + d.count + ' entries</span>' +
+      d.byKind.map(function (k) { return '<span class="badge plain">' + h(k.label) + ' × ' + k.n + ' <span class="' + (k.points < 0 ? 'neg' : 'pos') + '-pts" style="margin-left:4px">' + (k.points < 0 ? '' : '+') + k.points + '</span></span>'; }).join('') + '</div>' +
+      '<div class="card-b tight">' + (d.rows.length ? d.rows.map(historyItem).join('') : emptyState('Nothing here yet.', 'Points appear as creatives are approved and tasks finish.', 'award')) +
+      (d.truncated ? '<p class="faint small" style="padding:8px 16px">Showing the latest 600 — download the CSV for everything.</p>' : '') + '</div></div>';
+    wireGo(el);
+    var read = function () { HIST.kind = $('#hK').value; HIST.from = $('#hF').value; HIST.to = $('#hT').value; if ($('#hP')) HIST.email = $('#hP').value; };
+    $('#hGo').onclick = function () { read(); render('history'); };
+    if ($('#hP')) $('#hP').onchange = function () { read(); render('history'); };
+    $('#hK').onchange = function () { read(); render('history'); };
+    if ($('#hClr')) $('#hClr').onclick = function () { HIST = { kind: '', from: '', to: '', email: '' }; render('history'); };
+    $('#hCsv').onclick = function () {
+      var btn = this; btn.disabled = true;
+      api('api_exportCsv', 'history', { from: HIST.from || '2000-01-01', to: HIST.to || todayIso(), email: HIST.email || '', kind: HIST.kind })
+        .then(function (x) { downloadText(x.fileName, x.csv); }).catch(function (e) { toast(errMsg(e), true); }).then(function () { btn.disabled = false; });
+    };
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+/* ================= TEAM CHAT ================= */
+var CHAT = null;
+
+VIEWS.chat = function (arg, el, token) {
+  setCrumb('Team chat');
+  if (APP.chatTimer) { clearInterval(APP.chatTimer); APP.chatTimer = null; }
+  api('api_chatList', {}).then(function (d) {
+    if (stale(token)) return;
+    CHAT = { list: d.messages, people: d.people, now: d.now, me: d.me, leader: d.leader, more: d.more, thumbs: {}, sending: 0 };
+    el.innerHTML = '<div class="chat card"><div class="chat-h"><div><b>Team chat</b><div class="faint small">Everyone on the graphics team · share references, links and updates · nothing is emailed</div></div>' +
+      '<div class="chat-people">' + Object.keys(d.people).filter(function (k) { return d.people[k].active; }).slice(0, 8).map(function (k) { return avatar(d.people[k], 26); }).join('') + '</div></div>' +
+      '<div class="chat-list" id="chatList"></div>' +
+      '<div class="chat-in"><button class="btn ghost icon" id="chatAtt" title="Share a file or image" aria-label="Attach">' + icon('clip') + '</button>' +
+      '<textarea id="chatTxt" rows="1" maxlength="2000" placeholder="Message the team…  (Enter to send, Shift+Enter for a new line)"></textarea>' +
+      '<button class="btn primary icon" id="chatSend" aria-label="Send">' + icon('send') + '</button></div></div>';
+    drawChat(true);
+    navCount('chat', 0);
+    seenChat();
+    var ta = $('#chatTxt');
+    ta.oninput = function () { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; };
+    ta.onkeydown = function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); } };
+    $('#chatSend').onclick = sendChat;
+    $('#chatAtt').onclick = function () { pickFiles(true, function (files) { sendChatFiles(files); }); };
+    // Paste a screenshot straight into the chat.
+    ta.onpaste = function (e) {
+      var items = (e.clipboardData && e.clipboardData.files) ? Array.prototype.slice.call(e.clipboardData.files) : [];
+      if (items.length) { e.preventDefault(); sendChatFiles(items.map(function (f, i) { return f.name && f.name !== 'image.png' ? f : new File([f], 'screenshot-' + Date.now() + (i ? '-' + i : '') + '.png', { type: f.type || 'image/png' }); })); }
+    };
+    APP.chatTimer = setInterval(pollChat, 4000);
+  }).catch(function (e) { if (!stale(token)) viewError(el, e); });
+};
+
+function linkify(text) {
+  return h(text).replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"])/g, function (u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>'; });
+}
+
+function chatTime(iso) { var d = new Date(iso); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+function chatDay(iso) {
+  var d = new Date(iso), t = new Date(), y = new Date(Date.now() - 864e5);
+  if (d.toDateString() === t.toDateString()) return 'Today';
+  if (d.toDateString() === y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
+}
+
+function drawChat(toBottom) {
+  var box = $('#chatList');
+  if (!box || !CHAT) return;
+  var near = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  var day = '', prev = null, html = CHAT.more ? '<div class="chat-more"><button class="btn sm ghost" id="chatOlder">Load earlier messages</button></div>' : '';
+  if (!CHAT.list.length) html += '<div class="chat-empty">' + icon('chat') + '<b>Say hello to the team</b><span>Share references, Pinterest boards, screenshots and quick updates here.</span></div>';
+  CHAT.list.forEach(function (m) {
+    var dd = chatDay(m.createdAt);
+    if (dd !== day) { html += '<div class="chat-day"><span>' + h(dd) + '</span></div>'; day = dd; prev = null; }
+    var mine = m.author === CHAT.me, p = CHAT.people[m.author] || { name: m.author };
+    var grouped = prev && prev.author === m.author && (new Date(m.createdAt) - new Date(prev.createdAt)) < 5 * 60000;
+    var body = m.deleted ? '<i class="faint">Message deleted</i>' :
+      (m.file ? (m.file.isImage ? '<button class="chat-img" data-cimg="' + h(m.messageId) + '">' + (CHAT.thumbs[m.messageId] ? '<img src="' + h(CHAT.thumbs[m.messageId]) + '" alt="' + h(m.file.name) + '">' : '<span class="spinner"></span>') + '</button>' :
+        '<button class="chat-file" data-cfile="' + h(m.messageId) + '">' + icon('file') + '<span class="ellipsis">' + h(m.file.name) + '</span><span class="faint small">' + fmtSize(m.file.size) + '</span>' + icon('download') + '</button>') : '') +
+      (m.text ? '<div class="chat-text">' + linkify(m.text) + '</div>' : '');
+    html += '<div class="msg' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') + '" data-mid="' + h(m.messageId) + '">' +
+      (mine ? '' : '<span class="msg-av">' + (grouped ? '' : avatar(p, 30)) + '</span>') +
+      '<div class="bubble">' + (!mine && !grouped ? '<div class="msg-who">' + h(p.nickname || p.name) + (p.nickname ? ' <span class="faint">' + h(p.name) + '</span>' : '') + '</div>' : '') +
+      body + '<div class="msg-meta">' + chatTime(m.createdAt) + (!m.deleted && (mine || CHAT.leader) ? ' <button class="msg-del" data-cdel="' + h(m.messageId) + '" title="Delete" aria-label="Delete message">' + icon('trash') + '</button>' : '') + '</div></div></div>';
+    prev = m;
+  });
+  if (CHAT.sending) html += '<div class="msg mine"><div class="bubble faint small"><span class="spinner" style="width:12px;height:12px"></span> Sending ' + CHAT.sending + ' file(s)…</div></div>';
+  box.innerHTML = html;
+  if (toBottom || near) box.scrollTop = box.scrollHeight;
+  if ($('#chatOlder')) $('#chatOlder').onclick = loadOlder;
+  $all('[data-cdel]', box).forEach(function (b) {
+    b.onclick = function () {
+      confirmBox('Delete this message?', 'It’s removed for everyone.', 'Delete', true).then(function (y) {
+        if (!y) return;
+        api('api_chatDelete', b.getAttribute('data-cdel')).then(pollChat).catch(function (e) { toast(errMsg(e), true); });
+      });
+    };
+  });
+  $all('[data-cfile]', box).forEach(function (b) {
+    b.onclick = function () {
+      b.disabled = true; toast('Preparing download…');
+      api('api_getAsset', 'chat', b.getAttribute('data-cfile'), 'original').then(function (f) { downloadBase64(f.fileName, f.mimeType, f.base64); })
+        .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+    };
+  });
+  var imgs = CHAT.list.filter(function (m) { return !m.deleted && m.file && m.file.isImage; });
+  $all('[data-cimg]', box).forEach(function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute('data-cimg');
+      gallery(imgs.map(function (m) {
+        var p = CHAT.people[m.author] || { name: m.author };
+        return { id: m.messageId, title: m.file.name, sub: (p.nickname || p.name) + ' · ' + fmtDateTime(m.createdAt), status: '',
+          load: function () { return api('api_getAsset', 'chat', m.messageId, 'preview'); },
+          download: function () { return api('api_getAsset', 'chat', m.messageId, 'original'); } };
+      }), { start: Math.max(0, imgs.map(function (m) { return m.messageId; }).indexOf(id)) });
+    };
+  });
+  loadChatThumbs();
+}
+
+function fmtSize(n) { n = Number(n) || 0; return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+function loadChatThumbs() {
+  var need = CHAT.list.filter(function (m) { return !m.deleted && m.file && m.file.isImage && CHAT.thumbs[m.messageId] === undefined; }).slice(-24);
+  if (!need.length) return;
+  need.forEach(function (m) { CHAT.thumbs[m.messageId] = null; });
+  api('api_getThumbs', need.map(function (m) { return { kind: 'chat', id: m.messageId }; })).then(function (map) {
+    need.forEach(function (m) {
+      var url = map['chat:' + m.messageId];
+      CHAT.thumbs[m.messageId] = url || '';
+      var b = $('[data-cimg="' + m.messageId + '"]');
+      if (b) b.innerHTML = url ? '<img src="' + h(url) + '" alt="">' : icon('image') + '<span class="small">' + h(m.file.name) + '</span>';
+    });
+  }).catch(function () {});
+}
+
+function mergeChat(msgs) {
+  var byId = {}, changed = false;
+  CHAT.list.forEach(function (m, i) { byId[m.messageId] = i; });
+  msgs.forEach(function (m) {
+    if (byId[m.messageId] !== undefined) { if (JSON.stringify(CHAT.list[byId[m.messageId]]) !== JSON.stringify(m)) { CHAT.list[byId[m.messageId]] = m; changed = true; } }
+    else { CHAT.list.push(m); changed = true; }
+  });
+  if (changed) CHAT.list.sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1; });
+  return changed;
+}
+
+function pollChat() {
+  if (!CHAT || APP.route !== 'chat' || document.hidden || CHAT.polling) return;
+  CHAT.polling = true;
+  api('api_chatList', { since: CHAT.now }).then(function (d) {
+    CHAT.now = d.now;
+    var fromOthers = d.messages.some(function (m) { return m.author !== CHAT.me && !m.deleted; });
+    if (mergeChat(d.messages)) drawChat(false);
+    if (fromOthers) seenChat();
+  }).catch(function () { /* try again next tick */ }).then(function () { if (CHAT) CHAT.polling = false; });
+}
+
+function seenChat() { if (CHAT) api('api_chatSeen', CHAT.now).catch(function () {}); }
+
+function loadOlder() {
+  var first = CHAT.list[0];
+  if (!first) return;
+  api('api_chatList', { before: first.createdAt }).then(function (d) {
+    var box = $('#chatList'), h0 = box.scrollHeight;
+    CHAT.more = d.more;
+    Object.assign(CHAT.people, d.people || {});
+    mergeChat(d.messages);
+    drawChat(false);
+    box.scrollTop = box.scrollHeight - h0;
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+
+function sendChat() {
+  var ta = $('#chatTxt'), v = ta.value.trim();
+  if (!v) return;
+  ta.value = ''; ta.style.height = 'auto';
+  var temp = { messageId: 'tmp-' + Date.now(), author: CHAT.me, text: v, createdAt: new Date().toISOString(), deleted: false, file: null, pending: true };
+  CHAT.list.push(temp); drawChat(true);
+  api('api_chatSend', v).then(function (m) {
+    CHAT.list = CHAT.list.filter(function (x) { return x !== temp; });
+    mergeChat([m]); drawChat(true);
+  }).catch(function (e) {
+    CHAT.list = CHAT.list.filter(function (x) { return x !== temp; }); drawChat(false);
+    ta.value = v; toast(errMsg(e), true);
+  });
+}
+
+function sendChatFiles(files) {
+  var bad = files.map(checkFile).filter(Boolean);
+  if (bad.length) return toast(bad[0], true);
+  var cap = $('#chatTxt').value.trim();
+  $('#chatTxt').value = '';
+  CHAT.sending += files.length; drawChat(true);
+  runPool(files, 3, function (f, i) {
+    return uploadFile(f, { kind: 'chat', caption: i === 0 ? cap : '' }).then(function (res) {
+      CHAT.sending--; if (res && res.message) mergeChat([res.message]); drawChat(true);
+    }).catch(function (e) { CHAT.sending--; drawChat(false); toast(f.name + ': ' + errMsg(e), true); });
+  });
 }
 </script>
 

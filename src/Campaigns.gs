@@ -42,7 +42,7 @@ function campaignDto_(c, withDetail) {
   var o = {
     campaignId: c.campaignId, name: c.name, active: bool_(c.active), shared: bool_(c.shared) && !!c.folderId, createdAt: c.createdAt,
     requests: reqs.length, tasks: tasks.length, done: tasks.filter(function (t) { return t.status === STATUS.COMPLETED; }).length,
-    required: tasks.reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0),
+    required: tasks.reduce(function (s, t) { return s + filesRequired_(t); }, 0),
     approved: cc.approved, categories: cc.categories,
     departments: reqs.map(function (r) { return r.department; }).filter(function (x, i, a) { return x && a.indexOf(x) === i; })
   };
@@ -52,13 +52,13 @@ function campaignDto_(c, withDetail) {
       return { requirementId: r.requirementId, title: r.title, department: r.department, requesterName: r.requesterName, submittedAt: r.submittedAt,
         internal: !!r.submittedBy && !r.email && r.department === 'Graphics team', firstTaskId: ts[0] ? ts[0].taskId : '',
         status: ts.length ? requesterStatus_(ts) : 'Received', approved: categoryCounts_(ts).approved,
-        required: ts.reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0) };
+        required: ts.reduce(function (s, t) { return s + filesRequired_(t); }, 0) };
     }).sort(function (a, b) { return a.submittedAt < b.submittedAt ? 1 : -1; });
     var dc = {}; dbAll_('CreativeSubmissions').forEach(function (d) { (dc[d.taskId] = dc[d.taskId] || []).push(d); });
     o.taskList = tasks.map(function (t) {
       var ds = dc[t.taskId] || [];
       return { taskId: t.taskId, title: t.title, status: t.status, category: t.creativeType || '', assigneeName: t.assigneeEmail ? displayName_(t.assigneeEmail) : '',
-        required: Number(t.deliverablesRequired) || 0, approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
+        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
         dueDate: t.dueDate, dueTime: t.dueTime, requirementId: t.requirementId, overdue: isOverdue_(t), hold: t.status === STATUS.ON_HOLD };
     }).sort(function (a, b) { return a.dueDate > b.dueDate ? 1 : -1; });
   }

@@ -12,8 +12,9 @@ function api_listTeam() {
     return {
       users: dbAll_('Users').map(function (x) {
         var mine = tasks.filter(function (t) { return t.assigneeEmail === x.email; });
+        var pf = profileOf_(x.email);
         return Object.assign(pick_(x, ['userId', 'email', 'name', 'role', 'createdAt', 'designation']), {
-          active: bool_(x.active),
+          active: bool_(x.active), nickname: pf.nickname || '', photo: pf.photo || '', portfolioUrl: pf.portfolioUrl || '',
           activeTasks: mine.filter(function (t) { return CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.APPROVED; }).length,
           completed: mine.filter(function (t) { return t.status === STATUS.COMPLETED; }).length
         });
@@ -46,7 +47,7 @@ function api_saveUser(input) {
         dbInsert_('Users', { userId: 'USR-' + uuid_().slice(0, 8), email: email, name: name, role: role, active: true,
           createdAt: nowIso_(), updatedAt: nowIso_(), designation: designation });
         var s = settings_();
-        if (s.internalUrl) sendMail_(email, 'You’ve been added to the graphics team portal',
+        if (s.internalUrl && s.emailNotifications && mailRule_('team_invite')) sendMail_(email, 'You’ve been added to the graphics team portal',
           'Hi ' + name + ',\n\n' + u.name + ' added you to the ' + s.portalName + ' as ' + (role === ROLES.LEADER ? 'a team leader' : 'a designer') +
           '.\nSign in with your company Google account.', { label: 'Open the portal', url: s.internalUrl });
       }
@@ -118,7 +119,8 @@ function api_getSettings() {
       mailQuotaRemaining: quota,
       lastBackupAt: getSettingRaw_('lastBackupAt') || '',
       statuses: STATUS_ORDER,
-      transitions: MANUAL_TRANSITIONS
+      transitions: MANUAL_TRANSITIONS,
+      emailKinds: EMAIL_KINDS
     };
   });
 }
@@ -151,6 +153,11 @@ function api_saveSettings(patch) {
         var ds = typeof v === 'string' ? parseJson_(v, null) : v;
         if (!Array.isArray(ds) || !ds.length || ds.length > 20) throw AppError_('VALIDATION', 'Add between 1 and 20 designations.');
         clean[k] = ds.map(function (d) { return { name: str_(d && d.name, 60, 'Designation', true), points: int_(d && d.points, 0, 1000, 'Points') }; });
+      } else if (type === 'emailRules') {
+        var er = typeof v === 'string' ? parseJson_(v, null) : v;
+        if (!er || typeof er !== 'object' || Array.isArray(er)) throw AppError_('VALIDATION', 'Email settings are not valid.');
+        clean[k] = {};
+        EMAIL_KINDS.forEach(function (x) { if (!x.always && er.hasOwnProperty(x.id)) clean[k][x.id] = !!er[x.id]; });
       } else if (type === 'json') {
         var parsed = typeof v === 'string' ? parseJson_(v, null) : v;
         clean[k] = validateCreativeTypes_(parsed);

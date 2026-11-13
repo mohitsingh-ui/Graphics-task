@@ -1340,6 +1340,197 @@ scenario('Already-assigned tasks moved into a campaign (existing or new) → fil
   err(call(LEADER, 'api_setTasksCampaign', [solo.taskId], 'CMP-NOPE', ''), 'NOT_FOUND');
 });
 
+scenario('Co-owners: requester adds a colleague by email; both see, edit and approve the same request; leader can add too', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Priya', department: 'Marketing', email: 'priya@example.org', brief: 'Republic Day banner set', preferredDate: future(6), quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(5), priority: 'High' }));
+  // Priya adds Rahul
+  err(call('', 'api_trackAddOwner', sub.trackToken, sub.requirementId, 'not-an-email'), 'VALIDATION');
+  const before = state.mail.length;
+  const o = ok(call('', 'api_trackAddOwner', sub.trackToken, sub.requirementId, 'Rahul@Example.org'));
+  assert.deepStrictEqual(Array.from(o.coOwners), ['rahul@example.org']);
+  err(call('', 'api_trackAddOwner', sub.trackToken, sub.requirementId, 'priya@example.org'), 'VALIDATION');
+  const mail = state.mail.slice(before).find(m => m.to === 'rahul@example.org');
+  assert.ok(mail && /added you as an owner/.test(mail.body));
+  const rahul = tokenFrom(mail.body);
+  // Rahul sees it in his own My requests and can edit it
+  const mine = ok(call('', 'api_getMyRequests', [rahul]));
+  const r0 = mine.requests.find(x => x.requirementId === sub.requirementId);
+  assert.ok(r0 && r0.canEdit); assert.strictEqual(r0.raisedBy, 'priya@example.org');
+  ok(call('', 'api_trackEditRequest', [rahul], sub.requirementId, { brief: 'Republic Day banner set — use the tricolour ribbon', preferredDate: future(7) }));
+  assert.ok(ok(call(A, 'api_getTask', tid)).task.brief.includes('tricolour'), 'designer sees the new brief');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(n => /Request updated/.test(n.title)));
+  assert.ok(ok(call(LEADER, 'api_getTask', tid)).activity.some(a => a.action === 'request_edited'));
+  err(call('', 'api_trackEditRequest', [rahul], sub.requirementId, { preferredDate: '2020-01-01' }), 'VALIDATION');
+  // Lost link: "email me my link" works for a co-owner
+  const n0 = state.mail.length;
+  ok(call('', 'api_sendTrackLink', 'rahul@example.org'));
+  assert.ok(state.mail.slice(n0).some(m => m.to === 'rahul@example.org'));
+  // the review email goes to both owners; Rahul approves from My requests
+  const v = upload(A, { kind: 'version', taskId: tid, title: 'RD banner' }, 'rd.png', png(300)).versionId;
+  const m1 = state.mail.length;
+  ok(call(A, 'api_submitForApproval', tid, [v]));
+  const toList = state.mail.slice(m1).filter(m => /Please review/.test(m.subject)).map(m => m.to).sort();
+  assert.deepStrictEqual(toList, ['priya@example.org', 'rahul@example.org']);
+  ok(call('', 'api_trackDecide', [rahul], v, 'approved', ''));
+  const dec = env.ctx.dbFind_('ApprovalDecisions', d => d.versionId === v)[0];
+  assert.strictEqual(dec.reviewerEmail, 'rahul@example.org');
+  // both get the "ready" email; editing a finished request is refused
+  assert.ok(state.mail.filter(m => /Your creative is ready/.test(m.subject) && m.body.includes(sub.requirementId) || (m.to === 'rahul@example.org' && /Your creative is ready/.test(m.subject))).length >= 1);
+  err(call('', 'api_trackEditRequest', sub.trackToken, sub.requirementId, { brief: 'one more change please' }), 'INVALID_STATE');
+  // leader adds and removes owners from the task page
+  ok(call(LEADER, 'api_setRequestOwners', sub.requirementId, { add: 'neha@example.org' }));
+  assert.deepStrictEqual(Array.from(ok(call(LEADER, 'api_getTask', tid)).requirement.coOwners), ['rahul@example.org', 'neha@example.org']);
+  err(call(A, 'api_setRequestOwners', sub.requirementId, { add: 'x@example.org' }), 'FORBIDDEN');
+  ok(call('', 'api_trackRemoveOwner', sub.trackToken, sub.requirementId, 'neha@example.org'));
+  err(call('', 'api_trackRemoveOwner', sub.trackToken, sub.requirementId, 'priya@example.org'), 'NOT_FOUND');
+  // a stranger's link can't touch it
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'X', department: 'Sales', email: 'x9@example.org', brief: 'Other thing', preferredDate: future(6), quantity: 1 }));
+  err(call('', 'api_trackAddOwner', other.trackToken, sub.requirementId, 'evil@example.org'), 'NOT_FOUND');
+});
+
+scenario('Sizes: 2 banners × desktop + mobile = 4 files; points count 2 creatives (or 4 when the leader turns that on)', () => {
+  ok(call(LEADER, 'api_saveUser', { email: B, name: 'Bilal Designer', role: 'designer', designation: 'Graphic Designer' }));
+  const d = ok(call(LEADER, 'api_createDirectTask', { title: 'Homepage banners', assigneeEmail: B, dueDate: future(4), quantity: 2, sizes: 'Desktop 1920×600\nMobile 768×900' }));
+  const t = ok(call(B, 'api_getTask', d.taskId)).task;
+  assert.deepStrictEqual(Array.from(t.sizeList), ['Desktop 1920×600', 'Mobile 768×900']);
+  assert.strictEqual(t.filesRequired, 4);
+  err(call(LEADER, 'api_updateTask', d.taskId, { sizes: Array.from({ length: 11 }, (_, i) => 'S' + i).join('\n') }), 'VALIDATION');
+  const before = ok(call(B, 'api_listRewards')).me.breakdown;
+  const ids = ['B1 Desktop', 'B1 Mobile', 'B2 Desktop'].map(n => upload(B, { kind: 'version', taskId: d.taskId, title: n }, n.replace(/\W/g, '') + '.png', png(200)).versionId);
+  ok(call(B, 'api_submitForApproval', d.taskId, ids));
+  ids.forEach(v => ok(call(LEADER, 'api_leaderDecision', v, 'approved', '')));
+  assert.notStrictEqual(ok(call(B, 'api_getTask', d.taskId)).task.status, 'Completed', '3 of 4 files is not done');
+  const last = upload(B, { kind: 'version', taskId: d.taskId, title: 'B2 Mobile' }, 'b2m.png', png(200)).versionId;
+  ok(call(B, 'api_submitForApproval', d.taskId, [last])); ok(call(LEADER, 'api_leaderDecision', last, 'approved', ''));
+  assert.strictEqual(ok(call(B, 'api_getTask', d.taskId)).task.status, 'Completed');
+  const after = ok(call(B, 'api_listRewards')).me.breakdown;
+  assert.strictEqual(Math.round((after.creatives - before.creatives) * 10) / 10, 2, 'two creatives, not four files');
+  assert.strictEqual(Math.round(after.creativePts - before.creativePts), 20, '2 × 10 pts');
+  ok(call(LEADER, 'api_saveSettings', { countEachSize: true })); env.ctx.SETTINGS_MEMO_ = null;
+  const each = ok(call(B, 'api_listRewards')).me.breakdown;
+  assert.strictEqual(Math.round(each.creativePts - before.creativePts), 40, 'every size counts when switched on');
+  ok(call(LEADER, 'api_saveSettings', { countEachSize: false })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
+scenario('Reopen bonus + points history: reopened task pays extra when finished again; history per person; CSV', () => {
+  ok(call(LEADER, 'api_saveSettings', { pointsReopen: 15 })); env.ctx.SETTINGS_MEMO_ = null;
+  const d = ok(call(LEADER, 'api_createDirectTask', { title: 'Ghee pack label', assigneeEmail: A, dueDate: future(3), quantity: 1 }));
+  const v = upload(A, { kind: 'version', taskId: d.taskId, title: 'Label' }, 'l.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', d.taskId, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  const b0 = ok(call(A, 'api_listRewards')).me.breakdown.reopen;
+  ok(call(LEADER, 'api_reopenTask', d.taskId, { reason: 'MRP changed to 899', dueDate: future(2) }));
+  assert.strictEqual(ok(call(A, 'api_listRewards')).me.breakdown.reopen, b0, 'not paid until finished again');
+  const del = ok(call(A, 'api_getTask', d.taskId)).deliverables[0].deliverableId;
+  const v2 = upload(A, { kind: 'version', taskId: d.taskId, title: 'Label', deliverableId: del }, 'l2.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', d.taskId, [v2])); ok(call(LEADER, 'api_leaderDecision', v2, 'approved', ''));
+  assert.strictEqual(ok(call(A, 'api_getTask', d.taskId)).task.status, 'Completed');
+  assert.strictEqual(ok(call(A, 'api_listRewards')).me.breakdown.reopen - b0, 15);
+  // history: designer sees only their own, newest first, with the reopen entry
+  const h = ok(call(A, 'api_pointsHistory', { email: B }));
+  assert.ok(h.rows.length && h.rows.every(x => x.email === A), 'only own rows');
+  const re = h.rows.find(x => x.kind === 'reopen' && x.taskId === d.taskId);
+  assert.ok(re && re.points === 15 && /MRP/.test(re.note));
+  for (let i = 1; i < h.rows.length; i++) assert.ok(h.rows[i - 1].when >= h.rows[i].when, 'sorted');
+  const sum = h.rows.reduce((a, x) => a + x.points, 0);
+  assert.strictEqual(Math.round(sum), Math.round(ok(call(A, 'api_listRewards')).me.total), 'history adds up to the total');
+  // leader: everyone, or one person, or one kind
+  const all = ok(call(LEADER, 'api_pointsHistory', {}));
+  assert.ok(all.rows.some(x => x.email === B) && all.rows.some(x => x.email === A));
+  assert.ok(ok(call(LEADER, 'api_pointsHistory', { email: B, kind: 'creatives' })).rows.every(x => x.email === B && x.kind === 'creatives'));
+  assert.ok(all.people.length >= 2);
+  const csv = ok(call(A, 'api_exportCsv', 'history', {})).csv;
+  assert.ok(csv.includes('Reopened task') && !csv.includes(B));
+  err(call(A, 'api_exportCsv', 'points', {}), 'FORBIDDEN');
+  assert.ok(ok(call(LEADER, 'api_exportCsv', 'points', {})).csv.includes('Reopen points'));
+});
+
+scenario('Profiles: nickname, photo, portfolio, own colours (leader can switch off); tips and team on the profile', () => {
+  err(call(A, 'api_saveProfile', { portfolioUrl: 'javascript:alert(1)' }), 'VALIDATION');
+  err(call(A, 'api_saveProfile', { photo: 'data:text/html;base64,PHNjcmlwdD4=' }), 'VALIDATION');
+  const photo = 'data:image/jpeg;base64,' + Buffer.from('fakejpeg').toString('base64');
+  ok(call(A, 'api_saveProfile', { nickname: 'Ash', photo, portfolioUrl: 'https://behance.net/asha', bio: 'Packaging and type nerd' }));
+  const p = ok(call(A, 'api_getProfile', ''));
+  assert.strictEqual(p.nickname, 'Ash'); assert.strictEqual(p.photo, photo); assert.ok(p.mine);
+  assert.strictEqual(p.completeness.percent, 100);
+  assert.ok(Array.isArray(p.tips) && p.team.some(x => x.email === B));
+  assert.ok(p.recent.length);
+  // teammate sees the public part, no tips
+  const seen = ok(call(B, 'api_getProfile', A));
+  assert.strictEqual(seen.nickname, 'Ash'); assert.ok(!seen.mine && !seen.tips && seen.theme === undefined);
+  assert.strictEqual(ok(call(LEADER, 'api_listRewards')).leaderboard.find(x => x.email === A).nickname, 'Ash');
+  assert.strictEqual(ok(call(A, 'api_bootstrap')).user.nickname, 'Ash');
+  // own colours
+  ok(call(A, 'api_saveProfile', { theme: 'forest' }));
+  state.currentUser = A; env.ctx.SETTINGS_MEMO_ = null; env.ctx.DB_CACHE_ = {};
+  assert.ok(env.ctx.themeCss_().includes('--accent:#2e6f40'), 'designer sees their own theme');
+  state.currentUser = LEADER;
+  assert.ok(!env.ctx.themeCss_().includes('#2e6f40'), 'others keep the team theme');
+  ok(call(LEADER, 'api_saveSettings', { allowPersonalTheme: false })); env.ctx.SETTINGS_MEMO_ = null;
+  state.currentUser = A;
+  assert.ok(!env.ctx.themeCss_().includes('#2e6f40'), 'switched off → team theme for everyone');
+  err(call(A, 'api_saveProfile', { theme: 'plum' }), 'FORBIDDEN');
+  ok(call(A, 'api_saveProfile', { nickname: 'Ashu' }), 'other fields still save');
+  ok(call(LEADER, 'api_saveSettings', { allowPersonalTheme: true })); env.ctx.SETTINGS_MEMO_ = null;
+  ok(call(A, 'api_saveProfile', { theme: '' }));
+});
+
+scenario('Team chat: messages and files for the whole team, unread count, delete rules, leader can switch it off', () => {
+  const m1 = ok(call(A, 'api_chatSend', 'New Diwali references are up — check the Pinterest board https://pin.it/abc'));
+  err(call(A, 'api_chatSend', '   '), 'VALIDATION');
+  const first = ok(call(B, 'api_chatList', {}));
+  assert.ok(first.messages.some(m => m.messageId === m1.messageId) && first.people[A].nickname === 'Ashu');
+  assert.ok(ok(call(B, 'api_getNotifications')).chatUnread >= 1);
+  ok(call(B, 'api_chatSeen', first.now));
+  assert.strictEqual(ok(call(B, 'api_getNotifications')).chatUnread, 0);
+  // a file with a caption
+  const up = upload(B, { kind: 'chat', caption: 'Moodboard' }, 'mood.png', png(500));
+  assert.strictEqual(up.message.text, 'Moodboard'); assert.ok(up.message.file.isImage);
+  const since = ok(call(A, 'api_chatList', { since: first.now }));
+  assert.ok(since.messages.some(m => m.messageId === up.message.messageId) && !since.people);
+  assert.ok(ok(call(A, 'api_getThumbs', [{ kind: 'chat', id: up.message.messageId }]))['chat:' + up.message.messageId] !== undefined);
+  assert.ok(ok(call(LEADER, 'api_getAsset', 'chat', up.message.messageId, 'original')).base64);
+  // delete: own yes, someone else's no, leader yes
+  err(call(A, 'api_chatDelete', up.message.messageId), 'FORBIDDEN');
+  ok(call(A, 'api_chatDelete', m1.messageId));
+  ok(call(LEADER, 'api_chatDelete', up.message.messageId));
+  const after = ok(call(A, 'api_chatList', {})).messages;
+  assert.ok(after.find(m => m.messageId === m1.messageId).deleted && !after.find(m => m.messageId === up.message.messageId).file);
+  err(call(LEADER, 'api_getAsset', 'chat', up.message.messageId, 'original'), 'NOT_FOUND');
+  // nobody outside the team
+  err(call('stranger@gmail.com', 'api_chatList', {}));
+  // no emails from chat
+  assert.ok(!state.mail.some(m => /Diwali references/.test(m.body)));
+  // leader turns chat off
+  ok(call(LEADER, 'api_saveSettings', { teamChat: false })); env.ctx.SETTINGS_MEMO_ = null;
+  err(call(A, 'api_chatSend', 'hello?'), 'FORBIDDEN');
+  assert.strictEqual(ok(call(A, 'api_bootstrap')).teamChat, false);
+  ok(call(LEADER, 'api_saveSettings', { teamChat: true })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
+scenario('Email switches: the leader turns individual automatic emails off; the bell still shows them', () => {
+  const kinds = ok(call(LEADER, 'api_getSettings')).emailKinds;
+  assert.ok(kinds.find(k => k.id === 'req_link').always);
+  err(call(LEADER, 'api_saveSettings', { emailRules: 'nope' }), 'VALIDATION');
+  ok(call(LEADER, 'api_saveSettings', { emailRules: { req_received: false, task_assigned: false, req_link: false, bogus: false } }));
+  env.ctx.SETTINGS_MEMO_ = null;
+  const saved = ok(call(LEADER, 'api_getSettings')).settings.emailRules;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(saved)), { req_received: false, task_assigned: false }, 'always-on and unknown keys ignored');
+  const n = state.mail.length;
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Q', department: 'Sales', email: 'q@example.org', brief: 'Quiet one', preferredDate: future(5), quantity: 1 }));
+  assert.ok(!state.mail.slice(n).some(m => m.to === 'q@example.org'), 'no confirmation email');
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  const n2 = state.mail.length;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(5), priority: 'Low' }));
+  assert.ok(!state.mail.slice(n2).some(m => m.to === A), 'no assignment email');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(x => x.type === 'task_assigned' && x.title.includes('Quiet one') || x.route === 'task/' + tid), 'still in the bell');
+  // the "my link" email can't be switched off
+  const n3 = state.mail.length;
+  ok(call('', 'api_sendTrackLink', 'q@example.org'));
+  assert.ok(state.mail.slice(n3).some(m => m.to === 'q@example.org'));
+  ok(call(LEADER, 'api_saveSettings', { emailRules: {} })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

@@ -14,7 +14,7 @@ var SCHEMA = {
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId', 'coOwners'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
@@ -22,7 +22,7 @@ var SCHEMA = {
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
     'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink',
-    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints'],
+    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -43,11 +43,14 @@ var SCHEMA = {
   Rewards: ['rewardId', 'userEmail', 'badge', 'points', 'reason', 'taskId', 'givenBy', 'givenAt'],
   ReviewBatches: ['batchId', 'tokenHash', 'title', 'versionIds', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
   Campaigns: ['campaignId', 'name', 'folderId', 'shared', 'active', 'createdBy', 'createdAt', 'updatedAt'],
-  TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt']
+  TaskShares: ['shareId', 'tokenHash', 'taskId', 'note', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt', 'lastOpenedAt'],
+  // One row per team member: what they set on their own profile (kept out of Users so that table stays small).
+  Profiles: ['email', 'nickname', 'photo', 'portfolioUrl', 'bio', 'theme', 'accentColor', 'chatSeenAt', 'updatedAt'],
+  ChatMessages: ['messageId', 'authorEmail', 'text', 'fileId', 'fileName', 'mimeType', 'sizeBytes', 'createdAt', 'deletedAt']
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 10;
+var SCHEMA_VERSION = 11;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -144,6 +147,11 @@ var DEFAULT_SETTINGS = {
   pointsOnTime: 20,          // per task completed by its deadline (hold time not counted)
   pointsFirstTime: 5,        // per creative approved without any changes
   pointsRejected: 0,         // taken off per rejected creative (0 = no penalty)
+  pointsReopen: 10,          // extra for the designer each time a finished task is reopened for changes (paid when it's finished again)
+  countEachSize: false,      // false: a creative made in 2–3 sizes earns points once; true: every size file counts as its own creative
+  allowPersonalTheme: true,  // team members may pick their own colours on their profile
+  teamChat: true,            // team chat on/off
+  emailRules: {},            // which automatic emails go out — see EMAIL_KINDS; missing key = on
   theme: 'rosier',           // colour theme for every page (see THEMES)
   accentColor: '',           // optional custom accent colour (#rrggbb) on top of the theme
   creativeTypes: [
@@ -200,8 +208,39 @@ var EDITABLE_SETTINGS = {
   sendReviewLinkToRequester: 'boolean', autoCompleteOnApproval: 'boolean', workloadThreshold: 'number',
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
-  creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number'
+  creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number',
+  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', emailRules: 'emailRules'
 };
+
+/**
+ * Every automatic email, for Settings → Emails. The leader turns each one on or off;
+ * in-app notifications (the bell) are always kept. "always" ones can't be turned off.
+ * who: team | requester
+ */
+var EMAIL_KINDS = [
+  { id: 'requirement_new', who: 'team', label: 'New request received', to: 'Team leaders' },
+  { id: 'task_assigned', who: 'team', label: 'Task assigned or moved to someone', to: 'The designer' },
+  { id: 'task_updated', who: 'team', label: 'Task details changed by the leader', to: 'The designer' },
+  { id: 'approval_submitted', who: 'team', label: 'Creatives sent for approval', to: 'Team leaders' },
+  { id: 'creative_approved', who: 'team', label: 'Creative approved', to: 'The designer' },
+  { id: 'creative_changes', who: 'team', label: 'Changes asked / creative rejected', to: 'The designer' },
+  { id: 'task_completed', who: 'team', label: 'Task completed', to: 'The designer' },
+  { id: 'task_reopened', who: 'team', label: 'Task reopened for changes', to: 'The designer' },
+  { id: 'task_status', who: 'team', label: 'Task on hold / resumed / status changed', to: 'The designer' },
+  { id: 'task_due', who: 'team', label: 'Due soon and overdue reminders', to: 'Designer (+ leaders when overdue)' },
+  { id: 'comment', who: 'team', label: 'New comment on a task', to: 'Designer / leaders' },
+  { id: 'reward', who: 'team', label: 'Reward received', to: 'The designer' },
+  { id: 'shared_info', who: 'team', label: 'Details received through a shared task link', to: 'Designer / leaders' },
+  { id: 'change_request', who: 'team', label: 'Requester asks changes / edits a request', to: 'Team leaders' },
+  { id: 'task_deleted', who: 'team', label: 'Task deleted', to: 'The designer' },
+  { id: 'team_invite', who: 'team', label: 'Welcome email when someone is added to the team', to: 'The new member' },
+  { id: 'req_received', who: 'requester', label: 'Confirmation with the reference ID', to: 'Requester' },
+  { id: 'req_review', who: 'requester', label: 'Creatives ready for their review', to: 'Requester' },
+  { id: 'req_hold', who: 'requester', label: '“We need something from you” (task on hold)', to: 'Requester' },
+  { id: 'req_ready', who: 'requester', label: 'Request completed — final files ready', to: 'Requester' },
+  { id: 'req_coowner', who: 'requester', label: 'Added as a co-owner of a request', to: 'The added person' },
+  { id: 'req_link', who: 'requester', label: 'Their “My requests” link when they ask for it', to: 'Requester', always: true }
+];
 
 /** Drive folders created under the root. */
 var DRIVE_FOLDERS = {
@@ -1017,11 +1056,45 @@ function notify_(emails, type, title, body, route, sendEmail) {
       notificationId: 'NTF-' + uuid_(), recipientEmail: email, type: type, title: title, body: body,
       route: route || '', createdAt: nowIso_(), readAt: ''
     });
-    if (sendEmail !== false && s.emailNotifications) {
+    if (sendEmail !== false && s.emailNotifications && mailRule_(NOTIFY_KIND_[type] || type)) {
       var link = s.internalUrl ? s.internalUrl + '?p=app&r=' + encodeURIComponent(route || '') : '';
       sendMail_(email, title, body, link ? { label: 'Open in portal', url: link } : null);
     }
   });
+}
+
+/** Notification type → the email switch in Settings → Emails (EMAIL_KINDS). */
+var NOTIFY_KIND_ = {
+  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', changes_requested: 'creative_changes',
+  task_overdue: 'task_due', task_due_soon: 'task_due', final_link: 'task_completed', request_edited: 'change_request'
+};
+
+/** True when the leader has this automatic email switched on (Settings → Emails). Unknown kinds are on. */
+function mailRule_(kind) {
+  if (!kind) return true;
+  var k = EMAIL_KINDS.filter(function (x) { return x.id === kind; })[0];
+  if (!k || k.always) return true;
+  var rules = settings_().emailRules || {};
+  return rules[kind] !== false;
+}
+
+/** Everyone who owns a request: the person who raised it plus anyone added as a co-owner. */
+function requesterEmails_(r) {
+  var out = [];
+  [r && r.email].concat(coOwnersOf_(r)).forEach(function (e) { e = String(e || '').toLowerCase().trim(); if (e && out.indexOf(e) === -1) out.push(e); });
+  return out;
+}
+
+function coOwnersOf_(r) {
+  return String((r && r.coOwners) || '').split(/[\s,;]+/).map(function (e) { return e.toLowerCase().trim(); }).filter(Boolean);
+}
+
+/** Email the requester (and co-owners) if that kind of email is switched on. */
+function mailRequesters_(r, kind, subject, body, button) {
+  if (!settings_().emailNotifications || !mailRule_(kind)) return 0;
+  var list = requesterEmails_(r);
+  list.forEach(function (e) { sendMail_(e, subject, body, typeof button === 'function' ? button(e) : button); });
+  return list.length;
 }
 
 var MAIL_QUEUE_ = [];
@@ -1063,7 +1136,10 @@ function api_getNotifications() {
     var u = currentUser_();
     var mine = dbFind_('Notifications', function (n) { return n.recipientEmail === u.email; })
       .sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+    var chat = 0;
+    try { chat = chatUnread_(u.email); } catch (e) { chat = 0; }
     return {
+      chatUnread: chat,
       unread: mine.filter(function (n) { return !n.readAt; }).length,
       items: mine.slice(0, 40).map(function (n) {
         return pick_(n, ['notificationId', 'type', 'title', 'body', 'route', 'createdAt', 'readAt']);
@@ -1382,7 +1458,7 @@ function notifyNewRequirement_(requirementId) {
     req.requesterName + ' (' + req.department + ') needs ' + req.quantity + ' creative(s) by ' + dueText_(req.preferredDate, req.preferredTime) +
     '.\n\n' + String(req.brief).slice(0, 400) + '\n\n' + files + ' reference file(s) attached.',
     task ? 'task/' + task.taskId : 'requirements');
-  if (settings_().emailRequesterOnSubmit && req.email) {
+  if (settings_().emailRequesterOnSubmit && req.email && mailRule_('req_received') && settings_().emailNotifications) {
     var link = trackUrl_(issueTrackToken_(req.email));
     sendMail_(req.email, 'We’ve got your request (' + requirementId + ')',
       'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" has reached the graphics team.\n' +
@@ -1421,13 +1497,30 @@ function taskDeliverables_(taskId) {
   return dbFind_('CreativeSubmissions', function (d) { return d.taskId === taskId; });
 }
 
+/** Sizes the leader asked for, e.g. ["Desktop 1920×600", "Mobile 768×900"]. */
+function sizesOf_(t) {
+  return String((t && t.sizes) || '').split(/\n|,/).map(function (x) { return x.trim(); }).filter(Boolean);
+}
+
+/** Clean list of sizes from the leader (one per line or comma separated). */
+function cleanSizes_(v) {
+  var list = (Array.isArray(v) ? v : String(v || '').split(/\n|,/)).map(function (x) { return String(x).trim(); }).filter(Boolean);
+  if (list.length > 10) throw AppError_('VALIDATION', 'Up to 10 sizes per task.');
+  return list.map(function (x) { return str_(x, 60, 'Size', true); }).join('\n');
+}
+
+/** Files to upload: creatives × sizes (5 banners in desktop + mobile = 10 files). */
+function filesRequired_(t) {
+  return Math.max(1, Number(t.deliverablesRequired) || 1) * Math.max(1, sizesOf_(t).length);
+}
+
 /** Re-derive the task status from its deliverables. Caller holds the lock. */
 function recomputeTaskStatus_(taskId, actor) {
   var task = dbGet_('Tasks', taskId);
   if (!task) return null;
   if (task.status === STATUS.ON_HOLD) {
     // On hold (e.g. waiting for the NI table): once every creative is approved, the hold ends and the task completes.
-    var hd = taskDeliverables_(taskId), need = Math.max(1, Number(task.deliverablesRequired) || 1);
+    var hd = taskDeliverables_(taskId), need = filesRequired_(task);
     var allOk = hd.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length >= need &&
       !hd.some(function (d) { return d.status === DSTATUS.CHANGES || d.status === DSTATUS.AWAITING; });
     if (!allOk) return task.status;
@@ -1438,7 +1531,7 @@ function recomputeTaskStatus_(taskId, actor) {
   if (PRE_ASSIGN.indexOf(task.status) !== -1) return task.status;
 
   var dels = taskDeliverables_(taskId);
-  var required = Math.max(1, Number(task.deliverablesRequired) || 1);
+  var required = filesRequired_(task);
   var approved = dels.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length;
   var changes = dels.filter(function (d) { return d.status === DSTATUS.CHANGES; }).length;
   var awaiting = dels.filter(function (d) { return d.status === DSTATUS.AWAITING; });
@@ -1484,17 +1577,19 @@ function completeTask_(task, actor, note) {
     });
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
-      if (settings_().emailNotifications && req.email) {
+      if (settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
         var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
           .map(function (t) { return t.finalLink; });
         if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
         var folderUrl = finalFolderUrl_(req);
         if (folderUrl) finals.unshift(folderUrl);
-        var track = trackUrl_(issueTrackToken_(req.email));
-        sendMail_(req.email, 'Your creative is ready (' + req.requirementId + ')',
-          'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
-          (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
-          '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+        requesterEmails_(req).forEach(function (em) {
+          var track = trackUrl_(issueTrackToken_(em));
+          sendMail_(em, 'Your creative is ready (' + req.requirementId + ')',
+            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
+            (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
+            '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+        });
       }
     }
   }
@@ -1504,7 +1599,7 @@ function completeTask_(task, actor, note) {
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
   'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'finalLink', 'priority',
-  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints'];
+  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes'];
 
 function taskDto_(t, user, extra) {
   var o = pick_(t, TASK_FIELDS_ALL);
@@ -1513,6 +1608,7 @@ function taskDto_(t, user, extra) {
   o.hold = t.status === STATUS.ON_HOLD ? { reason: t.holdReason || '', party: t.holdParty || 'internal', partyLabel: HOLD_PARTIES[t.holdParty] || HOLD_PARTIES.internal,
     dept: t.holdDept || '', since: t.holdSince || '' } : null;
   o.heldDays = Math.round((Number(t.heldMs) || 0) / 864e5 * 10) / 10;
+  o.sizeList = sizesOf_(t); o.filesRequired = filesRequired_(t);
   o.reopenedAt = t.reopenedAt || ''; o.reopenReason = t.reopenReason || ''; o.reopenCount = Number(t.reopenCount) || 0;
   if (isLeader_(user)) {
     o.assigneeEmail = t.assigneeEmail;
@@ -1540,7 +1636,8 @@ function api_bootstrap() {
     var u = currentUser_();
     var s = settings_();
     return {
-      user: { email: u.email, name: u.name, role: u.role },
+      user: (function () { var pf = profileOf_(u.email); return { email: u.email, name: u.name, role: u.role, nickname: pf.nickname || '', photo: pf.photo || '' }; })(),
+      teamChat: !!s.teamChat, allowPersonalTheme: !!s.allowPersonalTheme, countEachSize: !!s.countEachSize,
       companyName: s.companyName, portalName: s.portalName,
       priorities: s.priorities, statuses: STATUS_ORDER, progressSteps: PROGRESS_STEPS,
       departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
@@ -1758,7 +1855,7 @@ function api_getTask(taskId) {
       return {
         taskId: leader || mine ? x.taskId : '', title: x.title, status: x.status, mine: mine,
         assigneeName: x.assigneeEmail ? (leader || mine ? displayName_(x.assigneeEmail) : 'Another designer') : 'Not assigned',
-        required: Number(x.deliverablesRequired) || 0, approved: deliverableCounts_(x.taskId).deliverablesApproved
+        required: filesRequired_(x), approved: deliverableCounts_(x.taskId).deliverablesApproved
       };
     }) : [];
 
@@ -1769,7 +1866,7 @@ function api_getTask(taskId) {
         requirementId: req.requirementId || '', requesterName: req.requesterName || '', department: req.department || '',
         email: req.email || '', phone: leader ? req.phone || '' : '', submittedAt: req.submittedAt || '',
         platform: req.platform || '', preferredDate: req.preferredDate || '', preferredTime: req.preferredTime || '', priorityRequested: req.priorityRequested || '',
-        quantity: req.quantity || '', typeFields: typeFields
+        quantity: req.quantity || '', typeFields: typeFields, coOwners: coOwnersOf_(req)
       },
       attachments: attachments,
       deliverables: deliverables,
@@ -1859,7 +1956,7 @@ function api_assignTask(taskId, input) {
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
-        bonusPoints: input.bonusPoints });
+        bonusPoints: input.bonusPoints, sizes: input.sizes });
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -1888,7 +1985,8 @@ function api_updateTask(taskId, patchIn) {
       referenceUrls: function (v) { return urls_(v).join('\n'); },
       creativeType: function (v) { return str_(v, 80, 'Category', false); },
       folderPath: function (v) { return cleanPath_(str_(v, 250, 'Folder', false)); },
-      bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); }
+      bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); },
+      sizes: function (v) { return cleanSizes_(v); }
     };
     var patch = {};
     Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
@@ -1911,7 +2009,7 @@ function api_updateTask(taskId, patchIn) {
             changed.filter(function (c) { return c !== 'internalNotes'; }).join(', ') + '.', 'task/' + t.taskId, false);
         }
       }
-      if (patch.deliverablesRequired) recomputeTaskStatus_(t.taskId, u);
+      if (patch.deliverablesRequired || patch.sizes !== undefined) recomputeTaskStatus_(t.taskId, u);
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -1975,11 +2073,13 @@ function holdTask_(t, u, o) {
   notify_(mail, 'task_status', 'On hold: ' + t.title, body, 'task/' + t.taskId, true);
   notify_(leaderEmails_().filter(function (e) { return e !== (u && u.email) && mail.indexOf(e) === -1; }), 'task_status', 'On hold: ' + t.title, body + '\n\nPut on hold by ' + who + '.', 'task/' + t.taskId, false);
   var req = dbGet_('Requirements', t.requirementId);
-  if (o.notifyRequester && party !== 'internal' && req && req.email) {
-    var link = trackUrl_(issueTrackToken_(req.email));
-    sendMail_(req.email, 'We need something from you: ' + req.title + ' (' + req.requirementId + ')',
-      'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" is on hold until we get this:\n\n' + o.reason +
-      (o.dept ? '\n\nFrom: ' + o.dept : '') + '\n\nThe design work so far is ready for you to see. Send the details from your requests page:\n' + link, { label: 'Send the details', url: link });
+  if (o.notifyRequester && party !== 'internal' && req && requesterEmails_(req).length && mailRule_('req_hold') && settings_().emailNotifications) {
+    requesterEmails_(req).forEach(function (em) {
+      var link = trackUrl_(issueTrackToken_(em));
+      sendMail_(em, 'We need something from you: ' + req.title + ' (' + req.requirementId + ')',
+        'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" is on hold until we get this:\n\n' + o.reason +
+        (o.dept ? '\n\nFrom: ' + o.dept : '') + '\n\nThe design work so far is ready for you to see. Send the details from your requests page:\n' + link, { label: 'Send the details', url: link });
+    });
   }
 }
 
@@ -2130,6 +2230,7 @@ function assignInternal_(u, t, o) {
   if (startDate) patch.startDate = startDate;
   if (instructions !== undefined) patch.instructions = instructions;
   if (o.folderPath !== undefined) patch.folderPath = cleanPath_(o.folderPath);
+  if (o.sizes !== undefined && o.sizes !== null) patch.sizes = cleanSizes_(o.sizes);
   if (o.bonusPoints !== undefined && o.bonusPoints !== '' && o.bonusPoints !== null) patch.bonusPoints = String(int_(o.bonusPoints, 0, 1000, 'Bonus points'));
   var bonus = Number(patch.bonusPoints !== undefined ? patch.bonusPoints : t.bonusPoints) || 0;
   dbUpdate_('Tasks', t.taskId, patch);
@@ -2193,7 +2294,7 @@ function api_divideTask(taskId, input) {
       dbUpdate_('Tasks', t.taskId, { title: partTitle(0), deliverablesRequired: String(clean[0].count),
         creativeType: clean[0].category || t.creativeType, folderPath: clean[0].folderPath || t.folderPath || '', updatedAt: nowIso_() });
       logActivity_(t.taskId, u, 'updated', '', 'divided into ' + n + ' parts', '', 'team');
-      assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note, bonusPoints: clean[0].bonusPoints });
+      assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note, bonusPoints: clean[0].bonusPoints, sizes: input.sizes });
       // Parts 2..n become new tasks
       for (var i = 1; i < n; i++) {
         var newId = nextSeqId_('GFX');
@@ -2208,7 +2309,7 @@ function api_divideTask(taskId, input) {
         });
         dbInsert_('Tasks', copy);
         logActivity_(newId, u, 'created', '', STATUS.READY, 'Divided from ' + t.taskId, 'team');
-        assignInternal_(u, dbGet_('Tasks', newId), { assignee: clean[i].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[i].note, bonusPoints: clean[i].bonusPoints });
+        assignInternal_(u, dbGet_('Tasks', newId), { assignee: clean[i].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[i].note, bonusPoints: clean[i].bonusPoints, sizes: input.sizes });
         ids.push(newId);
       }
       return { taskIds: ids };
@@ -2255,7 +2356,7 @@ function api_createDirectTask(input) {
         });
         if (req0.status === 'Completed') dbUpdate_('Requirements', req0.requirementId, { status: 'In work', updatedAt: now });
         logActivity_(tid, u, 'created', '', STATUS.READY, 'added by the team leader to ' + req0.requirementId, 'team');
-        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints });
+        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
         return { taskId: tid, requirementId: req0.requirementId, campaignId: req0.campaignId || '' };
       }
       if (intoCamp && !dbGet_('Campaigns', intoCamp)) throw AppError_('NOT_FOUND', 'Campaign not found.');
@@ -2276,7 +2377,7 @@ function api_createDirectTask(input) {
         dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now, folderPath: folderPath
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
-      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints });
+      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
       return { taskId: taskId, requirementId: reqId, campaignId: intoCamp || '' };
     });
   });
@@ -2445,7 +2546,7 @@ function api_startUpload(ctx) {
   return respond_(function () {
     ctx = ctx || {};
     var s = settings_();
-    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version', 'share'], 'Upload type');
+    var kind = oneOf_(String(ctx.kind || ''), ['reference', 'taskref', 'version', 'share', 'chat'], 'Upload type');
     var rec = { kind: kind, received: 0, sigChecked: false };
     var folderId;
 
@@ -2476,6 +2577,14 @@ function api_startUpload(ctx) {
       rec.from = str_(ctx.uploaderName, 100, 'Your name', false);
       rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, s.maxPublicUploadMB);
       folderId = sx.task.folderId || ensureFolderId_('references', [String(new Date().getFullYear()), sx.task.requirementId]);
+    } else if (kind === 'chat') {
+      // A file shared in team chat (a reference, a screenshot, a draft).
+      var cu = requireChat_();
+      rateLimit_('chatupload:' + cu.email, 30, 600);
+      rec.owner = cu.email;
+      rec.caption = str_(ctx.caption, 2000, 'Message', false);
+      rec.file = validateFile_(ctx.fileName, ctx.size, s.allowedExtensions, Math.min(s.maxUploadMB, 100));
+      folderId = ensureFolderId_('references', ['Team chat', String(new Date().getFullYear())]);
     } else {
       var u = currentUser_();
       var task = requireTask_(u, ctx.taskId);
@@ -2590,6 +2699,14 @@ function completeUpload_(uploadId, rec, user, file) {
     try { DriveApp.getFileById(file.id).setTrashed(true); } catch (e) { console.warn('Could not remove rejected upload ' + file.id); }
     throw AppError_('VALIDATION', bad);
   }
+  if (rec.kind === 'chat') {
+    return withLock_(function () {
+      var m = dbInsert_('ChatMessages', { messageId: 'MSG-' + uuid_(), authorEmail: rec.owner, text: rec.caption || '', fileId: file.id, fileName: rec.file.name,
+        mimeType: rec.file.mime, sizeBytes: String(rec.file.size), createdAt: nowIso_(), deletedAt: '' });
+      markChatSeen_(rec.owner, m.createdAt);
+      return { done: true, message: chatDto_(m) };
+    });
+  }
   if (rec.kind === 'share') {
     return withLock_(function () {
       var att = dbInsert_('ReferenceFiles', {
@@ -2670,6 +2787,7 @@ function assetRef_(u, kind, id) {
     requireTask_(u, task.taskId);
     return { fileId: a.fileId, mime: a.mimeType, size: a.sizeBytes, name: a.fileName };
   }
+  if (kind === 'chat') return chatAssetRef_(u, id);
   throw AppError_('VALIDATION', 'Unknown file.');
 }
 
@@ -2803,8 +2921,8 @@ function api_submitForApproval(taskId, versionIds) {
 
       var s = settings_();
       var req = dbGet_('Requirements', task.requirementId);
-      if (s.sendReviewLinkToRequester && req && req.email) {
-        sendMail_(req.email, 'Please review: ' + task.title,
+      if (s.sendReviewLinkToRequester && req && requesterEmails_(req).length) {
+        mailRequesters_(req, 'req_review', 'Please review: ' + task.title,
           'Hi ' + req.requesterName + ',\n\nThe graphics team has creative(s) ready for your approval on "' + req.title + '" (' + req.requirementId + ').\n\n' +
           lines.join('\n') + '\n\nOpen each link to approve it or ask for changes. Links expire in ' + s.tokenExpiryDays + ' days.', null);
       }
@@ -3133,8 +3251,9 @@ function api_listTeam() {
     return {
       users: dbAll_('Users').map(function (x) {
         var mine = tasks.filter(function (t) { return t.assigneeEmail === x.email; });
+        var pf = profileOf_(x.email);
         return Object.assign(pick_(x, ['userId', 'email', 'name', 'role', 'createdAt', 'designation']), {
-          active: bool_(x.active),
+          active: bool_(x.active), nickname: pf.nickname || '', photo: pf.photo || '', portfolioUrl: pf.portfolioUrl || '',
           activeTasks: mine.filter(function (t) { return CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.APPROVED; }).length,
           completed: mine.filter(function (t) { return t.status === STATUS.COMPLETED; }).length
         });
@@ -3167,7 +3286,7 @@ function api_saveUser(input) {
         dbInsert_('Users', { userId: 'USR-' + uuid_().slice(0, 8), email: email, name: name, role: role, active: true,
           createdAt: nowIso_(), updatedAt: nowIso_(), designation: designation });
         var s = settings_();
-        if (s.internalUrl) sendMail_(email, 'You’ve been added to the graphics team portal',
+        if (s.internalUrl && s.emailNotifications && mailRule_('team_invite')) sendMail_(email, 'You’ve been added to the graphics team portal',
           'Hi ' + name + ',\n\n' + u.name + ' added you to the ' + s.portalName + ' as ' + (role === ROLES.LEADER ? 'a team leader' : 'a designer') +
           '.\nSign in with your company Google account.', { label: 'Open the portal', url: s.internalUrl });
       }
@@ -3239,7 +3358,8 @@ function api_getSettings() {
       mailQuotaRemaining: quota,
       lastBackupAt: getSettingRaw_('lastBackupAt') || '',
       statuses: STATUS_ORDER,
-      transitions: MANUAL_TRANSITIONS
+      transitions: MANUAL_TRANSITIONS,
+      emailKinds: EMAIL_KINDS
     };
   });
 }
@@ -3272,6 +3392,11 @@ function api_saveSettings(patch) {
         var ds = typeof v === 'string' ? parseJson_(v, null) : v;
         if (!Array.isArray(ds) || !ds.length || ds.length > 20) throw AppError_('VALIDATION', 'Add between 1 and 20 designations.');
         clean[k] = ds.map(function (d) { return { name: str_(d && d.name, 60, 'Designation', true), points: int_(d && d.points, 0, 1000, 'Points') }; });
+      } else if (type === 'emailRules') {
+        var er = typeof v === 'string' ? parseJson_(v, null) : v;
+        if (!er || typeof er !== 'object' || Array.isArray(er)) throw AppError_('VALIDATION', 'Email settings are not valid.');
+        clean[k] = {};
+        EMAIL_KINDS.forEach(function (x) { if (!x.always && er.hasOwnProperty(x.id)) clean[k][x.id] = !!er[x.id]; });
       } else if (type === 'json') {
         var parsed = typeof v === 'string' ? parseJson_(v, null) : v;
         clean[k] = validateCreativeTypes_(parsed);
@@ -3529,9 +3654,9 @@ function pointsReport_(r, table) {
   var people = dbFind_('Users', function (x) { return x.role === ROLES.DESIGNER || (table[x.email.toLowerCase()] && table[x.email.toLowerCase()].period); })
     .map(function (x) {
       var t = table[x.email.toLowerCase()] || { period: 0, total: 0, inPeriod: null };
-      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 } };
+      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } };
       return { name: x.name, email: x.email, designation: x.designation || '', active: bool_(x.active), period: t.period, total: t.total,
-        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 } };
+        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 }, reopen: p.reopen || { n: 0, pts: 0 } };
     }).sort(function (a, b) { return b.period - a.period || b.total - a.total; });
   people.forEach(function (x, i) { x.rank = i + 1; });
   var given = dbAll_('Rewards').filter(function (x) { return inRange_(x.givenAt, r); })
@@ -3553,7 +3678,7 @@ function workDays_(t) {
 /** CSV text for download. kind: tasks | designers | decisions */
 function api_exportCsv(kind, range) {
   return respond_(function () {
-    requireLeader_();
+    if (kind !== 'history') requireLeader_();   // anyone can download their own points history
     var r = reportRange_(range);
     var rows;
     if (kind === 'designers') {
@@ -3563,9 +3688,14 @@ function api_exportCsv(kind, range) {
     } else if (kind === 'points') {
       var pr = computeReport_(r).points;
       rows = [['Rank', 'Designer', 'Email', 'Designation', 'Points in period', 'Points all time', 'Creatives approved', 'Creative points',
-        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points']]
+        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points', 'Reopened tasks', 'Reopen points']]
         .concat(pr.people.map(function (x) { return [x.rank, x.name, x.email, x.designation, x.period, x.total, x.creatives.n, x.creatives.pts,
-          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts]; }));
+          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts, x.reopen.n, x.reopen.pts]; }));
+    } else if (kind === 'history') {
+      var hh = pointsHistory_(currentUser_(), { from: r.from, to: r.to, email: range && range.email, kind: range && range.kind });
+      var nm = {}; dbAll_('Users').forEach(function (x) { nm[x.email.toLowerCase()] = x.name; });
+      rows = [['Date', 'Designer', 'Email', 'Type', 'Points', 'What', 'Task', 'Task title', 'Note']]
+        .concat(hh.rows.map(function (x) { return [x.when, nm[x.email] || x.email, x.email, POINT_KINDS[x.kind], x.points, x.label, x.taskId, x.taskTitle, x.note]; }));
     } else if (kind === 'rewards') {
       rows = [['Given at', 'Designer', 'Email', 'Reward', 'Points', 'Message', 'Task', 'Given by']]
         .concat(computeReport_(r).points.given.map(function (g) { return [g.givenAt, g.userName, g.userEmail, g.badgeLabel, g.points, g.reason, g.taskId, g.givenBy]; }));
@@ -3634,7 +3764,13 @@ function trackKeys_(tokens) {
 }
 
 function ownsRequirement_(keys, r) {
-  return keys.indexOf(String(r.email || '').toLowerCase()) !== -1 || keys.indexOf(('req:' + r.requirementId).toLowerCase()) !== -1;
+  if (keys.indexOf(('req:' + r.requirementId).toLowerCase()) !== -1) return true;
+  return requesterEmails_(r).some(function (e) { return keys.indexOf(e) !== -1; });
+}
+
+/** Which of this link's emails owns the request (for "approved by"), or ''. */
+function ownerKey_(keys, r) {
+  return requesterEmails_(r).filter(function (e) { return keys.indexOf(e) !== -1; })[0] || '';
 }
 
 function trackEmail_(token) {
@@ -3671,7 +3807,7 @@ function api_getMyRequests(token) {
       var ids = {}; tasks.forEach(function (t) { ids[t.taskId] = true; });
       var dels = dbFind_('CreativeSubmissions', function (d) { return ids[d.taskId]; });
       var required = tasks.filter(function (t) { return t.status !== STATUS.CANCELLED; })
-        .reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0);
+        .reduce(function (s, t) { return s + filesRequired_(t); }, 0);
       var awaiting = [];
       dels.forEach(function (d) {
         if (d.status !== DSTATUS.AWAITING) return;
@@ -3705,6 +3841,9 @@ function api_getMyRequests(token) {
           return h ? { reason: h.holdReason, dept: h.holdDept, since: h.holdSince } : null;
         })(),
         reopened: tasks.some(function (t) { return t.reopenedAt && CLOSED.indexOf(t.status) === -1; }),
+        raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r),
+        canEdit: ['Completed', 'Cancelled'].indexOf(requesterStatus_(tasks)) === -1,
+        edit: { title: r.title, brief: r.brief, instructions: r.instructions || '', copyText: r.copyText || '', preferredDate: r.preferredDate || '', preferredTime: r.preferredTime || '' },
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
     });
@@ -3799,12 +3938,15 @@ function trackOpenRequest_(keys, id, reviewer, named) {
   if (!r || !ownsRequirement_(keys, r)) throw AppError_('NOT_FOUND', 'Creative not found.');
   var rq = dbFind_('ApprovalRequests', function (x) { return x.versionId === v.versionId && x.status === 'Open'; })[0];
   if (!rq) throw AppError_('ALREADY_DECIDED', 'This creative is no longer waiting for review.');
-  var em = String(r.email || '').toLowerCase();
+  var em = ownerKey_(keys, r) || String(r.email || '').toLowerCase();
   if (em && (em === String(v.uploadedBy).toLowerCase() || em === String(t.assigneeEmail).toLowerCase())) {
     var me = userByEmail_(em);
     if (!(me && bool_(me.active) && me.role === ROLES.LEADER)) throw AppError_('FORBIDDEN', 'The designer of a creative can’t approve their own work.');
   }
-  if (named) { reviewer.name = r.requesterName || ''; reviewer.email = r.email || ''; }
+  if (named) {
+    var raiser = em === String(r.email || '').toLowerCase();
+    reviewer.name = raiser ? r.requesterName || '' : (userByEmail_(em) || {}).name || em; reviewer.email = em || r.email || '';
+  }
   return rq;
 }
 
@@ -3945,7 +4087,7 @@ function api_sendTrackLink(email) {
     email = email_(email, 'Email', true);
     rateLimit_('tracksend:' + email, 3, 3600);
     rateLimit_('tracksend:all', 60, 600);
-    var has = dbFind_('Requirements', function (r) { return String(r.email).toLowerCase() === email; }).length > 0;
+    var has = dbFind_('Requirements', function (r) { return requesterEmails_(r).indexOf(email) !== -1; }).length > 0;
     if (has) {
       var token = withLock_(function () { return issueTrackToken_(email); });
       sendMail_(email, 'Your graphics requests', 'Here’s your private link to see all your requests and their status:\n\n' + trackUrl_(token) +
@@ -3971,12 +4113,151 @@ function api_setFinalLink(taskId, url) {
       if (url) {
         var req = dbGet_('Requirements', t.requirementId);
         notify_(leaderEmails_().filter(function (e) { return e !== u.email; }), 'final_link', 'Final files link added: ' + t.title, t.taskId + ' → ' + url, 'task/' + t.taskId, false);
-        if (req && req.email && (t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED)) {
-          sendMail_(req.email, 'Final files for “' + req.title + '”', 'Hi ' + req.requesterName + ',\n\nThe final files are ready to download:\n' + url,
+        if (req && (t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED)) {
+          mailRequesters_(req, 'req_ready', 'Final files for “' + req.title + '”', 'Hi ' + req.requesterName + ',\n\nThe final files are ready to download:\n' + url,
             { label: 'Open final files', url: url });
         }
       }
       return { finalLink: url };
+    });
+  });
+}
+
+
+/* ---------- co-owners: more than one person owns a request ---------- */
+
+var MAX_CO_OWNERS = 10;
+
+/**
+ * Adds a co-owner (caller holds the lock). They get their own "My requests"
+ * link by email and from then on see, edit and approve the request like the
+ * person who raised it.
+ */
+function addCoOwner_(r, email, byLabel) {
+  email = email_(email, 'Email', true);
+  var s = settings_();
+  if (s.requireRequesterDomain && s.allowedDomain && email.split('@')[1] !== String(s.allowedDomain).toLowerCase()) {
+    throw AppError_('VALIDATION', 'Only @' + s.allowedDomain + ' email addresses can be added.');
+  }
+  var list = coOwnersOf_(r);
+  if (requesterEmails_(r).indexOf(email) !== -1) throw AppError_('VALIDATION', email + ' already owns this request.');
+  if (list.length >= MAX_CO_OWNERS) throw AppError_('VALIDATION', 'Up to ' + MAX_CO_OWNERS + ' people can be added to one request.');
+  list.push(email);
+  dbUpdate_('Requirements', r.requirementId, { coOwners: list.join(','), updatedAt: nowIso_() });
+  dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; }).forEach(function (t) {
+    logActivity_(t.taskId, { email: byLabel, role: 'requester' }, 'co_owner', '', email, 'Added as a co-owner of the request', 'team');
+  });
+  if (s.emailNotifications && mailRule_('req_coowner')) {
+    var link = trackUrl_(issueTrackToken_(email));
+    sendMail_(email, 'You’ve been added to a graphics request (' + r.requirementId + ')',
+      'Hi,\n\n' + byLabel + ' added you as an owner of the request "' + r.title + '" (' + r.requirementId + ').\n\n' +
+      'You can follow it, edit the details and approve the creatives here:\n' + link, { label: 'Open my requests', url: link });
+  }
+  return list;
+}
+
+function removeCoOwner_(r, email, byLabel) {
+  email = String(email || '').toLowerCase().trim();
+  var list = coOwnersOf_(r);
+  if (list.indexOf(email) === -1) throw AppError_('NOT_FOUND', 'That person isn’t a co-owner of this request.');
+  list = list.filter(function (e) { return e !== email; });
+  dbUpdate_('Requirements', r.requirementId, { coOwners: list.join(','), updatedAt: nowIso_() });
+  dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; }).forEach(function (t) {
+    logActivity_(t.taskId, { email: byLabel, role: 'requester' }, 'co_owner', email, '', 'Removed as a co-owner', 'team');
+  });
+  return list;
+}
+
+function ownersDto_(r) { return { raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r) }; }
+
+/** Requester (or a co-owner) adds someone by email from "My requests". */
+function api_trackAddOwner(token, requirementId, email) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackowner:' + keys.join(',').slice(0, 120), 20, 3600);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      addCoOwner_(x.r, email, ownerKey_(keys, x.r) || x.r.requesterName || 'The requester');
+      return ownersDto_(dbGet_('Requirements', x.r.requirementId));
+    });
+  });
+}
+
+/** Any owner can take a co-owner off (also themselves). The person who raised it always stays. */
+function api_trackRemoveOwner(token, requirementId, email) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      removeCoOwner_(x.r, email, ownerKey_(keys, x.r) || 'The requester');
+      return ownersDto_(dbGet_('Requirements', x.r.requirementId));
+    });
+  });
+}
+
+/** Team leader adds or removes request owners from the task page. */
+function api_setRequestOwners(requirementId, input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    return withLock_(function () {
+      var r = dbGet_('Requirements', str_(requirementId, 40, 'Request', true));
+      if (!r) { var t = dbGet_('Tasks', requirementId); r = t && dbGet_('Requirements', t.requirementId); }
+      if (!r) throw AppError_('NOT_FOUND', 'Request not found.');
+      if (input.add) addCoOwner_(r, input.add, u.name + ' (graphics team)');
+      if (input.remove) removeCoOwner_(dbGet_('Requirements', r.requirementId), input.remove, u.email);
+      return ownersDto_(dbGet_('Requirements', r.requirementId));
+    });
+  });
+}
+
+/**
+ * Any owner edits their request from "My requests" (until it's finished).
+ * The brief, copy and instructions also update on the designers' tasks,
+ * unless the leader already rewrote them there. The team is told what changed.
+ */
+function api_trackEditRequest(token, requirementId, patchIn) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackedit:' + keys.join(',').slice(0, 120), 20, 3600);
+    patchIn = patchIn || {};
+    var allowed = {
+      title: function (v) { return str_(v, 150, 'Title', true); },
+      brief: function (v) { var b = str_(v, LIMITS.TEXT_LONG, 'Brief', true); if (b.length < 5) throw AppError_('VALIDATION', 'Describe what you need.'); return b; },
+      instructions: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Instructions', false); },
+      copyText: function (v) { return str_(v, LIMITS.TEXT_LONG, 'Copy', false); },
+      preferredDate: function (v) { var d = date_(v, 'Needed by', true); if (d < isoDateOnly_()) throw AppError_('VALIDATION', 'The date can’t be in the past.'); return d; },
+      preferredTime: function (v) { return time_(v, 'Time', false); }
+    };
+    var labels = { title: 'title', brief: 'brief', instructions: 'instructions', copyText: 'copy', preferredDate: 'needed-by date', preferredTime: 'time' };
+    var patch = {};
+    Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId), r = x.r;
+      var all = dbFind_('Tasks', function (t) { return t.requirementId === r.requirementId; });
+      var st = requesterStatus_(all);
+      if (st === 'Completed') throw AppError_('INVALID_STATE', 'This request is finished. Use “Need changes?” to ask for changes.');
+      if (st === 'Cancelled') throw AppError_('INVALID_STATE', 'This request was cancelled.');
+      var changed = Object.keys(patch).filter(function (k) { return String(r[k] || '') !== String(patch[k]); });
+      if (!changed.length) return { changed: [] };
+      var p = {}; changed.forEach(function (k) { p[k] = patch[k]; });
+      p.updatedAt = nowIso_();
+      dbUpdate_('Requirements', r.requirementId, p);
+      var who = ownerKey_(keys, r) || r.requesterName || 'The requester';
+      var summary = 'Changed: ' + changed.map(function (k) { return labels[k]; }).join(', ') +
+        (p.preferredDate || p.preferredTime ? ' · now needed by ' + dueText_(p.preferredDate || r.preferredDate, p.preferredTime !== undefined ? p.preferredTime : r.preferredTime) : '');
+      x.tasks.forEach(function (t) {
+        var tp = {};
+        ['brief', 'copyText', 'instructions'].forEach(function (k) { if (p[k] !== undefined && String(t[k] || '') === String(r[k] || '')) tp[k] = p[k]; });
+        if (Object.keys(tp).length) { tp.updatedAt = nowIso_(); dbUpdate_('Tasks', t.taskId, tp); }
+        logActivity_(t.taskId, { email: who, role: 'requester' }, 'request_edited', '', '', summary + (p.brief ? '\n\nNew brief:\n' + p.brief : ''), 'team');
+      });
+      var mail = [];
+      x.tasks.forEach(function (t) { if (t.assigneeEmail && mail.indexOf(t.assigneeEmail) === -1) mail.push(t.assigneeEmail); });
+      leaderEmails_().forEach(function (e) { if (mail.indexOf(e) === -1) mail.push(e); });
+      notify_(mail, 'request_edited', 'Request updated: ' + (p.title || r.title), who + ' updated ' + r.requirementId + '.\n\n' + summary +
+        (p.brief ? '\n\nNew brief:\n' + p.brief.slice(0, 800) : ''), x.tasks[0] ? 'task/' + x.tasks[0].taskId : 'requirements', true);
+      return { changed: changed };
     });
   });
 }
@@ -4018,30 +4299,40 @@ function designationPoints_(user) {
 /**
  * Everyone's points, worked out from the records (nothing to keep in sync):
  *   + designation points for each approved creative (credited to whoever made the approved version)
- *   + first-time bonus when a creative was approved with no changes asked
+ *     — a creative made in several sizes counts once (each size file earns a share), unless
+ *       Settings → "Count every size as its own creative" is on
+ *   + first-time bonus when a creative was approved with no changes asked (shared the same way)
  *   + on-time bonus for each task completed by its deadline (paused hold time isn't counted)
+ *   + reopen bonus each time a finished task was reopened for changes, once it's finished again
  *   − rejection penalty per rejected creative (if set)
+ *   + task bonus set by the leader, paid when the task is completed
  *   + reward points from the team leader
  * inPeriod(dateIso) → true marks points that also count for the period (e.g. this month).
+ * ledger (optional array) receives one entry per point event — the points history.
  */
-function pointsTable_(inPeriod) {
+function pointsTable_(inPeriod, ledger) {
   var s = settings_(), per = {};
   inPeriod = inPeriod || function () { return false; };
   var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
+  var tasks = {}; dbAll_('Tasks').forEach(function (t) { tasks[t.taskId] = t; });
   function P(e) {
     e = String(e || '').toLowerCase();
-    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0,
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0, reopen: 0, reopenCount: 0,
       // the same, counted only inside the period: { n: how many, pts: points }
-      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 } } });
+      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } } });
   }
-  function add(e, pts, when, field, n) {
+  function r1(x) { return Math.round(x * 10) / 10; }
+  /** One point event: adds to totals, the period tally and the history. */
+  function ev(e, kind, pts, n, when, taskId, label, note) {
     if (!e) return;
-    var x = P(e); x.total += pts; if (inPeriod(when)) x.period += pts;
-    if (field) x[field] += (n === undefined ? pts : n);
-  }
-  function tally(e, kind, pts, when) {
-    if (!e || !inPeriod(when)) return;
-    var b = P(e).inPeriod[kind]; b.n++; b.pts += pts;
+    var x = P(e);
+    x.total = r1(x.total + pts);
+    var inP = inPeriod(when);
+    if (inP) { x.period = r1(x.period + pts); var b = x.inPeriod[kind]; if (b) { b.n = r1(b.n + n); b.pts = r1(b.pts + pts); } }
+    if (ledger) {
+      var t = taskId && tasks[taskId];
+      ledger.push({ email: x.email, kind: kind, points: r1(pts), count: n, when: when || '', taskId: taskId || '', taskTitle: t ? t.title : '', label: label || '', note: note || '' });
+    }
   }
   var versions = {}; dbAll_('CreativeVersions').forEach(function (v) { versions[v.versionId] = v; });
   var decByDel = {};
@@ -4049,41 +4340,107 @@ function pointsTable_(inPeriod) {
   dbAll_('CreativeSubmissions').forEach(function (d) {
     var v = d.approvedVersionId && versions[d.approvedVersionId];
     var decs = (decByDel[d.deliverableId] || []).sort(function (a, b) { return a.decidedAt < b.decidedAt ? -1 : 1; });
+    var task = tasks[d.taskId] || {};
+    // A creative in 2 sizes = 2 files; each file earns half, so the creative earns its points once.
+    var nSizes = sizesOf_(task).length, share = !s.countEachSize && nSizes > 1 ? 1 / nSizes : 1;
+    var sizeNote = share < 1 ? ' (1 of ' + nSizes + ' sizes)' : '';
     if (v && v.status === VSTATUS.APPROVED) {
       var who = String(v.uploadedBy).toLowerCase();
       var ok = decs.filter(function (x) { return x.versionId === v.versionId && x.decision === 'approved'; }).pop();
       var when = ok ? ok.decidedAt : v.uploadedAt;
-      var pts = designationPoints_(users[who]);
-      add(who, pts, when, 'creativePts');
-      P(who).creatives++;
-      tally(who, 'creatives', pts, when);
+      var pts = designationPoints_(users[who]) * share;
+      ev(who, 'creatives', pts, share, when, d.taskId, 'Creative approved: ' + d.title + sizeNote, users[who] && users[who].designation ? users[who].designation : '');
+      P(who).creatives = r1(P(who).creatives + share); P(who).creativePts = r1(P(who).creativePts + pts);
       var hadChanges = decs.some(function (x) { return x.decidedAt <= when && (x.decision === 'changes' || x.decision === 'rejected'); });
-      if (!hadChanges && Number(s.pointsFirstTime)) { add(who, Number(s.pointsFirstTime), when, 'firstTime'); tally(who, 'firstTime', Number(s.pointsFirstTime), when); }
+      if (!hadChanges && Number(s.pointsFirstTime)) {
+        var ft = Number(s.pointsFirstTime) * share;
+        ev(who, 'firstTime', ft, share, when, d.taskId, 'Approved first time: ' + d.title + sizeNote);
+        P(who).firstTime = r1(P(who).firstTime + ft);
+      }
     }
     decs.forEach(function (x) {
       if (x.decision !== 'rejected') return;
       var rv = versions[x.versionId]; if (!rv) return;
       var w = String(rv.uploadedBy).toLowerCase();
       P(w).rejected++;
-      tally(w, 'rejected', -(Number(s.pointsRejected) || 0), x.decidedAt);
-      if (Number(s.pointsRejected)) add(w, -Number(s.pointsRejected), x.decidedAt);
+      ev(w, 'rejected', -(Number(s.pointsRejected) || 0), 1, x.decidedAt, d.taskId, 'Creative rejected: ' + d.title, x.comment || '');
     });
   });
-  if (Number(s.pointsOnTime)) {
-    dbAll_('Tasks').forEach(function (t) {
-      if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || !t.dueDate) return;
+  Object.keys(tasks).forEach(function (id) {
+    var t = tasks[id];
+    if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt) return;
+    if (Number(s.pointsOnTime) && t.dueDate) {
       var end = dueEnd_(t.dueDate, t.dueTime);
-      if (end && new Date(t.completedAt).getTime() <= end.getTime()) { add(t.assigneeEmail, Number(s.pointsOnTime), t.completedAt, 'onTime', 1); tally(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), t.completedAt); }
+      if (end && new Date(t.completedAt).getTime() <= end.getTime()) {
+        ev(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), 1, t.completedAt, t.taskId, 'Task finished on time');
+        P(t.assigneeEmail).onTime++;
+      }
+    }
+    // Task bonus set by the leader when assigning: paid to the designer once the task is completed.
+    var b = Number(t.bonusPoints) || 0;
+    if (b) { ev(t.assigneeEmail, 'bonus', b, 1, t.completedAt, t.taskId, 'Task bonus'); P(t.assigneeEmail).bonus += b; P(t.assigneeEmail).bonusCount++; }
+  });
+  // Reopened for changes: extra for the designer each time, once the task is finished again.
+  if (Number(s.pointsReopen)) {
+    dbAll_('TaskActivity').forEach(function (a) {
+      if (a.action !== 'reopened') return;
+      var t = tasks[a.taskId];
+      if (!t || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
+      ev(t.assigneeEmail, 'reopen', Number(s.pointsReopen), 1, t.completedAt, t.taskId, 'Reopened task finished', String(a.note || '').split(' · ')[0]);
+      P(t.assigneeEmail).reopen += Number(s.pointsReopen); P(t.assigneeEmail).reopenCount++;
     });
   }
-  // Task bonus set by the leader when assigning: paid to the designer once the task is completed.
-  dbAll_('Tasks').forEach(function (t) {
-    var b = Number(t.bonusPoints) || 0;
-    if (!b || t.status !== STATUS.COMPLETED || !t.assigneeEmail) return;
-    add(t.assigneeEmail, b, t.completedAt, 'bonus'); P(t.assigneeEmail).bonusCount++; tally(t.assigneeEmail, 'bonus', b, t.completedAt);
+  dbAll_('Rewards').forEach(function (r) {
+    var b = badgeOf_(r.badge) || { label: r.badge };
+    ev(r.userEmail, 'rewards', Number(r.points) || 0, 1, r.givenAt, r.taskId, 'Reward: ' + b.label, (r.reason ? '“' + r.reason + '” · ' : '') + 'from ' + displayName_(r.givenBy));
+    P(r.userEmail).rewards += Number(r.points) || 0; P(r.userEmail).rewardCount++;
   });
-  dbAll_('Rewards').forEach(function (r) { add(r.userEmail, Number(r.points) || 0, r.givenAt, 'rewards'); P(r.userEmail).rewardCount++; tally(r.userEmail, 'rewards', Number(r.points) || 0, r.givenAt); });
   return per;
+}
+
+var POINT_KINDS = { creatives: 'Creative approved', firstTime: 'First-time approval', onTime: 'On time', bonus: 'Task bonus', reopen: 'Reopened task', rewards: 'Reward', rejected: 'Rejected' };
+
+/**
+ * Points history: every point event, newest first. Leaders see anyone (or everyone);
+ * designers only see their own. filter: { email, from, to (yyyy-mm-dd), kind }.
+ */
+function pointsHistory_(u, filter) {
+  filter = filter || {};
+  var email = String(filter.email || '').toLowerCase().trim();
+  if (!isLeader_(u)) email = u.email;
+  var from = filter.from ? date_(filter.from, 'From', false) : '', to = filter.to ? date_(filter.to, 'To', false) : '';
+  var kind = filter.kind && POINT_KINDS[filter.kind] ? filter.kind : '';
+  var ledger = [];
+  pointsTable_(null, ledger);
+  var tz = Session.getScriptTimeZone();
+  var day = function (w) { try { return Utilities.formatDate(new Date(w), tz, 'yyyy-MM-dd'); } catch (e) { return ''; } };
+  var rows = ledger.filter(function (x) {
+    if (email && x.email !== email) return false;
+    if (kind && x.kind !== kind) return false;
+    var d = day(x.when);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return x.points !== 0 || x.kind === 'rejected';
+  }).sort(function (a, b) { return a.when < b.when ? 1 : a.when > b.when ? -1 : 0; });
+  var sum = rows.reduce(function (a, x) { return a + x.points; }, 0);
+  var byKind = {};
+  rows.forEach(function (x) { var k = byKind[x.kind] || (byKind[x.kind] = { kind: x.kind, label: POINT_KINDS[x.kind], n: 0, points: 0 }); k.n++; k.points = Math.round((k.points + x.points) * 10) / 10; });
+  return { rows: rows, total: Math.round(sum * 10) / 10, count: rows.length, byKind: Object.keys(byKind).map(function (k) { return byKind[k]; }) };
+}
+
+function api_pointsHistory(filter) {
+  return respond_(function () {
+    var u = currentUser_();
+    var h = pointsHistory_(u, filter);
+    var names = {};
+    dbAll_('Users').forEach(function (x) { names[x.email.toLowerCase()] = profileName_(x); });
+    return {
+      total: h.total, count: h.count, byKind: h.byKind, kinds: POINT_KINDS,
+      rows: h.rows.slice(0, 600).map(function (x) { return Object.assign({ name: names[x.email] || x.email }, x); }),
+      truncated: h.rows.length > 600,
+      people: isLeader_(u) ? dbFind_('Users', function (x) { return x.role === ROLES.DESIGNER || bool_(x.active); }).map(function (x) { return { email: x.email, name: profileName_(x) }; }) : []
+    };
+  });
 }
 
 /** True for timestamps in the current month, in the portal's time zone (not UTC). */
@@ -4098,7 +4455,8 @@ function api_listRewards() {
     var table = pointsTable_(monthFn_());
     var board = dbFind_('Users', function (x) { return bool_(x.active) && x.role === ROLES.DESIGNER; }).map(function (x) {
       var t = table[x.email.toLowerCase()] || { total: 0, period: 0, creatives: 0, onTime: 0, rewards: 0, rejected: 0, firstTime: 0, creativePts: 0, rewardCount: 0 };
-      return { email: x.email, name: x.name, designation: x.designation || '', total: t.total, month: t.period, creatives: t.creatives,
+      var pf = profileOf_(x.email);
+      return { email: x.email, name: x.name, nickname: pf.nickname || '', photo: pf.photo || '', designation: x.designation || '', total: t.total, month: t.period, creatives: t.creatives,
         onTime: t.onTime, rewards: t.rewards, rejected: t.rejected };
     }).sort(function (a, b) { return b.total - a.total || b.month - a.month || (a.name < b.name ? -1 : 1); });
     board.forEach(function (x, i) { x.rank = i + 1; });
@@ -4111,8 +4469,10 @@ function api_listRewards() {
       me: { total: me.total, month: me.period, count: me.rewardCount, rank: mine ? mine.rank : null, of: board.length,
         designation: (userByEmail_(u.email) || {}).designation || '',
         breakdown: { creatives: me.creatives, creativePts: me.creativePts, firstTime: me.firstTime, onTime: me.onTime, onTimePts: me.onTime * (Number(s.pointsOnTime) || 0),
-          rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards, bonus: me.bonus || 0, bonusCount: me.bonusCount || 0 } },
-      rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0 }
+          rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards, bonus: me.bonus || 0, bonusCount: me.bonusCount || 0,
+          reopen: me.reopen || 0, reopenCount: me.reopenCount || 0 } },
+      rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0,
+        reopen: Number(s.pointsReopen) || 0, countEachSize: !!s.countEachSize }
     };
   });
 }
@@ -4870,7 +5230,7 @@ function campaignDto_(c, withDetail) {
   var o = {
     campaignId: c.campaignId, name: c.name, active: bool_(c.active), shared: bool_(c.shared) && !!c.folderId, createdAt: c.createdAt,
     requests: reqs.length, tasks: tasks.length, done: tasks.filter(function (t) { return t.status === STATUS.COMPLETED; }).length,
-    required: tasks.reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0),
+    required: tasks.reduce(function (s, t) { return s + filesRequired_(t); }, 0),
     approved: cc.approved, categories: cc.categories,
     departments: reqs.map(function (r) { return r.department; }).filter(function (x, i, a) { return x && a.indexOf(x) === i; })
   };
@@ -4880,13 +5240,13 @@ function campaignDto_(c, withDetail) {
       return { requirementId: r.requirementId, title: r.title, department: r.department, requesterName: r.requesterName, submittedAt: r.submittedAt,
         internal: !!r.submittedBy && !r.email && r.department === 'Graphics team', firstTaskId: ts[0] ? ts[0].taskId : '',
         status: ts.length ? requesterStatus_(ts) : 'Received', approved: categoryCounts_(ts).approved,
-        required: ts.reduce(function (s, t) { return s + (Number(t.deliverablesRequired) || 0); }, 0) };
+        required: ts.reduce(function (s, t) { return s + filesRequired_(t); }, 0) };
     }).sort(function (a, b) { return a.submittedAt < b.submittedAt ? 1 : -1; });
     var dc = {}; dbAll_('CreativeSubmissions').forEach(function (d) { (dc[d.taskId] = dc[d.taskId] || []).push(d); });
     o.taskList = tasks.map(function (t) {
       var ds = dc[t.taskId] || [];
       return { taskId: t.taskId, title: t.title, status: t.status, category: t.creativeType || '', assigneeName: t.assigneeEmail ? displayName_(t.assigneeEmail) : '',
-        required: Number(t.deliverablesRequired) || 0, approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
+        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
         dueDate: t.dueDate, dueTime: t.dueTime, requirementId: t.requirementId, overdue: isOverdue_(t), hold: t.status === STATUS.ON_HOLD };
     }).sort(function (a, b) { return a.dueDate > b.dueDate ? 1 : -1; });
   }
@@ -5088,9 +5448,18 @@ function mix_(rgb, to, t) { return '#' + rgb.map(function (c, i) { var v = Math.
 function themeCss_() {
   var s;
   try { s = settings_(); } catch (e) { return ''; }
-  var th = THEMES[s.theme] || THEMES.rosier;
-  var accent = hexRgb_(s.accentColor) || hexRgb_(th.accent);
-  if (!th.dark && s.theme === 'rosier' && !s.accentColor) return '';
+  var themeId = s.theme, accentHex = s.accentColor;
+  // A team member's own colours (Profile → Look & feel), when the leader allows it.
+  if (s.allowPersonalTheme) {
+    try {
+      var em = activeEmail_();
+      var pf = em ? dbGet_('Profiles', em) : null;
+      if (pf && pf.theme && THEMES[pf.theme]) { themeId = pf.theme; accentHex = pf.accentColor || ''; }
+    } catch (e) { /* fall back to the team theme */ }
+  }
+  var th = THEMES[themeId] || THEMES.rosier;
+  var accent = hexRgb_(accentHex) || hexRgb_(th.accent);
+  if (!th.dark && themeId === 'rosier' && !accentHex) return '';
   var v = {};
   if (th.dark) {
     v = { '--bg': '#131519', '--surface': '#1c1f25', '--surface-2': '#22262d', '--line': '#2f343c', '--line-strong': '#3c424c',
@@ -5113,9 +5482,270 @@ function themeCss_() {
 
 function api_listThemes() {
   return respond_(function () {
-    requireLeader_();
+    currentUser_();
     return Object.keys(THEMES).map(function (k) { return { id: k, label: THEMES[k].label, accent: THEMES[k].accent, dark: !!THEMES[k].dark }; });
   });
+}
+
+/* ======================= Profiles.gs ======================= */
+/**
+ * Profiles.gs — every team member's own profile: nickname, photo, portfolio
+ * link, a short bio and (if the leader allows it) their own portal colours.
+ * The profile page also shows their points, rank and tips to grow.
+ */
+
+var PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/;
+
+/** The profile row for an email ({} when they haven't set anything). */
+function profileOf_(email) {
+  email = String(email || '').toLowerCase();
+  return (email && dbGet_('Profiles', email)) || {};
+}
+
+/** Display name for lists and history (the real name; the nickname is shown beside it). */
+function profileName_(user) { return user ? user.name : ''; }
+
+function publicProfile_(x, table, board) {
+  var pf = profileOf_(x.email), t = (table && table[x.email.toLowerCase()]) || { total: 0, period: 0 };
+  var rank = board ? board.filter(function (b) { return b.email === x.email; })[0] : null;
+  return {
+    email: x.email, name: x.name, nickname: pf.nickname || '', photo: pf.photo || '', role: x.role, designation: x.designation || '',
+    portfolioUrl: pf.portfolioUrl || '', bio: pf.bio || '', active: bool_(x.active),
+    points: t.total || 0, month: t.period || 0, rank: rank ? rank.rank : null
+  };
+}
+
+/** Leaderboard order for designers (same as the Leaderboard page). */
+function boardOf_(table) {
+  var list = dbFind_('Users', function (x) { return bool_(x.active) && x.role === ROLES.DESIGNER; }).map(function (x) {
+    var t = table[x.email.toLowerCase()] || { total: 0, period: 0 };
+    return { email: x.email, name: x.name, total: t.total, month: t.period };
+  }).sort(function (a, b) { return b.total - a.total || b.month - a.month || (a.name < b.name ? -1 : 1); });
+  list.forEach(function (x, i) { x.rank = i + 1; });
+  return list;
+}
+
+/** Profile page. email = '' for your own; any team member can see a teammate's profile. */
+function api_getProfile(email) {
+  return respond_(function () {
+    var u = currentUser_(), s = settings_();
+    var target = email ? userByEmail_(email_(email, 'Email', true)) : userByEmail_(u.email);
+    if (!target) throw AppError_('NOT_FOUND', 'Team member not found.');
+    var mine = target.email.toLowerCase() === u.email;
+    var table = pointsTable_(monthFn_()), board = boardOf_(table);
+    var out = publicProfile_(target, table, board);
+    out.mine = mine; out.of = board.length;
+    var t = table[target.email.toLowerCase()] || {};
+    out.breakdown = { creatives: t.creatives || 0, creativePts: t.creativePts || 0, firstTime: t.firstTime || 0, onTime: t.onTime || 0, bonus: t.bonus || 0,
+      reopen: t.reopen || 0, reopenCount: t.reopenCount || 0, rewards: t.rewards || 0, rewardCount: t.rewardCount || 0, rejected: t.rejected || 0 };
+    var tasks = dbFind_('Tasks', function (x) { return x.assigneeEmail === target.email.toLowerCase(); });
+    out.stats = {
+      active: tasks.filter(function (x) { return CLOSED.indexOf(x.status) === -1 && x.status !== STATUS.APPROVED; }).length,
+      completed: tasks.filter(function (x) { return x.status === STATUS.COMPLETED; }).length
+    };
+    out.team = dbFind_('Users', function (x) { return bool_(x.active); }).map(function (x) { return publicProfile_(x, table, board); })
+      .sort(function (a, b) { return (a.rank || 99) - (b.rank || 99) || (a.name < b.name ? -1 : 1); });
+    if (mine || isLeader_(u)) {
+      out.tips = profileTips_(target, out, t, tasks, s);
+      out.completeness = profileCompleteness_(out);
+    }
+    if (mine) {
+      var pf = profileOf_(target.email);
+      out.theme = pf.theme || ''; out.accentColor = pf.accentColor || '';
+      out.allowPersonalTheme = !!s.allowPersonalTheme;
+      out.themes = Object.keys(THEMES).map(function (k) { return { id: k, label: THEMES[k].label, accent: THEMES[k].accent, dark: !!THEMES[k].dark }; });
+      out.teamTheme = s.theme; out.teamAccent = s.accentColor;
+      var hist = pointsHistory_(u, {});
+      out.recent = hist.rows.slice(0, 8);
+    }
+    return out;
+  });
+}
+
+function profileCompleteness_(p) {
+  var items = [
+    { key: 'photo', label: 'Add a profile photo', done: !!p.photo },
+    { key: 'nickname', label: 'Pick a nickname the team knows you by', done: !!p.nickname },
+    { key: 'portfolio', label: 'Add your portfolio link (Behance, Dribbble, Drive…)', done: !!p.portfolioUrl },
+    { key: 'bio', label: 'Write a line about what you love designing', done: !!p.bio }
+  ];
+  return { percent: Math.round(items.filter(function (i) { return i.done; }).length / items.length * 100), items: items };
+}
+
+/** Plain tips from the person's own numbers. */
+function profileTips_(user, p, t, tasks, s) {
+  var tips = [];
+  var created = Number(t.creatives) || 0, first = s.pointsFirstTime ? (Number(t.firstTime) || 0) / Number(s.pointsFirstTime) : 0;
+  var done = tasks.filter(function (x) { return x.status === STATUS.COMPLETED; });
+  var onTime = Number(t.onTime) || 0;
+  if (created >= 3 && s.pointsFirstTime && first / created < 0.6) {
+    tips.push('Only ' + Math.round(first / created * 100) + '% of your creatives get approved first time. Re-read the brief and references before you send — each first-time approval adds +' + s.pointsFirstTime + '.');
+  } else if (created >= 3 && s.pointsFirstTime) {
+    tips.push(Math.round(first / created * 100) + '% of your creatives are approved first time — great. Keep checking the brief before sending.');
+  }
+  if (done.length >= 2 && s.pointsOnTime && onTime / done.length < 0.8) {
+    tips.push(onTime + ' of ' + done.length + ' finished tasks were on time. Tell your leader early if a deadline looks tight — on-time tasks add +' + s.pointsOnTime + ' each.');
+  }
+  if (Number(t.rejected)) tips.push(t.rejected + ' creative(s) were rejected. Ask the requester for the reason so the next one lands.');
+  if (!p.portfolioUrl) tips.push('Add your portfolio link so the team can see your best work.');
+  if (!p.photo) tips.push('Add a photo — it shows on the leaderboard and in team chat.');
+  if (s.pointsReopen) tips.push('Reopened tasks earn +' + s.pointsReopen + ' once you finish the changes.');
+  if (!tasks.filter(function (x) { return CLOSED.indexOf(x.status) === -1; }).length) tips.push('No open tasks right now — ask your leader for the next one.');
+  return tips.slice(0, 6);
+}
+
+/** Save your own profile. Only the fields given are changed. */
+function api_saveProfile(input) {
+  return respond_(function () {
+    var u = currentUser_(), s = settings_();
+    input = input || {};
+    var patch = {};
+    if (input.nickname !== undefined) patch.nickname = str_(input.nickname, 40, 'Nickname', false);
+    if (input.bio !== undefined) patch.bio = str_(input.bio, 300, 'About you', false);
+    if (input.portfolioUrl !== undefined) {
+      var url = str_(input.portfolioUrl, 500, 'Portfolio link', false);
+      if (url && !/^https?:\/\/[^\s<>"']+$/i.test(url)) throw AppError_('VALIDATION', 'The portfolio link must start with https://');
+      patch.portfolioUrl = url;
+    }
+    if (input.photo !== undefined) {
+      var ph = String(input.photo || '');
+      if (ph && (!PHOTO_RE.test(ph) || ph.length > 60000)) throw AppError_('VALIDATION', 'That photo couldn’t be used. Try a JPG or PNG.');
+      patch.photo = ph;
+    }
+    if (input.theme !== undefined || input.accentColor !== undefined) {
+      if (!s.allowPersonalTheme) throw AppError_('FORBIDDEN', 'The team leader has turned off personal colours.');
+      var th = String(input.theme || '');
+      if (th && !THEMES[th]) throw AppError_('VALIDATION', 'Unknown theme.');
+      var acc = String(input.accentColor || '').trim().toLowerCase();
+      if (acc && !/^#[0-9a-f]{6}$/.test(acc)) throw AppError_('VALIDATION', 'Colour must look like #a56312.');
+      patch.theme = th; patch.accentColor = th ? acc : '';
+    }
+    if (!Object.keys(patch).length) throw AppError_('VALIDATION', 'Nothing to save.');
+    return withLock_(function () {
+      patch.updatedAt = nowIso_();
+      if (dbGet_('Profiles', u.email)) dbUpdate_('Profiles', u.email, patch);
+      else dbInsert_('Profiles', Object.assign({ email: u.email, nickname: '', photo: '', portfolioUrl: '', bio: '', theme: '', accentColor: '', chatSeenAt: '' }, patch));
+      return { saved: Object.keys(patch) };
+    });
+  });
+}
+
+/* ======================= Chat.gs ======================= */
+/**
+ * Chat.gs — one team chat for everyone on the graphics team (like a WhatsApp
+ * group). Messages, links and files (references, screenshots) stay inside
+ * the portal; nothing is emailed. The team leader can turn it off in Settings.
+ * The page asks for new messages every few seconds while it is open.
+ */
+
+var CHAT_PAGE = 150;
+
+function requireChat_() {
+  var u = currentUser_();
+  if (!settings_().teamChat) throw AppError_('FORBIDDEN', 'Team chat is turned off by the team leader.');
+  return u;
+}
+
+function chatDto_(m) {
+  var del = !!m.deletedAt;
+  return {
+    messageId: m.messageId, author: m.authorEmail, text: del ? '' : m.text, createdAt: m.createdAt, deleted: del, deletedAt: m.deletedAt || '',
+    file: !del && m.fileId ? { name: m.fileName, mime: m.mimeType, size: Number(m.sizeBytes) || 0, isImage: INLINE_IMAGE_TYPES.indexOf(m.mimeType) !== -1 } : null
+  };
+}
+
+/** People who can appear in the chat: name, nickname, photo. */
+function chatPeople_() {
+  var out = {};
+  dbAll_('Users').forEach(function (x) {
+    var pf = profileOf_(x.email);
+    out[x.email.toLowerCase()] = { name: x.name, nickname: pf.nickname || '', photo: pf.photo || '', role: x.role, designation: x.designation || '', active: bool_(x.active) };
+  });
+  return out;
+}
+
+/**
+ * Messages. opts.since (ISO): only what is new or deleted after it (for polling).
+ * opts.before (ISO): older messages for "Load earlier". Neither: the latest page, plus people.
+ */
+function api_chatList(opts) {
+  return respond_(function () {
+    var u = requireChat_();
+    opts = opts || {};
+    var all = dbAll_('ChatMessages').slice().sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0; });
+    var since = String(opts.since || ''), before = String(opts.before || '');
+    var list, more = false;
+    if (since) list = all.filter(function (m) { return m.createdAt > since || (m.deletedAt && m.deletedAt > since); });
+    else {
+      var pool = before ? all.filter(function (m) { return m.createdAt < before; }) : all;
+      more = pool.length > CHAT_PAGE;
+      list = pool.slice(-CHAT_PAGE);
+    }
+    var out = { messages: list.map(chatDto_), more: more, now: nowIso_(), me: u.email, leader: isLeader_(u) };
+    if (!since) out.people = chatPeople_();
+    return out;
+  });
+}
+
+function api_chatSend(text) {
+  return respond_(function () {
+    var u = requireChat_();
+    text = str_(text, 2000, 'Message', true);
+    rateLimit_('chat:' + u.email, 40, 60);
+    return withLock_(function () {
+      var m = dbInsert_('ChatMessages', { messageId: 'MSG-' + uuid_(), authorEmail: u.email, text: text, fileId: '', fileName: '', mimeType: '', sizeBytes: '', createdAt: nowIso_(), deletedAt: '' });
+      markChatSeen_(u.email, m.createdAt);
+      return chatDto_(m);
+    });
+  });
+}
+
+/** Your own message (or any, for the team leader). The file goes to Drive's trash. */
+function api_chatDelete(messageId) {
+  return respond_(function () {
+    var u = requireChat_();
+    return withLock_(function () {
+      var m = dbGet_('ChatMessages', str_(messageId, 60, 'Message', true));
+      if (!m || m.deletedAt) throw AppError_('NOT_FOUND', 'Message not found.');
+      if (m.authorEmail !== u.email && !isLeader_(u)) throw AppError_('FORBIDDEN', 'You can only delete your own messages.');
+      if (m.fileId) { try { DriveApp.getFileById(m.fileId).setTrashed(true); } catch (e) { /* already gone */ } }
+      dbUpdate_('ChatMessages', m.messageId, { deletedAt: nowIso_(), text: '' });
+      return true;
+    });
+  });
+}
+
+/** Remembers the newest message you've seen, for the unread count on "Team chat". */
+function api_chatSeen(iso) {
+  return respond_(function () {
+    var u = requireChat_();
+    iso = String(iso || nowIso_()).slice(0, 30);
+    var pf = profileOf_(u.email);
+    if (pf.chatSeenAt && pf.chatSeenAt >= iso) return true;
+    return withLock_(function () { markChatSeen_(u.email, iso); return true; });
+  });
+}
+
+function markChatSeen_(email, iso) {
+  if (dbGet_('Profiles', email)) { var pf = dbGet_('Profiles', email); if (!pf.chatSeenAt || pf.chatSeenAt < iso) dbUpdate_('Profiles', email, { chatSeenAt: iso }); }
+  else dbInsert_('Profiles', { email: email, nickname: '', photo: '', portfolioUrl: '', bio: '', theme: '', accentColor: '', chatSeenAt: iso, updatedAt: nowIso_() });
+}
+
+/** Unread messages from others since you last opened the chat (capped at 99). */
+function chatUnread_(email) {
+  if (!settings_().teamChat) return 0;
+  var seen = profileOf_(email).chatSeenAt || '';
+  var n = 0;
+  dbAll_('ChatMessages').forEach(function (m) { if (!m.deletedAt && m.authorEmail !== email && m.createdAt > seen) n++; });
+  return Math.min(n, 99);
+}
+
+/** A file shared in the chat, for anyone on the team. */
+function chatAssetRef_(u, id) {
+  if (!settings_().teamChat) throw AppError_('FORBIDDEN', 'Team chat is turned off.');
+  var m = dbGet_('ChatMessages', str_(id, 60, 'Message', true));
+  if (!m || !m.fileId || m.deletedAt) throw AppError_('NOT_FOUND', 'File not found.');
+  return { fileId: m.fileId, mime: m.mimeType, size: m.sizeBytes, name: m.fileName };
 }
 
 /* ======================= Code.gs ======================= */

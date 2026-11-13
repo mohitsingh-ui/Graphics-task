@@ -17,13 +17,30 @@ function taskDeliverables_(taskId) {
   return dbFind_('CreativeSubmissions', function (d) { return d.taskId === taskId; });
 }
 
+/** Sizes the leader asked for, e.g. ["Desktop 1920×600", "Mobile 768×900"]. */
+function sizesOf_(t) {
+  return String((t && t.sizes) || '').split(/\n|,/).map(function (x) { return x.trim(); }).filter(Boolean);
+}
+
+/** Clean list of sizes from the leader (one per line or comma separated). */
+function cleanSizes_(v) {
+  var list = (Array.isArray(v) ? v : String(v || '').split(/\n|,/)).map(function (x) { return String(x).trim(); }).filter(Boolean);
+  if (list.length > 10) throw AppError_('VALIDATION', 'Up to 10 sizes per task.');
+  return list.map(function (x) { return str_(x, 60, 'Size', true); }).join('\n');
+}
+
+/** Files to upload: creatives × sizes (5 banners in desktop + mobile = 10 files). */
+function filesRequired_(t) {
+  return Math.max(1, Number(t.deliverablesRequired) || 1) * Math.max(1, sizesOf_(t).length);
+}
+
 /** Re-derive the task status from its deliverables. Caller holds the lock. */
 function recomputeTaskStatus_(taskId, actor) {
   var task = dbGet_('Tasks', taskId);
   if (!task) return null;
   if (task.status === STATUS.ON_HOLD) {
     // On hold (e.g. waiting for the NI table): once every creative is approved, the hold ends and the task completes.
-    var hd = taskDeliverables_(taskId), need = Math.max(1, Number(task.deliverablesRequired) || 1);
+    var hd = taskDeliverables_(taskId), need = filesRequired_(task);
     var allOk = hd.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length >= need &&
       !hd.some(function (d) { return d.status === DSTATUS.CHANGES || d.status === DSTATUS.AWAITING; });
     if (!allOk) return task.status;
@@ -34,7 +51,7 @@ function recomputeTaskStatus_(taskId, actor) {
   if (PRE_ASSIGN.indexOf(task.status) !== -1) return task.status;
 
   var dels = taskDeliverables_(taskId);
-  var required = Math.max(1, Number(task.deliverablesRequired) || 1);
+  var required = filesRequired_(task);
   var approved = dels.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length;
   var changes = dels.filter(function (d) { return d.status === DSTATUS.CHANGES; }).length;
   var awaiting = dels.filter(function (d) { return d.status === DSTATUS.AWAITING; });
@@ -80,17 +97,19 @@ function completeTask_(task, actor, note) {
     });
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
-      if (settings_().emailNotifications && req.email) {
+      if (settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
         var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
           .map(function (t) { return t.finalLink; });
         if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
         var folderUrl = finalFolderUrl_(req);
         if (folderUrl) finals.unshift(folderUrl);
-        var track = trackUrl_(issueTrackToken_(req.email));
-        sendMail_(req.email, 'Your creative is ready (' + req.requirementId + ')',
-          'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
-          (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
-          '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+        requesterEmails_(req).forEach(function (em) {
+          var track = trackUrl_(issueTrackToken_(em));
+          sendMail_(em, 'Your creative is ready (' + req.requirementId + ')',
+            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
+            (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
+            '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+        });
       }
     }
   }
@@ -100,7 +119,7 @@ function completeTask_(task, actor, note) {
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
   'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'finalLink', 'priority',
-  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints'];
+  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes'];
 
 function taskDto_(t, user, extra) {
   var o = pick_(t, TASK_FIELDS_ALL);
@@ -109,6 +128,7 @@ function taskDto_(t, user, extra) {
   o.hold = t.status === STATUS.ON_HOLD ? { reason: t.holdReason || '', party: t.holdParty || 'internal', partyLabel: HOLD_PARTIES[t.holdParty] || HOLD_PARTIES.internal,
     dept: t.holdDept || '', since: t.holdSince || '' } : null;
   o.heldDays = Math.round((Number(t.heldMs) || 0) / 864e5 * 10) / 10;
+  o.sizeList = sizesOf_(t); o.filesRequired = filesRequired_(t);
   o.reopenedAt = t.reopenedAt || ''; o.reopenReason = t.reopenReason || ''; o.reopenCount = Number(t.reopenCount) || 0;
   if (isLeader_(user)) {
     o.assigneeEmail = t.assigneeEmail;
@@ -136,7 +156,8 @@ function api_bootstrap() {
     var u = currentUser_();
     var s = settings_();
     return {
-      user: { email: u.email, name: u.name, role: u.role },
+      user: (function () { var pf = profileOf_(u.email); return { email: u.email, name: u.name, role: u.role, nickname: pf.nickname || '', photo: pf.photo || '' }; })(),
+      teamChat: !!s.teamChat, allowPersonalTheme: !!s.allowPersonalTheme, countEachSize: !!s.countEachSize,
       companyName: s.companyName, portalName: s.portalName,
       priorities: s.priorities, statuses: STATUS_ORDER, progressSteps: PROGRESS_STEPS,
       departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
@@ -354,7 +375,7 @@ function api_getTask(taskId) {
       return {
         taskId: leader || mine ? x.taskId : '', title: x.title, status: x.status, mine: mine,
         assigneeName: x.assigneeEmail ? (leader || mine ? displayName_(x.assigneeEmail) : 'Another designer') : 'Not assigned',
-        required: Number(x.deliverablesRequired) || 0, approved: deliverableCounts_(x.taskId).deliverablesApproved
+        required: filesRequired_(x), approved: deliverableCounts_(x.taskId).deliverablesApproved
       };
     }) : [];
 
@@ -365,7 +386,7 @@ function api_getTask(taskId) {
         requirementId: req.requirementId || '', requesterName: req.requesterName || '', department: req.department || '',
         email: req.email || '', phone: leader ? req.phone || '' : '', submittedAt: req.submittedAt || '',
         platform: req.platform || '', preferredDate: req.preferredDate || '', preferredTime: req.preferredTime || '', priorityRequested: req.priorityRequested || '',
-        quantity: req.quantity || '', typeFields: typeFields
+        quantity: req.quantity || '', typeFields: typeFields, coOwners: coOwnersOf_(req)
       },
       attachments: attachments,
       deliverables: deliverables,
@@ -455,7 +476,7 @@ function api_assignTask(taskId, input) {
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
-        bonusPoints: input.bonusPoints });
+        bonusPoints: input.bonusPoints, sizes: input.sizes });
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -484,7 +505,8 @@ function api_updateTask(taskId, patchIn) {
       referenceUrls: function (v) { return urls_(v).join('\n'); },
       creativeType: function (v) { return str_(v, 80, 'Category', false); },
       folderPath: function (v) { return cleanPath_(str_(v, 250, 'Folder', false)); },
-      bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); }
+      bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); },
+      sizes: function (v) { return cleanSizes_(v); }
     };
     var patch = {};
     Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
@@ -507,7 +529,7 @@ function api_updateTask(taskId, patchIn) {
             changed.filter(function (c) { return c !== 'internalNotes'; }).join(', ') + '.', 'task/' + t.taskId, false);
         }
       }
-      if (patch.deliverablesRequired) recomputeTaskStatus_(t.taskId, u);
+      if (patch.deliverablesRequired || patch.sizes !== undefined) recomputeTaskStatus_(t.taskId, u);
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -571,11 +593,13 @@ function holdTask_(t, u, o) {
   notify_(mail, 'task_status', 'On hold: ' + t.title, body, 'task/' + t.taskId, true);
   notify_(leaderEmails_().filter(function (e) { return e !== (u && u.email) && mail.indexOf(e) === -1; }), 'task_status', 'On hold: ' + t.title, body + '\n\nPut on hold by ' + who + '.', 'task/' + t.taskId, false);
   var req = dbGet_('Requirements', t.requirementId);
-  if (o.notifyRequester && party !== 'internal' && req && req.email) {
-    var link = trackUrl_(issueTrackToken_(req.email));
-    sendMail_(req.email, 'We need something from you: ' + req.title + ' (' + req.requirementId + ')',
-      'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" is on hold until we get this:\n\n' + o.reason +
-      (o.dept ? '\n\nFrom: ' + o.dept : '') + '\n\nThe design work so far is ready for you to see. Send the details from your requests page:\n' + link, { label: 'Send the details', url: link });
+  if (o.notifyRequester && party !== 'internal' && req && requesterEmails_(req).length && mailRule_('req_hold') && settings_().emailNotifications) {
+    requesterEmails_(req).forEach(function (em) {
+      var link = trackUrl_(issueTrackToken_(em));
+      sendMail_(em, 'We need something from you: ' + req.title + ' (' + req.requirementId + ')',
+        'Hi ' + req.requesterName + ',\n\nYour request "' + req.title + '" is on hold until we get this:\n\n' + o.reason +
+        (o.dept ? '\n\nFrom: ' + o.dept : '') + '\n\nThe design work so far is ready for you to see. Send the details from your requests page:\n' + link, { label: 'Send the details', url: link });
+    });
   }
 }
 
@@ -726,6 +750,7 @@ function assignInternal_(u, t, o) {
   if (startDate) patch.startDate = startDate;
   if (instructions !== undefined) patch.instructions = instructions;
   if (o.folderPath !== undefined) patch.folderPath = cleanPath_(o.folderPath);
+  if (o.sizes !== undefined && o.sizes !== null) patch.sizes = cleanSizes_(o.sizes);
   if (o.bonusPoints !== undefined && o.bonusPoints !== '' && o.bonusPoints !== null) patch.bonusPoints = String(int_(o.bonusPoints, 0, 1000, 'Bonus points'));
   var bonus = Number(patch.bonusPoints !== undefined ? patch.bonusPoints : t.bonusPoints) || 0;
   dbUpdate_('Tasks', t.taskId, patch);
@@ -789,7 +814,7 @@ function api_divideTask(taskId, input) {
       dbUpdate_('Tasks', t.taskId, { title: partTitle(0), deliverablesRequired: String(clean[0].count),
         creativeType: clean[0].category || t.creativeType, folderPath: clean[0].folderPath || t.folderPath || '', updatedAt: nowIso_() });
       logActivity_(t.taskId, u, 'updated', '', 'divided into ' + n + ' parts', '', 'team');
-      assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note, bonusPoints: clean[0].bonusPoints });
+      assignInternal_(u, dbGet_('Tasks', t.taskId), { assignee: clean[0].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[0].note, bonusPoints: clean[0].bonusPoints, sizes: input.sizes });
       // Parts 2..n become new tasks
       for (var i = 1; i < n; i++) {
         var newId = nextSeqId_('GFX');
@@ -804,7 +829,7 @@ function api_divideTask(taskId, input) {
         });
         dbInsert_('Tasks', copy);
         logActivity_(newId, u, 'created', '', STATUS.READY, 'Divided from ' + t.taskId, 'team');
-        assignInternal_(u, dbGet_('Tasks', newId), { assignee: clean[i].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[i].note, bonusPoints: clean[i].bonusPoints });
+        assignInternal_(u, dbGet_('Tasks', newId), { assignee: clean[i].assignee, dueDate: dueDate, dueTime: dueTime, priority: priority, note: clean[i].note, bonusPoints: clean[i].bonusPoints, sizes: input.sizes });
         ids.push(newId);
       }
       return { taskIds: ids };
@@ -851,7 +876,7 @@ function api_createDirectTask(input) {
         });
         if (req0.status === 'Completed') dbUpdate_('Requirements', req0.requirementId, { status: 'In work', updatedAt: now });
         logActivity_(tid, u, 'created', '', STATUS.READY, 'added by the team leader to ' + req0.requirementId, 'team');
-        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints });
+        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
         return { taskId: tid, requirementId: req0.requirementId, campaignId: req0.campaignId || '' };
       }
       if (intoCamp && !dbGet_('Campaigns', intoCamp)) throw AppError_('NOT_FOUND', 'Campaign not found.');
@@ -872,7 +897,7 @@ function api_createDirectTask(input) {
         dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now, folderPath: folderPath
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
-      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints });
+      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
       return { taskId: taskId, requirementId: reqId, campaignId: intoCamp || '' };
     });
   });

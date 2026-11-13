@@ -40,11 +40,45 @@ function notify_(emails, type, title, body, route, sendEmail) {
       notificationId: 'NTF-' + uuid_(), recipientEmail: email, type: type, title: title, body: body,
       route: route || '', createdAt: nowIso_(), readAt: ''
     });
-    if (sendEmail !== false && s.emailNotifications) {
+    if (sendEmail !== false && s.emailNotifications && mailRule_(NOTIFY_KIND_[type] || type)) {
       var link = s.internalUrl ? s.internalUrl + '?p=app&r=' + encodeURIComponent(route || '') : '';
       sendMail_(email, title, body, link ? { label: 'Open in portal', url: link } : null);
     }
   });
+}
+
+/** Notification type → the email switch in Settings → Emails (EMAIL_KINDS). */
+var NOTIFY_KIND_ = {
+  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', changes_requested: 'creative_changes',
+  task_overdue: 'task_due', task_due_soon: 'task_due', final_link: 'task_completed', request_edited: 'change_request'
+};
+
+/** True when the leader has this automatic email switched on (Settings → Emails). Unknown kinds are on. */
+function mailRule_(kind) {
+  if (!kind) return true;
+  var k = EMAIL_KINDS.filter(function (x) { return x.id === kind; })[0];
+  if (!k || k.always) return true;
+  var rules = settings_().emailRules || {};
+  return rules[kind] !== false;
+}
+
+/** Everyone who owns a request: the person who raised it plus anyone added as a co-owner. */
+function requesterEmails_(r) {
+  var out = [];
+  [r && r.email].concat(coOwnersOf_(r)).forEach(function (e) { e = String(e || '').toLowerCase().trim(); if (e && out.indexOf(e) === -1) out.push(e); });
+  return out;
+}
+
+function coOwnersOf_(r) {
+  return String((r && r.coOwners) || '').split(/[\s,;]+/).map(function (e) { return e.toLowerCase().trim(); }).filter(Boolean);
+}
+
+/** Email the requester (and co-owners) if that kind of email is switched on. */
+function mailRequesters_(r, kind, subject, body, button) {
+  if (!settings_().emailNotifications || !mailRule_(kind)) return 0;
+  var list = requesterEmails_(r);
+  list.forEach(function (e) { sendMail_(e, subject, body, typeof button === 'function' ? button(e) : button); });
+  return list.length;
 }
 
 var MAIL_QUEUE_ = [];
@@ -86,7 +120,10 @@ function api_getNotifications() {
     var u = currentUser_();
     var mine = dbFind_('Notifications', function (n) { return n.recipientEmail === u.email; })
       .sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+    var chat = 0;
+    try { chat = chatUnread_(u.email); } catch (e) { chat = 0; }
     return {
+      chatUnread: chat,
       unread: mine.filter(function (n) { return !n.readAt; }).length,
       items: mine.slice(0, 40).map(function (n) {
         return pick_(n, ['notificationId', 'type', 'title', 'body', 'route', 'createdAt', 'readAt']);

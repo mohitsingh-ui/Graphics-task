@@ -20,9 +20,10 @@ function apiPre(name) {
  * clears the memory, so you never see stale data after an edit. */
 var READ_APIS = { api_leaderDashboard: 1, api_designerDashboard: 1, api_listTasks: 1, api_getTask: 1, api_listApprovals: 1, api_listRewards: 1,
   api_getReports: 1, api_listTeam: 1, api_listCampaigns: 1, api_getCampaign: 1, api_listCompletedRequests: 1, api_getSettings: 1, api_listBatchLinks: 1,
-  api_listThemes: 1, api_listTaskShares: 1, api_folderOptions: 1 };
+  api_listThemes: 1, api_listTaskShares: 1, api_folderOptions: 1, api_getProfile: 1, api_pointsHistory: 1 };
 // Calls that neither read a screen nor change anything.
-var PASS_APIS = { api_getThumbs: 1, api_getAsset: 1, api_getNotifications: 1, api_downloadApprovedZip: 1, api_exportCsv: 1, api_bootstrap: 1 };
+var PASS_APIS = { api_getThumbs: 1, api_getAsset: 1, api_getNotifications: 1, api_downloadApprovedZip: 1, api_exportCsv: 1, api_bootstrap: 1,
+  api_chatList: 1, api_chatSeen: 1, api_chatSend: 1, api_chatDelete: 1 };
 var VIEW_CACHE = {}, RAW_API = api;
 api = function (name) {
   var args = Array.prototype.slice.call(arguments, 1);
@@ -76,15 +77,24 @@ var NAV = {
     { r: 'approvals', label: 'Creative Approvals', icon: 'check' },
     { r: 'reports', label: 'Reports', icon: 'chart' },
     { r: 'rewards', label: 'Leaderboard', icon: 'award' },
+    { r: 'chat', label: 'Team chat', icon: 'chat', chat: true },
     { r: 'team', label: 'Team Management', icon: 'users' },
     { r: 'settings', label: 'Settings', icon: 'settings' }
   ],
   designer: [
     { r: 'overview', label: 'My Dashboard', icon: 'home' },
     { r: 'tasks', label: 'My Tasks', icon: 'tasks' },
-    { r: 'rewards', label: 'My Points', icon: 'award' }
+    { r: 'rewards', label: 'My Points', icon: 'award' },
+    { r: 'chat', label: 'Team chat', icon: 'chat', chat: true },
+    { r: 'profile', label: 'My Profile', icon: 'user' }
   ]
 };
+/** Pages reached from links rather than the menu. */
+var EXTRA_ROUTES = ['task', 'history', 'profile'];
+
+function navItems() {
+  return NAV[APP.role === 'leader' ? 'leader' : 'designer'].filter(function (n) { return !n.chat || (APP.boot && APP.boot.teamChat); });
+}
 
 var VIEWS = {}; // filled by AppViews / AppTask / AppAdmin: VIEWS[name] = function (arg, el, token)
 
@@ -110,11 +120,11 @@ function startApp(initialRoute, pre) {
     $('#brandName').textContent = b.companyName || 'Graphics';
     $('#brandSub').textContent = APP.role === 'leader' ? 'Team leader' : 'Designer';
     $('#brandMark').textContent = (b.companyName || 'G').charAt(0);
-    $('#me').innerHTML = '<b>' + h(b.user.name) + '</b><span class="faint">' + h(b.user.email) + '</span>';
+    drawMe();
     buildNav();
     go(initialRoute || 'overview', true);
     loadNotifications();
-    setInterval(loadNotifications, 90000);
+    setInterval(loadNotifications, 45000);
   }).catch(function (e) {
     $('#view').innerHTML = '<div class="card" style="max-width:520px;margin:40px auto"><div class="card-b"><h2>Can’t open the portal</h2><p class="muted" style="margin-top:6px">' + h(errMsg(e)) + '</p></div></div>';
   });
@@ -122,8 +132,16 @@ function startApp(initialRoute, pre) {
 
 function closeMenu() { $('#side').classList.remove('open'); $('#scrim').classList.remove('open'); }
 
+/** Bottom of the menu: your photo + name; click to open your profile. */
+function drawMe() {
+  var u = APP.boot.user;
+  $('#me').innerHTML = '<a href="#" class="me-link" data-me>' + avatar(u, 34) + '<span class="grow" style="min-width:0"><b class="ellipsis">' + h(u.name) + (u.nickname ? ' <span class="faint" style="font-weight:400">· ' + h(u.nickname) + '</span>' : '') + '</b>' +
+    '<span class="faint ellipsis">' + h(u.email) + '</span></span></a>';
+  $('[data-me]').onclick = function (e) { e.preventDefault(); go('profile'); };
+}
+
 function buildNav() {
-  $('#nav').innerHTML = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) {
+  $('#nav').innerHTML = navItems().map(function (n) {
     return '<a href="#" data-r="' + n.r + '">' + icon(n.icon) + '<span>' + h(n.label) + '</span><span class="cnt hidden" data-cnt="' + n.r + '"></span></a>';
   }).join('');
   $all('#nav a').forEach(function (a) { a.onclick = function (e) { e.preventDefault(); go(a.getAttribute('data-r')); }; });
@@ -150,14 +168,17 @@ function render(route, soft) {
   closeMenu();
   var parts = route.split('/');
   var name = parts[0], arg = parts.slice(1).join('/');
-  var allowed = NAV[APP.role === 'leader' ? 'leader' : 'designer'].map(function (n) { return n.r; }).concat(['task']);
+  var allowed = navItems().map(function (n) { return n.r; }).concat(EXTRA_ROUTES);
+  if (name !== 'chat' && APP.chatTimer) { clearInterval(APP.chatTimer); APP.chatTimer = null; }
   if (allowed.indexOf(name) === -1 || !VIEWS[name]) name = 'overview';
-  $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === (name === 'task' ? 'tasks' : name)); });
+  var navOn = name === 'task' ? 'tasks' : name === 'history' ? 'rewards' : name === 'profile' && arg ? (APP.role === 'leader' ? 'team' : 'rewards') : name;
+  $all('#nav a').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-r') === navOn); });
   var token = ++APP.viewToken;
   var el = $('#view');
   if (soft) {
     // Background refresh: redraw in place, keep the scroll position, no spinner.
     var y = window.scrollY;
+    el.classList.remove('view-in');
     VIEWS[name](arg, el, token);
     setTimeout(function () { window.scrollTo(0, y); }, 0);
     return;
@@ -183,6 +204,7 @@ function viewError(el, e) {
 function loadNotifications() {
   return apiPre('api_getNotifications').then(function (n) {
     APP.notifs = n;
+    if (APP.route !== 'chat') navCount('chat', n.chatUnread || 0);
     var b = $('#bellBtn');
     var d = $('.dotc', b);
     if (n.unread) { if (!d) { d = document.createElement('span'); d.className = 'dotc'; b.appendChild(d); } d.textContent = n.unread > 9 ? '9+' : n.unread; }

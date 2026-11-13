@@ -703,6 +703,146 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('63-task-new-campaign');
     });
 
+    await step('Settings: email switches, team chat + own colours toggles, reopen bonus and size rule', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=settings');
+      await page.waitForSelector('#emailRules');
+      assert.ok(await page.isDisabled('[data-er="req_link"]'), 'always-on email is locked');
+      await page.locator('[data-er="task_assigned"]').evaluate(e => { e.checked = false; });
+      await page.fill('#s_pointsReopen', '15');
+      assert.ok(await page.isChecked('#s_teamChat'));
+      await page.locator('#emailRules').scrollIntoViewIfNeeded();
+      await shot('64-settings-emails');
+      await page.click('#saveSettings');
+      await page.waitForSelector('.toast');
+      const st = env.call(LEADER, 'api_getSettings').data.settings;
+      assert.strictEqual(st.emailRules.task_assigned, false); assert.strictEqual(st.pointsReopen, 15);
+      env.call(LEADER, 'api_saveSettings', { emailRules: {} });
+    });
+
+    await step('Profile: nickname, photo, portfolio; own colours; tips; the team', async () => {
+      await page.goto(BASE + '/page?as=' + A + '&r=profile');
+      await page.waitForSelector('#pfEdit');
+      await page.fill('#pfNick', 'Ash');
+      await page.fill('#pfUrl', 'https://behance.net/asha');
+      await page.fill('#pfBio', 'Packaging, type and bold colours');
+      const fc = page.waitForEvent('filechooser');
+      await page.click('#pfPick');
+      await (await fc).setFiles({ name: 'me.png', mimeType: 'image/png', buffer: await bannerPng('Asha', 200) });
+      await page.waitForSelector('#pfPhotoBox img');
+      await page.click('#pfSave');
+      await page.waitForFunction(() => /Ash/.test(document.querySelector('#me').textContent) && document.querySelector('#me img'));
+      await page.waitForFunction(() => /100% complete/.test(document.body.textContent));
+      await shot('65-profile');
+      // own colours
+      await page.click('[data-pth="forest"]');
+      await page.click('#pfLookSave');
+      await page.waitForTimeout(1200);
+      await page.goto(BASE + '/page?as=' + A + '&r=profile');
+      await page.waitForSelector('.prof-hero');
+      const acc = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+      assert.strictEqual(acc, '#2e6f40', 'designer sees their own colours');
+      await shot('66-profile-own-colours');
+      env.call(A, 'api_saveProfile', { theme: '' });
+      // leader sees Asha on the team page and opens her profile
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=team');
+      await page.waitForSelector('[data-go="profile/' + encodeURIComponent(A) + '"]');
+      await page.click('[data-go="profile/' + encodeURIComponent(A) + '"]');
+      await page.waitForSelector('.prof-hero');
+      assert.ok((await page.textContent('.prof-hero')).includes('Ash'));
+    });
+
+    await step('Team chat: messages, links and a shared image appear for everyone (no email)', async () => {
+      const mails = env.state.mail.length;
+      await page.goto(BASE + '/page?as=' + A + '&r=chat');
+      await page.waitForSelector('#chatTxt');
+      await page.fill('#chatTxt', 'New Diwali references are up: https://pin.it/diwali-board');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => /pin\.it\/diwali-board/.test(document.querySelector('#chatList').textContent) && !document.querySelector('[data-mid^="tmp-"]'));
+      const lead = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+      lead.on('pageerror', e => errors.push('leader chat: ' + e.message));
+      await lead.goto(BASE + '/page?as=' + LEADER);
+      await lead.waitForSelector('.kpis');
+      await lead.waitForFunction(() => { const c = document.querySelector('[data-cnt="chat"]'); return c && !c.classList.contains('hidden'); }, null, { timeout: 8000 });
+      await lead.click('[data-r="chat"]');
+      await lead.waitForSelector('.msg .chat-text a[href*="pin.it"]');
+      const fc = lead.waitForEvent('filechooser');
+      await lead.fill('#chatTxt', 'Moodboard for the hamper shoot');
+      await lead.click('#chatAtt');
+      await (await fc).setFiles({ name: 'moodboard.png', mimeType: 'image/png', buffer: await bannerPng('Moodboard', 40) });
+      await lead.waitForSelector('.msg.mine .chat-img img', { timeout: 10000 });
+      // Asha's open chat picks it up by itself
+      await page.waitForSelector('.msg:not(.mine) .chat-img', { timeout: 10000 });
+      await page.waitForSelector('.msg:not(.mine) .chat-img img', { timeout: 10000 });
+      assert.ok((await page.textContent('#chatList')).includes('Moodboard for the hamper shoot'));
+      await shot('67-team-chat');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(200);
+      await shot('68-team-chat-mobile');
+      await page.setViewportSize({ width: 1280, height: 860 });
+      await lead.click('.msg.mine .chat-img');
+      await lead.waitForSelector('.lightbox.gal img[src^="data:"], .lightbox.gal img[src^="http"]', { timeout: 8000 });
+      await lead.keyboard.press('Escape');
+      assert.strictEqual(env.state.mail.slice(mails).filter(m => /Diwali references|Moodboard/.test(m.body)).length, 0, 'chat sends no email');
+      await lead.close();
+    });
+
+    await step('Sizes when assigning: 2 banners × desktop + mobile = 4 files to upload', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=tasks');
+      await page.waitForSelector('[data-assign-new]');
+      await page.click('[data-assign-new]');
+      await page.waitForSelector('#dtSz');
+      await page.fill('#dtT', 'Homepage banners — Winter sale');
+      await page.selectOption('#dtA', A);
+      await page.fill('#dtD', future(4));
+      await page.fill('#dtQ', '2');
+      await page.fill('#dtSz', 'Desktop 1920×600\nMobile 768×900');
+      await shot('69-assign-with-sizes');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForFunction(() => /2 creative\(s\) × 2 sizes/.test(document.body.textContent));
+      assert.ok((await page.textContent('.page-h')).includes('of 4 files approved'));
+      await shot('70-task-with-sizes');
+    });
+
+    await step('Points history: leader filters by person; designer sees only their own', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=reports');
+      await page.waitForSelector('#pointsReport');
+      await page.click('#pointsReport [data-go="history"]');
+      await page.waitForSelector('.hist-row');
+      await page.selectOption('#hP', A);
+      await page.waitForFunction(a => document.querySelector('#hP') && document.querySelector('#hP').value === a && document.querySelectorAll('.hist-row').length > 0, A);
+      await shot('71-points-history');
+      await page.goto(BASE + '/page?as=' + A + '&r=history');
+      await page.waitForSelector('.hist-row');
+      assert.ok(!(await page.$('#hP')), 'designers have no person filter');
+    });
+
+    await step('Co-owners: requester adds a colleague in My requests and edits the request', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Priya', department: 'Marketing', email: 'priya@example.org', brief: 'Republic Day banner set', preferredDate: future(6), quantity: 1 }).data;
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      mob.on('pageerror', e => errors.push('owners: ' + e.message));
+      await mob.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await mob.waitForSelector('[data-addown="' + s.requirementId + '"]');
+      await mob.click('[data-addown="' + s.requirementId + '"]');
+      await mob.fill('#aoE', 'rahul@example.org');
+      await mob.click('.modal-f >> text=Add');
+      await mob.waitForFunction(() => /rahul@example\.org/.test(document.querySelector('#main').textContent));
+      await mob.click('[data-edit="' + s.requirementId + '"]');
+      await mob.fill('#erB', 'Republic Day banner set — use the tricolour ribbon');
+      await shot('72-my-requests-edit', mob);
+      await mob.click('.modal-f >> text=Save changes');
+      await mob.waitForSelector('.toast');
+      const mail = env.state.mail.filter(m => m.to === 'rahul@example.org').pop();
+      const t = /t=([A-Za-z0-9_-]{40,60})/.exec(mail.body)[1];
+      await mob.goto(BASE + '/page?p=my&t=' + t);
+      await mob.waitForFunction(id => document.body.textContent.includes(id), s.requirementId);
+      await shot('73-co-owner-sees-request', mob);
+      await mob.close();
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#addOwner');
+      assert.ok((await page.textContent('.owner-chips')).includes('rahul@example.org'));
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

@@ -64,6 +64,10 @@
   .st-being-revised { background: var(--info-soft); color: var(--info); }
   .st-completed { background: var(--ok-soft); color: var(--ok); }
   .st-cancelled { background: var(--muted-soft); color: var(--text-3); }
+  .owners { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .owner-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; background: var(--muted-soft); border-radius: 99px; padding: 2px 6px 2px 10px; }
+  .owner-chip button { border: 0; background: none; cursor: pointer; padding: 2px; color: var(--text-3); display: inline-flex; }
+  .owner-chip button svg { width: 12px; height: 12px; }
   @media (max-width: 600px) {
     .mrow, .mrow.split { grid-template-columns: 1fr; gap: 2px; }
     .mrow.split > .mlabel { margin-top: 4px; }
@@ -148,6 +152,47 @@ function renderMy() {
             var v = $('#akM', m).value.trim();
             if (v.length < 5) return fieldErrors(m, 'Describe what needs to change.');
             return api('api_trackAskChanges', TRACKS, id, v).then(function (r) { close(); toast(r.message); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+          } }] });
+      };
+    });
+    $all('[data-addown]', el).forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-addown');
+        modal({ title: 'Add someone to this request', body: '<p class="muted" style="margin-top:0">They’ll get an email with their own link. Then you both see this request in My requests, can edit it and approve the creatives.</p>' +
+          '<div class="field"><label for="aoE">Their email</label><input type="email" id="aoE" maxlength="254" placeholder="colleague@company.com" autocomplete="off"></div><div class="alert bad hidden" data-form-error></div>',
+          actions: [{ label: 'Cancel' }, { label: 'Add', cls: 'primary', onClick: function (close, m) {
+            var v = $('#aoE', m).value.trim();
+            if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v)) return fieldErrors(m, 'Enter a valid email.');
+            return api('api_trackAddOwner', TRACKS, id, v).then(function () { close(); toast('Added — we’ve emailed them their link'); renderMy(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
+          } }] });
+      };
+    });
+    $all('[data-rmown]', el).forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-rmown'), em = b.getAttribute('data-em');
+        confirmBox('Remove ' + em + '?', 'They won’t see this request any more.', 'Remove', true).then(function (y) {
+          if (y) api('api_trackRemoveOwner', TRACKS, id, em).then(function () { toast('Removed'); renderMy(); }).catch(function (e) { toast(errMsg(e), true); });
+        });
+      };
+    });
+    $all('[data-edit]', el).forEach(function (b) {
+      b.onclick = function () {
+        var r = list.filter(function (x) { return x.requirementId === b.getAttribute('data-edit'); })[0];
+        if (!r) return;
+        var e = r.edit || {};
+        modal({ title: 'Edit ' + r.requirementId, wide: true, body: '<p class="muted" style="margin-top:0">The graphics team is told what changed. To change how many creatives you need, write it in the brief.</p>' +
+          '<div class="field"><label for="erT">Title</label><input id="erT" maxlength="150" value="' + h(e.title) + '"></div>' +
+          '<div class="field"><label for="erB">What you need (brief)</label><textarea id="erB" rows="5" maxlength="8000">' + h(e.brief) + '</textarea></div>' +
+          '<div class="field"><label for="erC">Copy / text on the creative</label><textarea id="erC" rows="3" maxlength="8000">' + h(e.copyText) + '</textarea></div>' +
+          '<div class="field"><label for="erI">Anything else</label><textarea id="erI" rows="2" maxlength="8000">' + h(e.instructions) + '</textarea></div>' +
+          '<div class="row wrap" style="gap:12px"><div class="field"><label for="erD">Needed by</label><input type="date" id="erD" min="' + todayIso() + '" value="' + h(e.preferredDate) + '"></div>' +
+          '<div class="field"><label for="erTm">Time (optional)</label><input type="time" id="erTm" step="900" value="' + h(e.preferredTime) + '"></div></div>' +
+          '<div class="alert bad hidden" data-form-error></div>',
+          actions: [{ label: 'Cancel' }, { label: 'Save changes', cls: 'primary', onClick: function (close, m) {
+            return api('api_trackEditRequest', TRACKS, r.requirementId, { title: $('#erT', m).value, brief: $('#erB', m).value, copyText: $('#erC', m).value, instructions: $('#erI', m).value,
+              preferredDate: $('#erD', m).value, preferredTime: $('#erTm', m).value }).then(function (x) {
+              close(); toast(x.changed.length ? 'Saved — the graphics team has been told' : 'Nothing changed'); renderMy();
+            }).catch(function (er) { fieldErrors(m, errMsg(er)); });
           } }] });
       };
     });
@@ -257,7 +302,12 @@ function reqCard(r) {
   })).join('');
   if (r.finalFolderUrl) acts = '<a class="btn ok sm" href="' + h(r.finalFolderUrl) + '" target="_blank" rel="noopener">' + icon('download') + ' All approved files (Google Drive)</a>' + acts;
   acts = (r.hold ? '<button class="btn primary sm" data-sendinfo="' + h(r.requirementId) + '">' + icon('send') + ' Send the details</button>' : '') + all + acts +
-    (r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '');
+    (r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '') +
+    (r.canEdit ? '<button class="btn sm" data-edit="' + h(r.requirementId) + '">Edit request</button>' : '');
+  var owners = '<div class="owners"><span class="faint small">' + icon('users').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Owners:</span>' +
+    (r.raisedBy ? '<span class="owner-chip">' + h(r.raisedByName || r.raisedBy) + ' <span class="faint">(raised it)</span></span>' : '') +
+    (r.coOwners || []).map(function (e) { return '<span class="owner-chip">' + h(e) + '<button type="button" data-rmown="' + h(r.requirementId) + '" data-em="' + h(e) + '" aria-label="Remove ' + h(e) + '" title="Remove">' + icon('x') + '</button></span>'; }).join('') +
+    '<button type="button" class="btn ghost sm" data-addown="' + h(r.requirementId) + '">' + icon('plus') + ' Add person</button></div>';
   var cr = r.creatives || [];
   var galleryHtml = cr.length ? '<div class="gal-h"><span>Creatives (' + cr.length + ')</span><span class="faint small">Tap to view' + (cr.some(function (c) { return c.canDownload; }) ? ' · download approved ones' : '') + '</span></div>' +
     '<div class="gallery">' + cr.map(function (c) {
@@ -266,7 +316,7 @@ function reqCard(r) {
         (c.canDownload ? '<button class="dl" data-dl="' + h(c.versionId) + '" title="Download" aria-label="Download ' + h(c.title) + '">' + icon('download') + '</button>' : '') + '</div></div></div>';
     }).join('') + '</div>' : '';
   return '<div class="req-card"><div class="top"><div><h3>' + h(r.title) + '</h3><div class="meta">' + h(r.requirementId) + ' · sent ' + fmtDate(r.submittedAt) +
-    ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' +
+    ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' + owners +
     (r.hold ? '<div class="alert warn" style="margin-top:12px"><b>We need something from you' + (r.hold.dept ? ' (' + h(r.hold.dept) + ')' : '') + '</b><div class="pre" style="margin-top:4px">' + h(r.hold.reason) +
       '</div><div class="small" style="margin-top:6px">The design is ready to see below. The work is paused until we get this.</div></div>' : '') +
     (r.reopened ? '<div class="alert info" style="margin-top:12px">Reopened for changes — the ★ final files stay available until the new ones are approved.</div>' : '') +
