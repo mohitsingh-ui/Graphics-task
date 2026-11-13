@@ -114,6 +114,7 @@ function api_getMyRequests(token) {
         reopened: tasks.some(function (t) { return t.reopenedAt && CLOSED.indexOf(t.status) === -1; }),
         raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r),
         canEdit: ['Completed', 'Cancelled'].indexOf(requesterStatus_(tasks)) === -1,
+        canReopen: !!settings_().requesterCanReopen && requesterStatus_(tasks) === 'Completed',
         edit: { title: r.title, brief: r.brief, instructions: r.instructions || '', copyText: r.copyText || '', preferredDate: r.preferredDate || '', preferredTime: r.preferredTime || '' },
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
@@ -529,6 +530,43 @@ function api_trackEditRequest(token, requirementId, patchIn) {
       notify_(mail, 'request_edited', 'Request updated: ' + (p.title || r.title), who + ' updated ' + r.requirementId + '.\n\n' + summary +
         (p.brief ? '\n\nNew brief:\n' + p.brief.slice(0, 800) : ''), x.tasks[0] ? 'task/' + x.tasks[0].taskId : 'requirements', true);
       return { changed: changed };
+    });
+  });
+}
+
+
+/**
+ * Requester (or a co-owner) reopens their finished request for changes, from "My requests".
+ * versionIds: the creatives that need changes (empty = all). Every finished task holding one of
+ * them goes back to the designer with the new date; the leader is told.
+ */
+function api_trackReopen(token, requirementId, input) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackreopen:' + keys.join(',').slice(0, 120), 10, 3600);
+    if (!settings_().requesterCanReopen) throw AppError_('FORBIDDEN', 'Reopening is done by the graphics team lead. Use “Need changes?” instead.');
+    input = input || {};
+    var reason = str_(input.reason, 2000, 'What needs to change', true);
+    if (reason.length < 5) throw AppError_('VALIDATION', 'Describe what needs to change.');
+    var dueDate = date_(input.dueDate, 'Needed by', true), dueTime = time_(input.dueTime, 'Time', false);
+    if (dueDate < isoDateOnly_()) throw AppError_('VALIDATION', 'The date can’t be in the past.');
+    var vids = (Array.isArray(input.versionIds) ? input.versionIds : []).map(String).slice(0, 200);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      if (requesterStatus_(x.tasks) !== 'Completed') throw AppError_('INVALID_STATE', 'Only a finished request can be reopened.');
+      var who = ownerKey_(keys, x.r) || '';
+      var actor = { email: who || 'requester', role: 'requester', name: who && who === String(x.r.email || '').toLowerCase() ? x.r.requesterName : who || x.r.requesterName };
+      var picks = {};
+      vids.forEach(function (id) { var v = dbGet_('CreativeVersions', id); if (v) (picks[v.taskId] = picks[v.taskId] || []).push(v.deliverableId); });
+      var done = x.tasks.filter(function (t) { return t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED; });
+      var targets = vids.length ? done.filter(function (t) { return picks[t.taskId]; }) : done;
+      if (!targets.length) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
+      var n = 0;
+      targets.forEach(function (t) { n += reopenTask_(t, actor, reason, dueDate, dueTime, picks[t.taskId] || [], false).length; });
+      notify_(leaderEmails_(), 'change_request', 'Reopened by the requester: ' + x.r.title,
+        (actor.name || 'The requester') + ' (' + x.r.department + ') reopened ' + x.r.requirementId + ' for changes — ' + n + ' creative(s), needed by ' + dueText_(dueDate, dueTime) + '.\n\n“' + reason + '”',
+        'task/' + targets[0].taskId, true);
+      return { reopened: n, tasks: targets.length, message: 'Reopened — the graphics team is working on your changes.' };
     });
   });
 }

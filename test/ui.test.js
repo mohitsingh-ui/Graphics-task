@@ -803,6 +803,34 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await shot('70-task-with-sizes');
     });
 
+    await step('Points for this task: leader sets fixed points instead of automatic ones', async () => {
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=tasks');
+      await page.waitForSelector('[data-assign-new]');
+      await page.click('[data-assign-new]');
+      await page.waitForSelector('[data-pm="dtFp"]');
+      await page.fill('#dtT', 'Reference images for the hamper shoot');
+      await page.selectOption('#dtA', A);
+      await page.fill('#dtD', future(3));
+      await page.fill('#dtQ', '4');
+      assert.ok(await page.isHidden('#dtFp'), 'automatic by default');
+      await page.click('[data-pm="dtFp"] [data-v="fixed"]');
+      await page.fill('#dtFp', '5');
+      await page.locator('[data-pm="dtFp"]').scrollIntoViewIfNeeded();
+      await shot('74-assign-fixed-points');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForFunction(() => /5 pts for this task/.test(document.querySelector('.page-h').textContent));
+      const tid = (await page.textContent('.page-h .mono')).trim();
+      assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.fixedPoints, '5');
+      // switch back to automatic from Edit details
+      await page.click('#aEdit');
+      await page.waitForSelector('[data-pm="e_fp"]');
+      assert.strictEqual(await page.inputValue('#e_fp'), '5');
+      await page.click('[data-pm="e_fp"] [data-v="auto"]');
+      await page.click('.modal-f >> text=Save');
+      await page.waitForFunction(() => !/pts for this task/.test(document.querySelector('.page-h').textContent));
+      assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.fixedPoints, '');
+    });
+
     await step('Points history: leader filters by person; designer sees only their own', async () => {
       await page.goto(BASE + '/page?as=' + LEADER + '&r=reports');
       await page.waitForSelector('#pointsReport');
@@ -841,6 +869,35 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
       await page.waitForSelector('#addOwner');
       assert.ok((await page.textContent('.owner-chips')).includes('rahul@example.org'));
+    });
+
+    await step('Requester reopens a finished request from My requests', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Oil team', department: 'Category', email: 'oil@example.org', brief: 'Oil label mockups', preferredDate: future(5), quantity: 2 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' });
+      const vs = [];
+      for (const n of ['Mustard oil', 'Coconut oil']) {
+        const b = await bannerPng(n, 30);
+        const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: n, fileName: 'o.png', size: b.length }).data;
+        vs.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+      }
+      env.call(A, 'api_submitForApproval', tid, vs);
+      env.call('', 'api_trackApproveMany', s.trackToken, vs);
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      mob.on('pageerror', e => errors.push('reopen: ' + e.message));
+      await mob.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await mob.waitForSelector('[data-reopen="' + s.requirementId + '"]');
+      await mob.click('[data-reopen="' + s.requirementId + '"]');
+      await mob.fill('#roR', 'Change the MRP to ₹899 on the coconut label');
+      await mob.uncheck('#roAll');
+      await mob.check('.ro-item input[value="' + vs[1] + '"]');
+      await shot('75-requester-reopen', mob);
+      await mob.click('.modal-f >> text=Reopen');
+      await mob.waitForFunction(id => { const c = [...document.querySelectorAll('.req-card')].find(x => x.textContent.includes(id)); return c && /Being revised/.test(c.textContent); }, s.requirementId);
+      await mob.close();
+      const d = env.call(A, 'api_getTask', tid).data;
+      assert.strictEqual(d.task.status, 'Changes Requested');
+      assert.strictEqual(d.deliverables.filter(x => x.status === 'Changes Requested').length, 1);
     });
 
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {

@@ -22,7 +22,7 @@ var SCHEMA = {
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
     'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink',
-    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes'],
+    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes', 'fixedPoints'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -50,7 +50,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 11;
+var SCHEMA_VERSION = 12;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -151,6 +151,7 @@ var DEFAULT_SETTINGS = {
   countEachSize: false,      // false: a creative made in 2–3 sizes earns points once; true: every size file counts as its own creative
   allowPersonalTheme: true,  // team members may pick their own colours on their profile
   teamChat: true,            // team chat on/off
+  requesterCanReopen: true,  // requesters can reopen their own finished request for changes from "My requests"
   emailRules: {},            // which automatic emails go out — see EMAIL_KINDS; missing key = on
   theme: 'rosier',           // colour theme for every page (see THEMES)
   accentColor: '',           // optional custom accent colour (#rrggbb) on top of the theme
@@ -209,7 +210,7 @@ var EDITABLE_SETTINGS = {
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
   creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number',
-  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', emailRules: 'emailRules'
+  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', requesterCanReopen: 'boolean', emailRules: 'emailRules'
 };
 
 /**
@@ -1509,6 +1510,11 @@ function cleanSizes_(v) {
   return list.map(function (x) { return str_(x, 60, 'Size', true); }).join('\n');
 }
 
+/** '' = automatic points; a number (0 allowed) = only these points for the task, paid on completion. */
+function fixedPts_(v) {
+  return v === '' || v === null || v === undefined ? '' : String(int_(v, 0, 1000, 'Points for this task'));
+}
+
 /** Files to upload: creatives × sizes (5 banners in desktop + mobile = 10 files). */
 function filesRequired_(t) {
   return Math.max(1, Number(t.deliverablesRequired) || 1) * Math.max(1, sizesOf_(t).length);
@@ -1599,7 +1605,7 @@ function completeTask_(task, actor, note) {
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
   'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'finalLink', 'priority',
-  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes'];
+  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes', 'fixedPoints'];
 
 function taskDto_(t, user, extra) {
   var o = pick_(t, TASK_FIELDS_ALL);
@@ -1956,7 +1962,7 @@ function api_assignTask(taskId, input) {
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
-        bonusPoints: input.bonusPoints, sizes: input.sizes });
+        bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -1986,7 +1992,8 @@ function api_updateTask(taskId, patchIn) {
       creativeType: function (v) { return str_(v, 80, 'Category', false); },
       folderPath: function (v) { return cleanPath_(str_(v, 250, 'Folder', false)); },
       bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); },
-      sizes: function (v) { return cleanSizes_(v); }
+      sizes: function (v) { return cleanSizes_(v); },
+      fixedPoints: function (v) { return fixedPts_(v); }
     };
     var patch = {};
     Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
@@ -2152,6 +2159,37 @@ function api_resumeTask(taskId, input) {
  * Leader reopens a completed task for new changes. The approved files stay as
  * the "final" versions until new ones are approved. input: { reason, deliverableIds?, dueDate, dueTime }
  */
+/**
+ * Puts a finished task back to "Changes Requested" (caller holds the lock and checked rights).
+ * deliverableIds: which creatives need changes (all when empty). Approved files stay final until replaced.
+ */
+function reopenTask_(t, actor, reason, dueDate, dueTime, deliverableIds, strict) {
+  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED; });
+  var pick = Array.isArray(deliverableIds) && deliverableIds.length ? deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
+  var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
+  if (!chosen.length && dels.length) {
+    if (strict) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
+    return [];
+  }
+  var now = nowIso_();
+  chosen.forEach(function (d) { dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now }); });
+  dbUpdate_('Tasks', t.taskId, {
+    status: STATUS.CHANGES, prevStatus: t.status, completedAt: '', progress: '50', dueDate: dueDate, dueTime: dueTime,
+    reopenedAt: now, reopenReason: reason, reopenCount: String((Number(t.reopenCount) || 0) + 1),
+    overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: now
+  });
+  logActivity_(t.taskId, actor, 'reopened', t.status, STATUS.CHANGES, reason + ' · ' + chosen.length + ' creative(s) · due ' + dueText_(dueDate, dueTime), 'team');
+  var req = dbGet_('Requirements', t.requirementId);
+  if (req && req.status === 'Completed') dbUpdate_('Requirements', req.requirementId, { status: 'Received', updatedAt: now });
+  if (t.assigneeEmail && t.assigneeEmail !== actor.email) {
+    notify_([t.assigneeEmail], 'task_reopened', 'Reopened for changes: ' + t.title,
+      (actor.role === 'requester' ? 'Reopened by the requester (' + (actor.name || actor.email) + ').\n\n' : '') +
+      'What needs to change:\n\n' + reason + '\n\nCreatives: ' + chosen.map(function (d) { return d.title; }).join(', ') + '\nDue ' + dueText_(dueDate, dueTime) +
+      '\n\nThe approved files stay as the final versions until the new ones are approved.', 'task/' + t.taskId, true);
+  }
+  return chosen;
+}
+
 function api_reopenTask(taskId, input) {
   return respond_(function () {
     var u = requireLeader_();
@@ -2163,25 +2201,7 @@ function api_reopenTask(taskId, input) {
     return withLock_(function () {
       var t = requireTask_(u, taskId);
       if (t.status !== STATUS.COMPLETED && t.status !== STATUS.APPROVED) throw AppError_('INVALID_STATE', 'Only a completed task can be reopened.');
-      var dels = taskDeliverables_(t.taskId);
-      var pick = Array.isArray(input.deliverableIds) && input.deliverableIds.length ? input.deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
-      var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
-      if (!chosen.length && dels.length) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
-      var now = nowIso_();
-      chosen.forEach(function (d) { dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now }); });
-      dbUpdate_('Tasks', t.taskId, {
-        status: STATUS.CHANGES, prevStatus: t.status, completedAt: '', progress: '50', dueDate: dueDate, dueTime: dueTime,
-        reopenedAt: now, reopenReason: reason, reopenCount: String((Number(t.reopenCount) || 0) + 1),
-        overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: now
-      });
-      logActivity_(t.taskId, u, 'reopened', t.status, STATUS.CHANGES, reason + ' · ' + chosen.length + ' creative(s) · due ' + dueText_(dueDate, dueTime), 'team');
-      var req = dbGet_('Requirements', t.requirementId);
-      if (req && req.status === 'Completed') dbUpdate_('Requirements', req.requirementId, { status: 'Received', updatedAt: now });
-      if (t.assigneeEmail && t.assigneeEmail !== u.email) {
-        notify_([t.assigneeEmail], 'task_reopened', 'Reopened for changes: ' + t.title,
-          'What needs to change:\n\n' + reason + '\n\nCreatives: ' + chosen.map(function (d) { return d.title; }).join(', ') + '\nDue ' + dueText_(dueDate, dueTime) +
-          '\n\nThe approved files stay as the final versions until the new ones are approved.', 'task/' + t.taskId, true);
-      }
+      var chosen = reopenTask_(t, u, reason, dueDate, dueTime, input.deliverableIds, true);
       return { status: STATUS.CHANGES, reopened: chosen.length };
     });
   });
@@ -2231,6 +2251,7 @@ function assignInternal_(u, t, o) {
   if (instructions !== undefined) patch.instructions = instructions;
   if (o.folderPath !== undefined) patch.folderPath = cleanPath_(o.folderPath);
   if (o.sizes !== undefined && o.sizes !== null) patch.sizes = cleanSizes_(o.sizes);
+  if (o.fixedPoints !== undefined) patch.fixedPoints = fixedPts_(o.fixedPoints);
   if (o.bonusPoints !== undefined && o.bonusPoints !== '' && o.bonusPoints !== null) patch.bonusPoints = String(int_(o.bonusPoints, 0, 1000, 'Bonus points'));
   var bonus = Number(patch.bonusPoints !== undefined ? patch.bonusPoints : t.bonusPoints) || 0;
   dbUpdate_('Tasks', t.taskId, patch);
@@ -2249,6 +2270,7 @@ function assignInternal_(u, t, o) {
   notify_([patch.assigneeEmail], previous ? 'task_reassigned' : 'task_assigned',
     (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
     t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (bonus ? '\n\nBonus: +' + bonus + ' points when this task is completed.' : '') +
+    (fresh.fixedPoints !== '' && fresh.fixedPoints !== undefined ? '\n\nPoints for this task: ' + fresh.fixedPoints + ' (set by the team leader, paid when completed).' : '') +
     (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
   if (previous && previous !== patch.assigneeEmail) {
     notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
@@ -2356,7 +2378,7 @@ function api_createDirectTask(input) {
         });
         if (req0.status === 'Completed') dbUpdate_('Requirements', req0.requirementId, { status: 'In work', updatedAt: now });
         logActivity_(tid, u, 'created', '', STATUS.READY, 'added by the team leader to ' + req0.requirementId, 'team');
-        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
+        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
         return { taskId: tid, requirementId: req0.requirementId, campaignId: req0.campaignId || '' };
       }
       if (intoCamp && !dbGet_('Campaigns', intoCamp)) throw AppError_('NOT_FOUND', 'Campaign not found.');
@@ -2377,7 +2399,7 @@ function api_createDirectTask(input) {
         dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now, folderPath: folderPath
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
-      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
+      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
       return { taskId: taskId, requirementId: reqId, campaignId: intoCamp || '' };
     });
   });
@@ -3654,9 +3676,9 @@ function pointsReport_(r, table) {
   var people = dbFind_('Users', function (x) { return x.role === ROLES.DESIGNER || (table[x.email.toLowerCase()] && table[x.email.toLowerCase()].period); })
     .map(function (x) {
       var t = table[x.email.toLowerCase()] || { period: 0, total: 0, inPeriod: null };
-      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } };
+      var p = t.inPeriod || { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 }, fixed: { n: 0, pts: 0 } };
       return { name: x.name, email: x.email, designation: x.designation || '', active: bool_(x.active), period: t.period, total: t.total,
-        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 }, reopen: p.reopen || { n: 0, pts: 0 } };
+        creatives: p.creatives, firstTime: p.firstTime, onTime: p.onTime, rejected: p.rejected, rewards: p.rewards, bonus: p.bonus || { n: 0, pts: 0 }, reopen: p.reopen || { n: 0, pts: 0 }, fixed: p.fixed || { n: 0, pts: 0 } };
     }).sort(function (a, b) { return b.period - a.period || b.total - a.total; });
   people.forEach(function (x, i) { x.rank = i + 1; });
   var given = dbAll_('Rewards').filter(function (x) { return inRange_(x.givenAt, r); })
@@ -3688,9 +3710,9 @@ function api_exportCsv(kind, range) {
     } else if (kind === 'points') {
       var pr = computeReport_(r).points;
       rows = [['Rank', 'Designer', 'Email', 'Designation', 'Points in period', 'Points all time', 'Creatives approved', 'Creative points',
-        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points', 'Reopened tasks', 'Reopen points']]
+        'Approved first time', 'First-time points', 'Tasks on time', 'On-time points', 'Rejected', 'Rejection points', 'Rewards', 'Reward points', 'Task bonuses', 'Bonus points', 'Reopened tasks', 'Reopen points', 'Fixed-points tasks', 'Fixed points']]
         .concat(pr.people.map(function (x) { return [x.rank, x.name, x.email, x.designation, x.period, x.total, x.creatives.n, x.creatives.pts,
-          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts, x.reopen.n, x.reopen.pts]; }));
+          x.firstTime.n, x.firstTime.pts, x.onTime.n, x.onTime.pts, x.rejected.n, x.rejected.pts, x.rewards.n, x.rewards.pts, x.bonus.n, x.bonus.pts, x.reopen.n, x.reopen.pts, x.fixed.n, x.fixed.pts]; }));
     } else if (kind === 'history') {
       var hh = pointsHistory_(currentUser_(), { from: r.from, to: r.to, email: range && range.email, kind: range && range.kind });
       var nm = {}; dbAll_('Users').forEach(function (x) { nm[x.email.toLowerCase()] = x.name; });
@@ -3843,6 +3865,7 @@ function api_getMyRequests(token) {
         reopened: tasks.some(function (t) { return t.reopenedAt && CLOSED.indexOf(t.status) === -1; }),
         raisedBy: String(r.email || '').toLowerCase(), raisedByName: r.requesterName || '', coOwners: coOwnersOf_(r),
         canEdit: ['Completed', 'Cancelled'].indexOf(requesterStatus_(tasks)) === -1,
+        canReopen: !!settings_().requesterCanReopen && requesterStatus_(tasks) === 'Completed',
         edit: { title: r.title, brief: r.brief, instructions: r.instructions || '', copyText: r.copyText || '', preferredDate: r.preferredDate || '', preferredTime: r.preferredTime || '' },
         finalLinks: links.filter(function (l, i) { return links.indexOf(l) === i; })
       };
@@ -4262,6 +4285,43 @@ function api_trackEditRequest(token, requirementId, patchIn) {
   });
 }
 
+
+/**
+ * Requester (or a co-owner) reopens their finished request for changes, from "My requests".
+ * versionIds: the creatives that need changes (empty = all). Every finished task holding one of
+ * them goes back to the designer with the new date; the leader is told.
+ */
+function api_trackReopen(token, requirementId, input) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackreopen:' + keys.join(',').slice(0, 120), 10, 3600);
+    if (!settings_().requesterCanReopen) throw AppError_('FORBIDDEN', 'Reopening is done by the graphics team lead. Use “Need changes?” instead.');
+    input = input || {};
+    var reason = str_(input.reason, 2000, 'What needs to change', true);
+    if (reason.length < 5) throw AppError_('VALIDATION', 'Describe what needs to change.');
+    var dueDate = date_(input.dueDate, 'Needed by', true), dueTime = time_(input.dueTime, 'Time', false);
+    if (dueDate < isoDateOnly_()) throw AppError_('VALIDATION', 'The date can’t be in the past.');
+    var vids = (Array.isArray(input.versionIds) ? input.versionIds : []).map(String).slice(0, 200);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      if (requesterStatus_(x.tasks) !== 'Completed') throw AppError_('INVALID_STATE', 'Only a finished request can be reopened.');
+      var who = ownerKey_(keys, x.r) || '';
+      var actor = { email: who || 'requester', role: 'requester', name: who && who === String(x.r.email || '').toLowerCase() ? x.r.requesterName : who || x.r.requesterName };
+      var picks = {};
+      vids.forEach(function (id) { var v = dbGet_('CreativeVersions', id); if (v) (picks[v.taskId] = picks[v.taskId] || []).push(v.deliverableId); });
+      var done = x.tasks.filter(function (t) { return t.status === STATUS.COMPLETED || t.status === STATUS.APPROVED; });
+      var targets = vids.length ? done.filter(function (t) { return picks[t.taskId]; }) : done;
+      if (!targets.length) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
+      var n = 0;
+      targets.forEach(function (t) { n += reopenTask_(t, actor, reason, dueDate, dueTime, picks[t.taskId] || [], false).length; });
+      notify_(leaderEmails_(), 'change_request', 'Reopened by the requester: ' + x.r.title,
+        (actor.name || 'The requester') + ' (' + x.r.department + ') reopened ' + x.r.requirementId + ' for changes — ' + n + ' creative(s), needed by ' + dueText_(dueDate, dueTime) + '.\n\n“' + reason + '”',
+        'task/' + targets[0].taskId, true);
+      return { reopened: n, tasks: targets.length, message: 'Reopened — the graphics team is working on your changes.' };
+    });
+  });
+}
+
 /* ======================= Rewards.gs ======================= */
 /**
  * Rewards.gs — the team leader recognises good work with badges and points.
@@ -4315,11 +4375,13 @@ function pointsTable_(inPeriod, ledger) {
   inPeriod = inPeriod || function () { return false; };
   var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
   var tasks = {}; dbAll_('Tasks').forEach(function (t) { tasks[t.taskId] = t; });
+  // Tasks where the leader set fixed points: no automatic points at all, only those (paid on completion).
+  var isFixed = function (t) { return !!t && t.fixedPoints !== '' && t.fixedPoints !== undefined && t.fixedPoints !== null; };
   function P(e) {
     e = String(e || '').toLowerCase();
-    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0, reopen: 0, reopenCount: 0,
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0, reopen: 0, reopenCount: 0, fixed: 0, fixedCount: 0,
       // the same, counted only inside the period: { n: how many, pts: points }
-      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } } });
+      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 }, fixed: { n: 0, pts: 0 } } });
   }
   function r1(x) { return Math.round(x * 10) / 10; }
   /** One point event: adds to totals, the period tally and the history. */
@@ -4341,6 +4403,7 @@ function pointsTable_(inPeriod, ledger) {
     var v = d.approvedVersionId && versions[d.approvedVersionId];
     var decs = (decByDel[d.deliverableId] || []).sort(function (a, b) { return a.decidedAt < b.decidedAt ? -1 : 1; });
     var task = tasks[d.taskId] || {};
+    if (isFixed(task)) return;
     // A creative in 2 sizes = 2 files; each file earns half, so the creative earns its points once.
     var nSizes = sizesOf_(task).length, share = !s.countEachSize && nSizes > 1 ? 1 / nSizes : 1;
     var sizeNote = share < 1 ? ' (1 of ' + nSizes + ' sizes)' : '';
@@ -4369,7 +4432,11 @@ function pointsTable_(inPeriod, ledger) {
   Object.keys(tasks).forEach(function (id) {
     var t = tasks[id];
     if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt) return;
-    if (Number(s.pointsOnTime) && t.dueDate) {
+    if (isFixed(t)) {
+      var fp = Number(t.fixedPoints) || 0;
+      ev(t.assigneeEmail, 'fixed', fp, 1, t.completedAt, t.taskId, fp ? 'Fixed points for this task' : 'Task with no points (set by the leader)');
+      P(t.assigneeEmail).fixed += fp; P(t.assigneeEmail).fixedCount++;
+    } else if (Number(s.pointsOnTime) && t.dueDate) {
       var end = dueEnd_(t.dueDate, t.dueTime);
       if (end && new Date(t.completedAt).getTime() <= end.getTime()) {
         ev(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), 1, t.completedAt, t.taskId, 'Task finished on time');
@@ -4385,7 +4452,7 @@ function pointsTable_(inPeriod, ledger) {
     dbAll_('TaskActivity').forEach(function (a) {
       if (a.action !== 'reopened') return;
       var t = tasks[a.taskId];
-      if (!t || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
+      if (!t || isFixed(t) || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
       ev(t.assigneeEmail, 'reopen', Number(s.pointsReopen), 1, t.completedAt, t.taskId, 'Reopened task finished', String(a.note || '').split(' · ')[0]);
       P(t.assigneeEmail).reopen += Number(s.pointsReopen); P(t.assigneeEmail).reopenCount++;
     });
@@ -4398,7 +4465,7 @@ function pointsTable_(inPeriod, ledger) {
   return per;
 }
 
-var POINT_KINDS = { creatives: 'Creative approved', firstTime: 'First-time approval', onTime: 'On time', bonus: 'Task bonus', reopen: 'Reopened task', rewards: 'Reward', rejected: 'Rejected' };
+var POINT_KINDS = { creatives: 'Creative approved', firstTime: 'First-time approval', onTime: 'On time', bonus: 'Task bonus', fixed: 'Fixed task points', reopen: 'Reopened task', rewards: 'Reward', rejected: 'Rejected' };
 
 /**
  * Points history: every point event, newest first. Leaders see anyone (or everyone);
@@ -4420,7 +4487,7 @@ function pointsHistory_(u, filter) {
     var d = day(x.when);
     if (from && d < from) return false;
     if (to && d > to) return false;
-    return x.points !== 0 || x.kind === 'rejected';
+    return x.points !== 0 || x.kind === 'rejected' || x.kind === 'fixed';
   }).sort(function (a, b) { return a.when < b.when ? 1 : a.when > b.when ? -1 : 0; });
   var sum = rows.reduce(function (a, x) { return a + x.points; }, 0);
   var byKind = {};
@@ -4470,7 +4537,7 @@ function api_listRewards() {
         designation: (userByEmail_(u.email) || {}).designation || '',
         breakdown: { creatives: me.creatives, creativePts: me.creativePts, firstTime: me.firstTime, onTime: me.onTime, onTimePts: me.onTime * (Number(s.pointsOnTime) || 0),
           rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards, bonus: me.bonus || 0, bonusCount: me.bonusCount || 0,
-          reopen: me.reopen || 0, reopenCount: me.reopenCount || 0 } },
+          reopen: me.reopen || 0, reopenCount: me.reopenCount || 0, fixed: me.fixed || 0, fixedCount: me.fixedCount || 0 } },
       rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0,
         reopen: Number(s.pointsReopen) || 0, countEachSize: !!s.countEachSize }
     };

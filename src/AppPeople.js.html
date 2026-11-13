@@ -123,7 +123,7 @@ var HIST = { kind: '', from: '', to: '' };
 
 function historyItem(x) {
   var neg = x.points < 0;
-  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : 'check') + '</span>' +
+  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : x.kind === 'fixed' ? 'award' : 'check') + '</span>' +
     '<div class="grow" style="min-width:0"><div class="ellipsis"><b>' + h(x.label) + '</b>' + (x.name && APP.role === 'leader' ? ' <span class="faint">· ' + h(x.name) + '</span>' : '') + '</div>' +
     '<div class="faint small ellipsis">' + fmtDateTime(x.when) + (x.taskId ? ' · <a href="#" data-go="task/' + h(x.taskId) + '">' + h(x.taskId) + '</a> ' + h(x.taskTitle) : '') + (x.note ? ' · ' + h(x.note) : '') + '</div></div>' +
     '<b class="' + (neg ? 'neg' : 'pos') + '-pts hist-pts">' + (neg ? '' : '+') + x.points + '</b></div>';

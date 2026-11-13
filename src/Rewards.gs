@@ -50,11 +50,13 @@ function pointsTable_(inPeriod, ledger) {
   inPeriod = inPeriod || function () { return false; };
   var users = {}; dbAll_('Users').forEach(function (x) { users[x.email.toLowerCase()] = x; });
   var tasks = {}; dbAll_('Tasks').forEach(function (t) { tasks[t.taskId] = t; });
+  // Tasks where the leader set fixed points: no automatic points at all, only those (paid on completion).
+  var isFixed = function (t) { return !!t && t.fixedPoints !== '' && t.fixedPoints !== undefined && t.fixedPoints !== null; };
   function P(e) {
     e = String(e || '').toLowerCase();
-    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0, reopen: 0, reopenCount: 0,
+    return per[e] || (per[e] = { email: e, total: 0, period: 0, creatives: 0, creativePts: 0, firstTime: 0, onTime: 0, rejected: 0, rewards: 0, rewardCount: 0, bonus: 0, bonusCount: 0, reopen: 0, reopenCount: 0, fixed: 0, fixedCount: 0,
       // the same, counted only inside the period: { n: how many, pts: points }
-      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 } } });
+      inPeriod: { creatives: { n: 0, pts: 0 }, firstTime: { n: 0, pts: 0 }, onTime: { n: 0, pts: 0 }, rejected: { n: 0, pts: 0 }, rewards: { n: 0, pts: 0 }, bonus: { n: 0, pts: 0 }, reopen: { n: 0, pts: 0 }, fixed: { n: 0, pts: 0 } } });
   }
   function r1(x) { return Math.round(x * 10) / 10; }
   /** One point event: adds to totals, the period tally and the history. */
@@ -76,6 +78,7 @@ function pointsTable_(inPeriod, ledger) {
     var v = d.approvedVersionId && versions[d.approvedVersionId];
     var decs = (decByDel[d.deliverableId] || []).sort(function (a, b) { return a.decidedAt < b.decidedAt ? -1 : 1; });
     var task = tasks[d.taskId] || {};
+    if (isFixed(task)) return;
     // A creative in 2 sizes = 2 files; each file earns half, so the creative earns its points once.
     var nSizes = sizesOf_(task).length, share = !s.countEachSize && nSizes > 1 ? 1 / nSizes : 1;
     var sizeNote = share < 1 ? ' (1 of ' + nSizes + ' sizes)' : '';
@@ -104,7 +107,11 @@ function pointsTable_(inPeriod, ledger) {
   Object.keys(tasks).forEach(function (id) {
     var t = tasks[id];
     if (t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt) return;
-    if (Number(s.pointsOnTime) && t.dueDate) {
+    if (isFixed(t)) {
+      var fp = Number(t.fixedPoints) || 0;
+      ev(t.assigneeEmail, 'fixed', fp, 1, t.completedAt, t.taskId, fp ? 'Fixed points for this task' : 'Task with no points (set by the leader)');
+      P(t.assigneeEmail).fixed += fp; P(t.assigneeEmail).fixedCount++;
+    } else if (Number(s.pointsOnTime) && t.dueDate) {
       var end = dueEnd_(t.dueDate, t.dueTime);
       if (end && new Date(t.completedAt).getTime() <= end.getTime()) {
         ev(t.assigneeEmail, 'onTime', Number(s.pointsOnTime), 1, t.completedAt, t.taskId, 'Task finished on time');
@@ -120,7 +127,7 @@ function pointsTable_(inPeriod, ledger) {
     dbAll_('TaskActivity').forEach(function (a) {
       if (a.action !== 'reopened') return;
       var t = tasks[a.taskId];
-      if (!t || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
+      if (!t || isFixed(t) || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
       ev(t.assigneeEmail, 'reopen', Number(s.pointsReopen), 1, t.completedAt, t.taskId, 'Reopened task finished', String(a.note || '').split(' · ')[0]);
       P(t.assigneeEmail).reopen += Number(s.pointsReopen); P(t.assigneeEmail).reopenCount++;
     });
@@ -133,7 +140,7 @@ function pointsTable_(inPeriod, ledger) {
   return per;
 }
 
-var POINT_KINDS = { creatives: 'Creative approved', firstTime: 'First-time approval', onTime: 'On time', bonus: 'Task bonus', reopen: 'Reopened task', rewards: 'Reward', rejected: 'Rejected' };
+var POINT_KINDS = { creatives: 'Creative approved', firstTime: 'First-time approval', onTime: 'On time', bonus: 'Task bonus', fixed: 'Fixed task points', reopen: 'Reopened task', rewards: 'Reward', rejected: 'Rejected' };
 
 /**
  * Points history: every point event, newest first. Leaders see anyone (or everyone);
@@ -155,7 +162,7 @@ function pointsHistory_(u, filter) {
     var d = day(x.when);
     if (from && d < from) return false;
     if (to && d > to) return false;
-    return x.points !== 0 || x.kind === 'rejected';
+    return x.points !== 0 || x.kind === 'rejected' || x.kind === 'fixed';
   }).sort(function (a, b) { return a.when < b.when ? 1 : a.when > b.when ? -1 : 0; });
   var sum = rows.reduce(function (a, x) { return a + x.points; }, 0);
   var byKind = {};
@@ -205,7 +212,7 @@ function api_listRewards() {
         designation: (userByEmail_(u.email) || {}).designation || '',
         breakdown: { creatives: me.creatives, creativePts: me.creativePts, firstTime: me.firstTime, onTime: me.onTime, onTimePts: me.onTime * (Number(s.pointsOnTime) || 0),
           rejected: me.rejected, rejectedPts: me.rejected * (Number(s.pointsRejected) || 0), rewards: me.rewards, bonus: me.bonus || 0, bonusCount: me.bonusCount || 0,
-          reopen: me.reopen || 0, reopenCount: me.reopenCount || 0 } },
+          reopen: me.reopen || 0, reopenCount: me.reopenCount || 0, fixed: me.fixed || 0, fixedCount: me.fixedCount || 0 } },
       rules: { designations: s.designations, onTime: Number(s.pointsOnTime) || 0, firstTime: Number(s.pointsFirstTime) || 0, rejected: Number(s.pointsRejected) || 0,
         reopen: Number(s.pointsReopen) || 0, countEachSize: !!s.countEachSize }
     };

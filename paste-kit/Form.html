@@ -417,6 +417,8 @@ tr.click { transition: background .1s; }
 }
 #pfThemes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 #pfThemes .theme-sw { width: 100%; margin: 0; }
+.hist-ic.k-fixed { background: var(--accent-soft); color: var(--accent-ink); }
+.pts-mode .seg { display: inline-flex; width: auto; align-self: flex-start; }
 </style>
 
 <?!= themeCss_() ?>
@@ -480,6 +482,11 @@ tr.click { transition: background .1s; }
   .st-being-revised { background: var(--info-soft); color: var(--info); }
   .st-completed { background: var(--ok-soft); color: var(--ok); }
   .st-cancelled { background: var(--muted-soft); color: var(--text-3); }
+  .ro-list { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .ro-item { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .ro-item:last-child { border-bottom: 0; }
+  .ro-item input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+  .ro-item .ellipsis { flex: 1; min-width: 0; }
   .owners { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
   .owner-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; background: var(--muted-soft); border-radius: 99px; padding: 2px 6px 2px 10px; }
   .owner-chip button { border: 0; background: none; cursor: pointer; padding: 2px; color: var(--text-3); display: inline-flex; }
@@ -1020,6 +1027,37 @@ function renderMy() {
           } }] });
       };
     });
+    $all('[data-reopen]', el).forEach(function (b) {
+      b.onclick = function () {
+        var r = list.filter(function (x) { return x.requirementId === b.getAttribute('data-reopen'); })[0];
+        if (!r) return;
+        var cr = (r.creatives || []).filter(function (c) { return c.isFinal || c.state === 'Approved'; });
+        var soon = new Date(Date.now() + 2 * 864e5), iso = soon.getFullYear() + '-' + ('0' + (soon.getMonth() + 1)).slice(-2) + '-' + ('0' + soon.getDate()).slice(-2);
+        var m = modal({ title: 'Reopen ' + r.requirementId + ' for changes', wide: true,
+          body: '<p class="muted" style="margin-top:0">It goes straight back to the designer. The approved files stay available until the new ones are approved.</p>' +
+            '<div class="field"><label for="roR">What needs to change?</label><textarea id="roR" rows="4" maxlength="2000" placeholder="e.g. Change the MRP to ₹899 on all labels"></textarea></div>' +
+            (cr.length ? '<div class="field"><div class="row between"><label>Which creatives?</label><label class="check small"><input type="checkbox" id="roAll" checked> All ' + cr.length + '</label></div>' +
+              '<div class="ro-list">' + cr.map(function (c) {
+                return '<label class="ro-item"><input type="checkbox" value="' + h(c.versionId) + '" checked><span class="ellipsis">' + h(c.title) + '</span><span class="faint small">' + h(c.version) + '</span></label>';
+              }).join('') + '</div></div>' : '') +
+            '<div class="row wrap" style="gap:12px"><div class="field"><label for="roD">Needed by</label><input type="date" id="roD" min="' + todayIso() + '" value="' + iso + '"></div>' +
+            '<div class="field"><label for="roT">Time (optional)</label><input type="time" id="roT" step="900"></div></div>' +
+            '<div class="alert bad hidden" data-form-error></div>',
+          actions: [{ label: 'Cancel' }, { label: 'Reopen', cls: 'primary', onClick: function (close, mm) {
+            var reason = $('#roR', mm).value.trim();
+            if (reason.length < 5) return fieldErrors(mm, 'Describe what needs to change.');
+            var ids = $all('.ro-item input:checked', mm).map(function (x) { return x.value; });
+            if (cr.length && !ids.length) return fieldErrors(mm, 'Choose at least one creative.');
+            if (!$('#roD', mm).value) return fieldErrors(mm, 'Pick a date.');
+            return api('api_trackReopen', TRACKS, r.requirementId, { reason: reason, versionIds: ids.length === cr.length ? [] : ids, dueDate: $('#roD', mm).value, dueTime: $('#roT', mm).value })
+              .then(function (x) { close(); toast(x.message); renderMy(); }).catch(function (e) { fieldErrors(mm, errMsg(e)); });
+          } }] });
+        if ($('#roAll', m.el)) {
+          $('#roAll', m.el).onchange = function () { var on = this.checked; $all('.ro-item input', m.el).forEach(function (x) { x.checked = on; }); };
+          $all('.ro-item input', m.el).forEach(function (x) { x.onchange = function () { $('#roAll', m.el).checked = $all('.ro-item input:not(:checked)', m.el).length === 0; }; });
+        }
+      };
+    });
     $all('[data-addown]', el).forEach(function (b) {
       b.onclick = function () {
         var id = b.getAttribute('data-addown');
@@ -1167,7 +1205,8 @@ function reqCard(r) {
   })).join('');
   if (r.finalFolderUrl) acts = '<a class="btn ok sm" href="' + h(r.finalFolderUrl) + '" target="_blank" rel="noopener">' + icon('download') + ' All approved files (Google Drive)</a>' + acts;
   acts = (r.hold ? '<button class="btn primary sm" data-sendinfo="' + h(r.requirementId) + '">' + icon('send') + ' Send the details</button>' : '') + all + acts +
-    (r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '') +
+    (r.canReopen ? '<button class="btn primary sm" data-reopen="' + h(r.requirementId) + '">' + icon('refresh') + ' Reopen for changes</button>' :
+      r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '') +
     (r.canEdit ? '<button class="btn sm" data-edit="' + h(r.requirementId) + '">Edit request</button>' : '');
   var owners = '<div class="owners"><span class="faint small">' + icon('users').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Owners:</span>' +
     (r.raisedBy ? '<span class="owner-chip">' + h(r.raisedByName || r.raisedBy) + ' <span class="faint">(raised it)</span></span>' : '') +

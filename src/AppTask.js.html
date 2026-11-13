@@ -53,7 +53,7 @@ function drawTask(el) {
   el.innerHTML =
     '<div class="page-h"><div class="grow"><div class="row wrap" style="margin-bottom:6px"><span class="mono faint">' + h(t.taskId) + '</span>' + statusBadge(t.status) + priorityBadge(t.priority) +
     (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') +
-    (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
+    fixedBadge(t) + (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
     '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' files' : ' creative(s)') + ' approved' + ((t.sizeList || []).length > 1 ? ' <span class="faint">(' + sizesLine(t) + ')</span>' : '') + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
     '<div class="actionbar">' + actions + '</div></div>' +
 
@@ -389,6 +389,44 @@ function sizesLine(t) {
   return n > 1 ? h(t.deliverablesRequired) + ' creative(s) × ' + n + ' sizes = <b>' + h(t.filesRequired) + ' files</b>' : '';
 }
 
+/** Points for this task: automatic (by designation) or a fixed number the leader sets (0 = no points). */
+function pointsModeField(id, value) {
+  var fixed = value !== '' && value !== undefined && value !== null;
+  return '<div class="field pts-mode"><label>Points for this task <span class="faint">(optional)</span></label>' +
+    '<div class="seg" data-pm="' + id + '"><button type="button" data-v="auto" class="' + (fixed ? '' : 'on') + '">Automatic</button><button type="button" data-v="fixed" class="' + (fixed ? 'on' : '') + '">Set points myself</button></div>' +
+    '<div class="bonus-in' + (fixed ? '' : ' hidden') + '" data-pmbox="' + id + '" style="margin-top:8px">' + icon('award') + '<input type="number" id="' + id + '" min="0" max="1000" step="1" value="' + h(fixed ? value : '') + '" placeholder="e.g. 5"><span>points in total</span></div>' +
+    '<span class="hint" data-pmhint="' + id + '">' + (fixed ? 'Only these points are given when the task is completed — no automatic per-creative, first-time or on-time points. Use 0 for no points.' :
+      'Normal points: per approved creative by designation, plus first-time and on-time bonuses.') + '</span></div>';
+}
+
+/** Wires the Automatic / Set points switch inside a modal. Returns a getter: '' (automatic) or the number. */
+function wirePointsMode(root, id) {
+  var seg = $('[data-pm="' + id + '"]', root), box = $('[data-pmbox="' + id + '"]', root), hint = $('[data-pmhint="' + id + '"]', root);
+  if (!seg) return function () { return undefined; };
+  $all('button', seg).forEach(function (b) {
+    b.onclick = function () {
+      $all('button', seg).forEach(function (x) { x.classList.toggle('on', x === b); });
+      var fixed = b.getAttribute('data-v') === 'fixed';
+      box.classList.toggle('hidden', !fixed);
+      hint.textContent = fixed ? 'Only these points are given when the task is completed — no automatic per-creative, first-time or on-time points. Use 0 for no points.' :
+        'Normal points: per approved creative by designation, plus first-time and on-time bonuses.';
+      if (fixed) $('#' + id, root).focus();
+    };
+  });
+  return function () {
+    var fixed = $('button.on', seg) && $('button.on', seg).getAttribute('data-v') === 'fixed';
+    if (!fixed) return '';
+    var v = $('#' + id, root).value.trim();
+    return v === '' ? '0' : v;
+  };
+}
+
+/** Badge on the task: "Fixed 5 pts" / "No points". */
+function fixedBadge(t) {
+  if (t.fixedPoints === '' || t.fixedPoints === undefined || t.fixedPoints === null) return '';
+  return '<span class="badge plain" title="The leader set the points for this task — no automatic points">' + icon('award') + ' ' + (Number(t.fixedPoints) ? h(t.fixedPoints) + ' pts for this task' : 'No points for this task') + '</span>';
+}
+
 /** Optional bonus the designer earns when the task is completed. */
 function bonusField(id, value) {
   return '<div class="field"><label for="' + id + '">Bonus points on completion <span class="faint">(optional)</span></label>' +
@@ -412,18 +450,20 @@ function assignModal() {
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
       folderField('afo', t.folderPath || t.creativeType || '', TASK.folderRoot, TASK.folderOptions) +
       sizesField('asz', t.sizeList) +
+      pointsModeField('afp', t.fixedPoints) +
       bonusField('abp', t.bonusPoints) +
       '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
       '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
-        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value };
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value, fixedPoints: getFp() };
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]
   });
+  var getFp = wirePointsMode(am.el, 'afp');
   if ($('#toDivide', am.el)) $('#toDivide', am.el).onclick = function () { am.close(); divideModal(); };
 }
 
@@ -494,13 +534,13 @@ function editModal() {
     return '<div class="field"><label>' + h(label) + '</label>' + (type === 'textarea' ? '<textarea id="e_' + id + '" rows="3" ' + (attrs || '') + '>' + h(val || '') + '</textarea>' :
       '<input type="' + (type || 'text') + '" id="e_' + id + '" value="' + h(val || '') + '" ' + (attrs || '') + '>') + '</div>';
   };
-  modal({
+  var em = modal({
     title: 'Edit task details', wide: true,
     body: f('title', 'Title', t.title) +
       '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
       folderField('e_folderPath', t.folderPath || '', TASK.folderRoot, TASK.folderOptions) +
-      bonusField('e_bonusPoints', t.bonusPoints) + sizesField('e_sizes', t.sizeList) +
+      pointsModeField('e_fp', t.fixedPoints) + bonusField('e_bonusPoints', t.bonusPoints) + sizesField('e_sizes', t.sizeList) +
       '<div class="grid-3">' + f('creativeType', 'Category', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
         '<datalist id="e_catL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
@@ -512,10 +552,12 @@ function editModal() {
         ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'folderPath', 'bonusPoints', 'sizes', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
+        patch.fixedPoints = getEfp();
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]
   });
+  var getEfp = wirePointsMode(em.el, 'e_fp');
 }
 
 function statusModal() {

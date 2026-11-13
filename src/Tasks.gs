@@ -29,6 +29,11 @@ function cleanSizes_(v) {
   return list.map(function (x) { return str_(x, 60, 'Size', true); }).join('\n');
 }
 
+/** '' = automatic points; a number (0 allowed) = only these points for the task, paid on completion. */
+function fixedPts_(v) {
+  return v === '' || v === null || v === undefined ? '' : String(int_(v, 0, 1000, 'Points for this task'));
+}
+
 /** Files to upload: creatives × sizes (5 banners in desktop + mobile = 10 files). */
 function filesRequired_(t) {
   return Math.max(1, Number(t.deliverablesRequired) || 1) * Math.max(1, sizesOf_(t).length);
@@ -119,7 +124,7 @@ function completeTask_(task, actor, note) {
 
 var TASK_FIELDS_ALL = ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
   'deliverablesRequired', 'dimensions', 'formats', 'copyText', 'referenceUrls', 'startDate', 'dueDate', 'dueTime', 'finalLink', 'priority',
-  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes'];
+  'status', 'progress', 'instructions', 'assignedAt', 'completedAt', 'createdAt', 'updatedAt', 'folderPath', 'bonusPoints', 'sizes', 'fixedPoints'];
 
 function taskDto_(t, user, extra) {
   var o = pick_(t, TASK_FIELDS_ALL);
@@ -476,7 +481,7 @@ function api_assignTask(taskId, input) {
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
-        bonusPoints: input.bonusPoints, sizes: input.sizes });
+        bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
       return { status: dbGet_('Tasks', t.taskId).status };
     });
   });
@@ -506,7 +511,8 @@ function api_updateTask(taskId, patchIn) {
       creativeType: function (v) { return str_(v, 80, 'Category', false); },
       folderPath: function (v) { return cleanPath_(str_(v, 250, 'Folder', false)); },
       bonusPoints: function (v) { return v === '' || v === null ? '' : String(int_(v, 0, 1000, 'Bonus points')); },
-      sizes: function (v) { return cleanSizes_(v); }
+      sizes: function (v) { return cleanSizes_(v); },
+      fixedPoints: function (v) { return fixedPts_(v); }
     };
     var patch = {};
     Object.keys(patchIn).forEach(function (k) { if (allowed[k]) patch[k] = allowed[k](patchIn[k]); });
@@ -672,6 +678,37 @@ function api_resumeTask(taskId, input) {
  * Leader reopens a completed task for new changes. The approved files stay as
  * the "final" versions until new ones are approved. input: { reason, deliverableIds?, dueDate, dueTime }
  */
+/**
+ * Puts a finished task back to "Changes Requested" (caller holds the lock and checked rights).
+ * deliverableIds: which creatives need changes (all when empty). Approved files stay final until replaced.
+ */
+function reopenTask_(t, actor, reason, dueDate, dueTime, deliverableIds, strict) {
+  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED; });
+  var pick = Array.isArray(deliverableIds) && deliverableIds.length ? deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
+  var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
+  if (!chosen.length && dels.length) {
+    if (strict) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
+    return [];
+  }
+  var now = nowIso_();
+  chosen.forEach(function (d) { dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now }); });
+  dbUpdate_('Tasks', t.taskId, {
+    status: STATUS.CHANGES, prevStatus: t.status, completedAt: '', progress: '50', dueDate: dueDate, dueTime: dueTime,
+    reopenedAt: now, reopenReason: reason, reopenCount: String((Number(t.reopenCount) || 0) + 1),
+    overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: now
+  });
+  logActivity_(t.taskId, actor, 'reopened', t.status, STATUS.CHANGES, reason + ' · ' + chosen.length + ' creative(s) · due ' + dueText_(dueDate, dueTime), 'team');
+  var req = dbGet_('Requirements', t.requirementId);
+  if (req && req.status === 'Completed') dbUpdate_('Requirements', req.requirementId, { status: 'Received', updatedAt: now });
+  if (t.assigneeEmail && t.assigneeEmail !== actor.email) {
+    notify_([t.assigneeEmail], 'task_reopened', 'Reopened for changes: ' + t.title,
+      (actor.role === 'requester' ? 'Reopened by the requester (' + (actor.name || actor.email) + ').\n\n' : '') +
+      'What needs to change:\n\n' + reason + '\n\nCreatives: ' + chosen.map(function (d) { return d.title; }).join(', ') + '\nDue ' + dueText_(dueDate, dueTime) +
+      '\n\nThe approved files stay as the final versions until the new ones are approved.', 'task/' + t.taskId, true);
+  }
+  return chosen;
+}
+
 function api_reopenTask(taskId, input) {
   return respond_(function () {
     var u = requireLeader_();
@@ -683,25 +720,7 @@ function api_reopenTask(taskId, input) {
     return withLock_(function () {
       var t = requireTask_(u, taskId);
       if (t.status !== STATUS.COMPLETED && t.status !== STATUS.APPROVED) throw AppError_('INVALID_STATE', 'Only a completed task can be reopened.');
-      var dels = taskDeliverables_(t.taskId);
-      var pick = Array.isArray(input.deliverableIds) && input.deliverableIds.length ? input.deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
-      var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
-      if (!chosen.length && dels.length) throw AppError_('VALIDATION', 'Choose at least one creative to change.');
-      var now = nowIso_();
-      chosen.forEach(function (d) { dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now }); });
-      dbUpdate_('Tasks', t.taskId, {
-        status: STATUS.CHANGES, prevStatus: t.status, completedAt: '', progress: '50', dueDate: dueDate, dueTime: dueTime,
-        reopenedAt: now, reopenReason: reason, reopenCount: String((Number(t.reopenCount) || 0) + 1),
-        overdueNotifiedAt: '', dueSoonNotifiedAt: '', updatedAt: now
-      });
-      logActivity_(t.taskId, u, 'reopened', t.status, STATUS.CHANGES, reason + ' · ' + chosen.length + ' creative(s) · due ' + dueText_(dueDate, dueTime), 'team');
-      var req = dbGet_('Requirements', t.requirementId);
-      if (req && req.status === 'Completed') dbUpdate_('Requirements', req.requirementId, { status: 'Received', updatedAt: now });
-      if (t.assigneeEmail && t.assigneeEmail !== u.email) {
-        notify_([t.assigneeEmail], 'task_reopened', 'Reopened for changes: ' + t.title,
-          'What needs to change:\n\n' + reason + '\n\nCreatives: ' + chosen.map(function (d) { return d.title; }).join(', ') + '\nDue ' + dueText_(dueDate, dueTime) +
-          '\n\nThe approved files stay as the final versions until the new ones are approved.', 'task/' + t.taskId, true);
-      }
+      var chosen = reopenTask_(t, u, reason, dueDate, dueTime, input.deliverableIds, true);
       return { status: STATUS.CHANGES, reopened: chosen.length };
     });
   });
@@ -751,6 +770,7 @@ function assignInternal_(u, t, o) {
   if (instructions !== undefined) patch.instructions = instructions;
   if (o.folderPath !== undefined) patch.folderPath = cleanPath_(o.folderPath);
   if (o.sizes !== undefined && o.sizes !== null) patch.sizes = cleanSizes_(o.sizes);
+  if (o.fixedPoints !== undefined) patch.fixedPoints = fixedPts_(o.fixedPoints);
   if (o.bonusPoints !== undefined && o.bonusPoints !== '' && o.bonusPoints !== null) patch.bonusPoints = String(int_(o.bonusPoints, 0, 1000, 'Bonus points'));
   var bonus = Number(patch.bonusPoints !== undefined ? patch.bonusPoints : t.bonusPoints) || 0;
   dbUpdate_('Tasks', t.taskId, patch);
@@ -769,6 +789,7 @@ function assignInternal_(u, t, o) {
   notify_([patch.assigneeEmail], previous ? 'task_reassigned' : 'task_assigned',
     (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
     t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (bonus ? '\n\nBonus: +' + bonus + ' points when this task is completed.' : '') +
+    (fresh.fixedPoints !== '' && fresh.fixedPoints !== undefined ? '\n\nPoints for this task: ' + fresh.fixedPoints + ' (set by the team leader, paid when completed).' : '') +
     (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
   if (previous && previous !== patch.assigneeEmail) {
     notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
@@ -876,7 +897,7 @@ function api_createDirectTask(input) {
         });
         if (req0.status === 'Completed') dbUpdate_('Requirements', req0.requirementId, { status: 'In work', updatedAt: now });
         logActivity_(tid, u, 'created', '', STATUS.READY, 'added by the team leader to ' + req0.requirementId, 'team');
-        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
+        assignInternal_(u, dbGet_('Tasks', tid), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
         return { taskId: tid, requirementId: req0.requirementId, campaignId: req0.campaignId || '' };
       }
       if (intoCamp && !dbGet_('Campaigns', intoCamp)) throw AppError_('NOT_FOUND', 'Campaign not found.');
@@ -897,7 +918,7 @@ function api_createDirectTask(input) {
         dueSoonNotifiedAt: '', overdueNotifiedAt: '', createdBy: u.email, createdAt: now, updatedAt: now, folderPath: folderPath
       });
       logActivity_(taskId, u, 'created', '', STATUS.READY, 'created by the team leader (' + reqId + ')', 'team');
-      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes });
+      assignInternal_(u, dbGet_('Tasks', taskId), { assignee: m.email, dueDate: dueDate, dueTime: dueTime, priority: priority, instructions: str_(input.instructions, 2000, 'Instructions', false), bonusPoints: input.bonusPoints, sizes: input.sizes, fixedPoints: input.fixedPoints });
       return { taskId: taskId, requirementId: reqId, campaignId: intoCamp || '' };
     });
   });

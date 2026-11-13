@@ -417,6 +417,8 @@ tr.click { transition: background .1s; }
 }
 #pfThemes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 #pfThemes .theme-sw { width: 100%; margin: 0; }
+.hist-ic.k-fixed { background: var(--accent-soft); color: var(--accent-ink); }
+.pts-mode .seg { display: inline-flex; width: auto; align-self: flex-start; }
 </style>
 
 <?!= themeCss_() ?>
@@ -1504,14 +1506,14 @@ function directTaskModal(preset) {
         '<div class="grid-3"><div class="field"><label class="req" for="dtD">Due date</label><input type="date" id="dtD" min="' + todayIso() + '"></div>' +
         '<div class="field"><label for="dtTm">Time</label><input type="time" id="dtTm" step="900"></div>' +
         '<div class="field"><label for="dtQ">No. of creatives</label><input type="number" id="dtQ" min="1" max="50" value="1"></div></div>' +
-        sizesField('dtSz', '') + bonusField('dtBp', preset.bonusPoints || '') +
+        sizesField('dtSz', '') + pointsModeField('dtFp', '') + bonusField('dtBp', preset.bonusPoints || '') +
         '<div class="field"><label for="dtP">Priority</label><select id="dtP">' + APP.boot.priorities.map(function (p) { return '<option' + (p === 'Medium' ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
         '<div class="alert bad hidden" data-form-error></div>',
       actions: [{ label: 'Cancel' }, { label: 'Assign task', cls: 'primary', onClick: function (close, m) {
         var to = $('#dtTo', m).value;
         var fp = $('#dtF', m) ? $('#dtF', m).value.trim() : '';
         var input = { title: $('#dtT', m).value.trim(), brief: $('#dtB', m).value.trim(), assigneeEmail: $('#dtA', m).value, category: $('#dtC', m).value.trim(),
-          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value, sizes: $('#dtSz', m).value,
+          dueDate: $('#dtD', m).value, dueTime: $('#dtTm', m).value, quantity: $('#dtQ', m).value, priority: $('#dtP', m).value, bonusPoints: $('#dtBp', m).value, sizes: $('#dtSz', m).value, fixedPoints: getDtFp(),
           requirementId: to.indexOf('req:') === 0 ? to.slice(4) : '', campaignId: to.indexOf('cmp:') === 0 ? to.slice(4) : '', folderPath: fp };
         if (!input.category && fp) input.category = fp.split('/').pop().trim();
         if (!input.title) return fieldErrors(m, 'Give the task a title.');
@@ -1529,6 +1531,7 @@ function directTaskModal(preset) {
         $('#dtFolder').innerHTML = folderField('dtF', keep, fo.root, fo.options);
       }).catch(function () {});
     }
+    var getDtFp = wirePointsMode(document, 'dtFp');
     $('#dtTo').onchange = loadFolders;
     loadFolders();
   }).catch(function (e) { toast(errMsg(e), true); });
@@ -1987,7 +1990,7 @@ function drawTask(el) {
   el.innerHTML =
     '<div class="page-h"><div class="grow"><div class="row wrap" style="margin-bottom:6px"><span class="mono faint">' + h(t.taskId) + '</span>' + statusBadge(t.status) + priorityBadge(t.priority) +
     (t.overdue ? '<span class="badge s-changes-requested">Overdue</span>' : '') +
-    (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
+    fixedBadge(t) + (Number(t.bonusPoints) ? '<span class="badge bonus-badge" title="Extra points when this task is completed">' + icon('award') + ' +' + h(t.bonusPoints) + ' bonus pts</span>' : '') + '</div><h1>' + h(t.title) + '</h1>' +
     '<p>Due <b>' + dueLabel(t) + '</b> · ' + h(approved) + ' of ' + h(t.filesRequired || t.deliverablesRequired) + ((t.sizeList || []).length > 1 ? ' files' : ' creative(s)') + ' approved' + ((t.sizeList || []).length > 1 ? ' <span class="faint">(' + sizesLine(t) + ')</span>' : '') + (t.campaign ? ' · ' + h(t.campaign) : '') + '</p></div>' +
     '<div class="actionbar">' + actions + '</div></div>' +
 
@@ -2323,6 +2326,44 @@ function sizesLine(t) {
   return n > 1 ? h(t.deliverablesRequired) + ' creative(s) × ' + n + ' sizes = <b>' + h(t.filesRequired) + ' files</b>' : '';
 }
 
+/** Points for this task: automatic (by designation) or a fixed number the leader sets (0 = no points). */
+function pointsModeField(id, value) {
+  var fixed = value !== '' && value !== undefined && value !== null;
+  return '<div class="field pts-mode"><label>Points for this task <span class="faint">(optional)</span></label>' +
+    '<div class="seg" data-pm="' + id + '"><button type="button" data-v="auto" class="' + (fixed ? '' : 'on') + '">Automatic</button><button type="button" data-v="fixed" class="' + (fixed ? 'on' : '') + '">Set points myself</button></div>' +
+    '<div class="bonus-in' + (fixed ? '' : ' hidden') + '" data-pmbox="' + id + '" style="margin-top:8px">' + icon('award') + '<input type="number" id="' + id + '" min="0" max="1000" step="1" value="' + h(fixed ? value : '') + '" placeholder="e.g. 5"><span>points in total</span></div>' +
+    '<span class="hint" data-pmhint="' + id + '">' + (fixed ? 'Only these points are given when the task is completed — no automatic per-creative, first-time or on-time points. Use 0 for no points.' :
+      'Normal points: per approved creative by designation, plus first-time and on-time bonuses.') + '</span></div>';
+}
+
+/** Wires the Automatic / Set points switch inside a modal. Returns a getter: '' (automatic) or the number. */
+function wirePointsMode(root, id) {
+  var seg = $('[data-pm="' + id + '"]', root), box = $('[data-pmbox="' + id + '"]', root), hint = $('[data-pmhint="' + id + '"]', root);
+  if (!seg) return function () { return undefined; };
+  $all('button', seg).forEach(function (b) {
+    b.onclick = function () {
+      $all('button', seg).forEach(function (x) { x.classList.toggle('on', x === b); });
+      var fixed = b.getAttribute('data-v') === 'fixed';
+      box.classList.toggle('hidden', !fixed);
+      hint.textContent = fixed ? 'Only these points are given when the task is completed — no automatic per-creative, first-time or on-time points. Use 0 for no points.' :
+        'Normal points: per approved creative by designation, plus first-time and on-time bonuses.';
+      if (fixed) $('#' + id, root).focus();
+    };
+  });
+  return function () {
+    var fixed = $('button.on', seg) && $('button.on', seg).getAttribute('data-v') === 'fixed';
+    if (!fixed) return '';
+    var v = $('#' + id, root).value.trim();
+    return v === '' ? '0' : v;
+  };
+}
+
+/** Badge on the task: "Fixed 5 pts" / "No points". */
+function fixedBadge(t) {
+  if (t.fixedPoints === '' || t.fixedPoints === undefined || t.fixedPoints === null) return '';
+  return '<span class="badge plain" title="The leader set the points for this task — no automatic points">' + icon('award') + ' ' + (Number(t.fixedPoints) ? h(t.fixedPoints) + ' pts for this task' : 'No points for this task') + '</span>';
+}
+
 /** Optional bonus the designer earns when the task is completed. */
 function bonusField(id, value) {
   return '<div class="field"><label for="' + id + '">Bonus points on completion <span class="faint">(optional)</span></label>' +
@@ -2346,18 +2387,20 @@ function assignModal() {
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
       folderField('afo', t.folderPath || t.creativeType || '', TASK.folderRoot, TASK.folderOptions) +
       sizesField('asz', t.sizeList) +
+      pointsModeField('afp', t.fixedPoints) +
       bonusField('abp', t.bonusPoints) +
       '<div class="field"><label>Instructions for the designer</label><textarea id="ain" rows="4" maxlength="8000">' + h(t.instructions || '') + '</textarea><span class="hint">The designer sees this on the task.</span></div>' +
       '<div class="field"><label>Assignment note</label><input type="text" id="ano" maxlength="1000" placeholder="Optional, kept in the assignment history"></div>' +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
-        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value };
+        var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value, fixedPoints: getFp() };
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]
   });
+  var getFp = wirePointsMode(am.el, 'afp');
   if ($('#toDivide', am.el)) $('#toDivide', am.el).onclick = function () { am.close(); divideModal(); };
 }
 
@@ -2428,13 +2471,13 @@ function editModal() {
     return '<div class="field"><label>' + h(label) + '</label>' + (type === 'textarea' ? '<textarea id="e_' + id + '" rows="3" ' + (attrs || '') + '>' + h(val || '') + '</textarea>' :
       '<input type="' + (type || 'text') + '" id="e_' + id + '" value="' + h(val || '') + '" ' + (attrs || '') + '>') + '</div>';
   };
-  modal({
+  var em = modal({
     title: 'Edit task details', wide: true,
     body: f('title', 'Title', t.title) +
       '<div class="grid-3">' + f('dueDate', 'Due date', t.dueDate, 'date') + f('dueTime', 'Due time (empty = end of day)', t.dueTime, 'time', 'step="900"') + f('deliverablesRequired', 'Creatives required', t.deliverablesRequired, 'number', 'min="1" max="50"') +
       '<div class="field"><label>Priority</label><select id="e_priority">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
       folderField('e_folderPath', t.folderPath || '', TASK.folderRoot, TASK.folderOptions) +
-      bonusField('e_bonusPoints', t.bonusPoints) + sizesField('e_sizes', t.sizeList) +
+      pointsModeField('e_fp', t.fixedPoints) + bonusField('e_bonusPoints', t.bonusPoints) + sizesField('e_sizes', t.sizeList) +
       '<div class="grid-3">' + f('creativeType', 'Category', t.creativeType, 'text', 'list="e_catL" placeholder="e.g. Listing images"') +
         '<datalist id="e_catL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist>' + f('dimensions', 'Dimensions', t.dimensions) + f('formats', 'Output formats', t.formats, 'text', 'placeholder="e.g. PNG + PDF"') + '</div>' +
       f('purpose', 'Purpose', t.purpose, 'textarea') + f('brief', 'Brief', t.brief, 'textarea') + f('copyText', 'Copy', t.copyText, 'textarea') +
@@ -2446,10 +2489,12 @@ function editModal() {
         ['title', 'dueDate', 'dueTime', 'deliverablesRequired', 'priority', 'creativeType', 'folderPath', 'bonusPoints', 'sizes', 'dimensions', 'formats', 'purpose', 'brief', 'copyText', 'instructions', 'referenceUrls'].forEach(function (k) {
           patch[k] = $('#e_' + k, m).value;
         });
+        patch.fixedPoints = getEfp();
         return api('api_updateTask', t.taskId, patch).then(function () { close(); toast('Saved'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]
   });
+  var getEfp = wirePointsMode(em.el, 'e_fp');
 }
 
 function statusModal() {
@@ -2935,11 +2980,11 @@ function pointsSection(p) {
   var cell = function (b, neg) { return b && b.n ? b.n + (b.pts ? ' <span class="' + (neg ? 'neg' : 'pos') + '-pts">' + (b.pts > 0 ? '+' : '') + b.pts + '</span>' : '') : '<span class="faint">—</span>'; };
   return '<div class="card" style="margin-top:18px" id="pointsReport"><div class="card-h"><h3>Points & rewards</h3><div class="row" style="gap:8px">' +
     '<button class="btn sm" data-go="history">' + icon('history') + ' Points history</button><button class="btn sm" data-csv="points">' + icon('download') + ' Points CSV</button><button class="btn sm" data-csv="rewards">' + icon('download') + ' Rewards CSV</button></div></div>' +
-    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Task bonus</th><th title="Reopened tasks finished again">Reopened</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
+    '<div class="table-wrap">' + (p.people.length ? '<table class="t pts-t"><thead><tr><th>#</th><th>Designer</th><th title="Points earned in this period">Points</th><th>Creatives approved</th><th>First time</th><th>On time</th><th>Rejected</th><th>Task bonus</th><th title="Tasks where the leader set the points">Fixed</th><th title="Reopened tasks finished again">Reopened</th><th>Rewards</th><th title="All time">All time</th></tr></thead><tbody>' +
       p.people.map(function (x) {
         return '<tr class="click" data-go="history/' + encodeURIComponent(x.email) + '" title="See ' + h(x.name) + '’s points history"><td><span class="rank-dot' + (x.rank === 1 && x.period > 0 ? ' first' : '') + '">' + x.rank + '</span></td><td><b>' + h(x.name) + '</b>' + (x.active ? '' : ' <span class="faint small">(inactive)</span>') +
           '<div class="faint small">' + h(x.designation || '—') + '</div></td><td><b style="font-size:15px">' + x.period + '</b></td>' +
-          '<td>' + cell(x.creatives) + '</td><td>' + cell(x.firstTime) + '</td><td>' + cell(x.onTime) + '</td><td>' + cell(x.rejected, true) + '</td><td>' + cell(x.bonus) + '</td><td>' + cell(x.reopen) + '</td><td>' + cell(x.rewards) + '</td>' +
+          '<td>' + cell(x.creatives) + '</td><td>' + cell(x.firstTime) + '</td><td>' + cell(x.onTime) + '</td><td>' + cell(x.rejected, true) + '</td><td>' + cell(x.bonus) + '</td><td>' + cell(x.fixed) + '</td><td>' + cell(x.reopen) + '</td><td>' + cell(x.rewards) + '</td>' +
           '<td class="faint">' + x.total + '</td></tr>';
       }).join('') + '</tbody></table>' : emptyState('No points in this range.', '', 'award')) + '</div>' +
     '<div class="card-b" style="border-top:1px solid var(--line)"><div class="row between wrap" style="margin-bottom:8px"><b>Rewards given in this period</b>' +
@@ -2968,6 +3013,7 @@ VIEWS.rewards = function (arg, el, token) {
       (r.onTime ? '<div>+' + r.onTime + ' for each task completed by its deadline (time on hold isn’t counted)</div>' : '') +
       (r.rejected ? '<div>−' + r.rejected + ' for each rejected creative</div>' : '') +
       '<div>+ bonus points the leader sets on big tasks, paid when the task is completed</div>' +
+      '<div>Some tasks (e.g. just references) have points set by the leader instead — then only those points count for that task</div>' +
       (r.reopen ? '<div>+' + r.reopen + ' each time a finished task is reopened for changes, once you finish it again</div>' : '') +
       '<div>' + (r.countEachSize ? 'Every size of a creative counts as its own creative' : 'A creative made in several sizes (e.g. desktop + mobile) counts as one creative') + '</div>' +
       '<div>+ reward points from the team leader</div></div></div>';
@@ -2993,6 +3039,7 @@ VIEWS.rewards = function (arg, el, token) {
       '<div><b>' + (b.onTime || 0) + '</b><span>tasks on time</span><em>+' + (b.onTimePts || 0) + '</em></div>' +
       '<div><b>' + (b.bonusCount || 0) + '</b><span>task bonuses</span><em>+' + (b.bonus || 0) + '</em></div>' +
       '<div><b>' + (b.reopenCount || 0) + '</b><span>reopened & finished</span><em>+' + (b.reopen || 0) + '</em></div>' +
+      (b.fixedCount ? '<div><b>' + b.fixedCount + '</b><span>fixed-points tasks</span><em>+' + (b.fixed || 0) + '</em></div>' : '') +
       '<div><b>' + (me.count || 0) + '</b><span>rewards</span><em>+' + (b.rewards || 0) + '</em></div>' +
       (b.rejected ? '<div><b>' + b.rejected + '</b><span>rejected</span>' + (b.rejectedPts ? '<em class="neg">−' + b.rejectedPts + '</em>' : '<em class="faint">no penalty</em>') + '</div>' : '') +
       '</div></div>';
@@ -3086,6 +3133,7 @@ VIEWS.settings = function (arg, el, token) {
         txt('tokenExpiryDays', 'Link expiry (days)', '1–90. Links also stop working once a decision is made or a newer version is sent.', 'number') +
         chk('allowReviewerDownload', 'Let reviewers download the file (up to 20 MB)') + '<p class="faint small" style="margin:0">Emailing review links to requesters is under <b>Emails</b>.</p>') +
       sec('Workflow', chk('autoCompleteOnApproval', 'Mark tasks Completed automatically once every required creative is approved') +
+        chk('requesterCanReopen', 'Let requesters reopen their finished request for changes from “My requests” (off: they send a “Need changes?” message and you decide)') +
         '<div class="grid-2">' + txt('workloadThreshold', 'Workload alert at (active tasks)', '', 'number') + txt('dueSoonHours', 'Due-soon reminder (hours before)', '', 'number') + '</div>' +
         txt('priorities', 'Priorities (comma separated, highest last)', 'Used in the form and on tasks.')) +
       sec('Emails', chk('emailNotifications', 'Send automatic emails (master switch — the bell in the portal always works)') +
@@ -3163,7 +3211,7 @@ VIEWS.settings = function (arg, el, token) {
       var patch = {};
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
-      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'autoCompleteOnApproval', 'emailNotifications', 'teamChat', 'allowPersonalTheme', 'countEachSize'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'autoCompleteOnApproval', 'emailNotifications', 'teamChat', 'allowPersonalTheme', 'countEachSize', 'requesterCanReopen'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
       // The per-email switches below replace the two older checkboxes.
       patch.emailRequesterOnSubmit = true; patch.sendReviewLinkToRequester = true;
       patch.emailRules = {};
@@ -3470,7 +3518,7 @@ var HIST = { kind: '', from: '', to: '' };
 
 function historyItem(x) {
   var neg = x.points < 0;
-  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : 'check') + '</span>' +
+  return '<div class="hist-row"><span class="hist-ic k-' + h(x.kind) + '">' + icon(x.kind === 'rewards' ? 'award' : x.kind === 'rejected' ? 'x' : x.kind === 'reopen' ? 'refresh' : x.kind === 'onTime' ? 'clock' : x.kind === 'fixed' ? 'award' : 'check') + '</span>' +
     '<div class="grow" style="min-width:0"><div class="ellipsis"><b>' + h(x.label) + '</b>' + (x.name && APP.role === 'leader' ? ' <span class="faint">· ' + h(x.name) + '</span>' : '') + '</div>' +
     '<div class="faint small ellipsis">' + fmtDateTime(x.when) + (x.taskId ? ' · <a href="#" data-go="task/' + h(x.taskId) + '">' + h(x.taskId) + '</a> ' + h(x.taskTitle) : '') + (x.note ? ' · ' + h(x.note) : '') + '</div></div>' +
     '<b class="' + (neg ? 'neg' : 'pos') + '-pts hist-pts">' + (neg ? '' : '+') + x.points + '</b></div>';

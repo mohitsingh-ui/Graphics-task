@@ -1531,6 +1531,86 @@ scenario('Email switches: the leader turns individual automatic emails off; the 
   ok(call(LEADER, 'api_saveSettings', { emailRules: {} })); env.ctx.SETTINGS_MEMO_ = null;
 });
 
+scenario('Fixed points per task: leader sets the points (or 0) instead of the automatic ones; optional', () => {
+  const pts = () => ok(call(B, 'api_listRewards')).me;
+  const run = (title, extra, n) => {
+    const d = ok(call(LEADER, 'api_createDirectTask', Object.assign({ title, assigneeEmail: B, dueDate: future(3), quantity: n }, extra)));
+    for (let i = 0; i < n; i++) {
+      const v = upload(B, { kind: 'version', taskId: d.taskId, title: title + ' ' + i }, 'f' + i + '.png', png(200)).versionId;
+      ok(call(B, 'api_submitForApproval', d.taskId, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+    }
+    assert.strictEqual(ok(call(B, 'api_getTask', d.taskId)).task.status, 'Completed');
+    return d.taskId;
+  };
+  err(call(LEADER, 'api_createDirectTask', { title: 'x', assigneeEmail: B, dueDate: future(3), fixedPoints: 5000 }), 'VALIDATION');
+  // 3 reference images, leader gives 5 points in total
+  let p0 = pts();
+  const t1 = run('Reference images', { fixedPoints: 5 }, 3);
+  let p1 = pts();
+  assert.strictEqual(Math.round(p1.total - p0.total), 5, 'only the fixed 5 points');
+  assert.strictEqual(p1.breakdown.creatives, p0.breakdown.creatives, 'no automatic creative points');
+  assert.strictEqual(p1.breakdown.fixed - p0.breakdown.fixed, 5);
+  assert.strictEqual(ok(call(B, 'api_getTask', t1)).task.fixedPoints, '5');
+  // 0 = no points at all; a task bonus still adds on top
+  p0 = p1;
+  run('Quick crop', { fixedPoints: 0, bonusPoints: 10 }, 1);
+  p1 = pts();
+  assert.strictEqual(Math.round(p1.total - p0.total), 10);
+  // left empty = automatic (designation + first time + on time)
+  p0 = p1;
+  run('Normal banner', { fixedPoints: '' }, 1);
+  p1 = pts();
+  assert.strictEqual(Math.round(p1.total - p0.total), 10 + 5 + 20);
+  // history says why
+  const h = ok(call(B, 'api_pointsHistory', { kind: 'fixed' })).rows;
+  assert.ok(h.some(x => x.taskId === t1 && x.points === 5 && /Fixed points/.test(x.label)));
+  assert.ok(h.some(x => x.points === 0 && /no points/.test(x.label)));
+  // leader can switch an existing task back to automatic
+  ok(call(LEADER, 'api_updateTask', t1, { fixedPoints: '' }));
+  assert.strictEqual(Math.round(pts().total - p1.total), 3 * (10 + 5) + 20 - 5, 'automatic points replace the fixed 5');
+  ok(call(LEADER, 'api_updateTask', t1, { fixedPoints: 5 }));
+  assert.ok(ok(call(LEADER, 'api_exportCsv', 'points', {})).csv.includes('Fixed points'));
+});
+
+scenario('Requester reopens a finished request from My requests (chosen creatives, new date); leader can switch it off', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Oil team', department: 'Category', email: 'oil@example.org', brief: 'Oil label mockups', preferredDate: future(5), quantity: 2 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' }));
+  const vs = ['Mustard', 'Coconut'].map(n => upload(A, { kind: 'version', taskId: tid, title: n }, n + '.png', png(200)).versionId);
+  ok(call(A, 'api_submitForApproval', tid, vs));
+  ok(call('', 'api_trackApproveMany', sub.trackToken, vs));
+  let my = ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(x => x.requirementId === sub.requirementId);
+  assert.strictEqual(my.status, 'Completed'); assert.ok(my.canReopen);
+  err(call('', 'api_trackReopen', sub.trackToken, sub.requirementId, { reason: 'x', dueDate: future(2) }), 'VALIDATION');
+  err(call('', 'api_trackReopen', sub.trackToken, sub.requirementId, { reason: 'Change the MRP', dueDate: '2020-01-01' }), 'VALIDATION');
+  const r = ok(call('', 'api_trackReopen', sub.trackToken, sub.requirementId, { reason: 'Change the MRP to 899 on coconut', versionIds: [vs[1]], dueDate: future(2) }));
+  assert.strictEqual(r.reopened, 1);
+  const d = ok(call(A, 'api_getTask', tid));
+  assert.strictEqual(d.task.status, 'Changes Requested'); assert.strictEqual(d.task.dueDate, future(2));
+  assert.strictEqual(d.deliverables.find(x => x.title === 'Coconut').status, 'Changes Requested');
+  assert.strictEqual(d.deliverables.find(x => x.title === 'Mustard').status, 'Approved', 'only the chosen creative');
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(n => /Reopened for changes/.test(n.title) && /requester/.test(n.body)));
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(n => /Reopened by the requester/.test(n.title)));
+  my = ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(x => x.requirementId === sub.requirementId);
+  assert.strictEqual(my.status, 'Being revised'); assert.ok(!my.canReopen);
+  err(call('', 'api_trackReopen', sub.trackToken, sub.requirementId, { reason: 'again please', dueDate: future(2) }), 'INVALID_STATE');
+  // finish again → the designer gets the reopen bonus
+  const before = ok(call(A, 'api_listRewards')).me.breakdown.reopen;
+  const del = d.deliverables.find(x => x.title === 'Coconut').deliverableId;
+  const v2 = upload(A, { kind: 'version', taskId: tid, title: 'Coconut', deliverableId: del }, 'c2.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', tid, [v2])); ok(call('', 'api_trackDecide', sub.trackToken, v2, 'approved', ''));
+  assert.strictEqual(ok(call(A, 'api_getTask', tid)).task.status, 'Completed');
+  assert.ok(ok(call(A, 'api_listRewards')).me.breakdown.reopen > before);
+  // switched off → only "Need changes?"
+  ok(call(LEADER, 'api_saveSettings', { requesterCanReopen: false })); env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(!ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(x => x.requirementId === sub.requirementId).canReopen);
+  err(call('', 'api_trackReopen', sub.trackToken, sub.requirementId, { reason: 'Change again', dueDate: future(2) }), 'FORBIDDEN');
+  ok(call(LEADER, 'api_saveSettings', { requesterCanReopen: true })); env.ctx.SETTINGS_MEMO_ = null;
+  // someone else's link can't
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'Y', department: 'Sales', email: 'y7@example.org', brief: 'Other', preferredDate: future(5), quantity: 1 }));
+  err(call('', 'api_trackReopen', other.trackToken, sub.requirementId, { reason: 'Sneaky change', dueDate: future(2) }), 'NOT_FOUND');
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

@@ -20,7 +20,7 @@ var SCHEMA = {
     'assignedBy', 'assignedAt', 'startDate', 'dueDate', 'priority', 'status', 'prevStatus', 'progress',
     'instructions', 'internalNotes', 'folderId', 'completedAt', 'dueSoonNotifiedAt', 'overdueNotifiedAt',
     'createdBy', 'createdAt', 'updatedAt', 'dueTime', 'finalLink',
-    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes'],
+    'holdReason', 'holdParty', 'holdDept', 'holdSince', 'heldMs', 'reopenedAt', 'reopenReason', 'reopenCount', 'folderPath', 'bonusPoints', 'sizes', 'fixedPoints'],
   TaskAssignments: ['assignmentId', 'taskId', 'assigneeEmail', 'previousAssignee', 'assignedBy', 'dueDate',
     'priority', 'note', 'assignedAt', 'dueTime'],
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
@@ -48,7 +48,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 11;
+var SCHEMA_VERSION = 12;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -149,6 +149,7 @@ var DEFAULT_SETTINGS = {
   countEachSize: false,      // false: a creative made in 2–3 sizes earns points once; true: every size file counts as its own creative
   allowPersonalTheme: true,  // team members may pick their own colours on their profile
   teamChat: true,            // team chat on/off
+  requesterCanReopen: true,  // requesters can reopen their own finished request for changes from "My requests"
   emailRules: {},            // which automatic emails go out — see EMAIL_KINDS; missing key = on
   theme: 'rosier',           // colour theme for every page (see THEMES)
   accentColor: '',           // optional custom accent colour (#rrggbb) on top of the theme
@@ -207,7 +208,7 @@ var EDITABLE_SETTINGS = {
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
   creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number',
-  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', emailRules: 'emailRules'
+  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', requesterCanReopen: 'boolean', emailRules: 'emailRules'
 };
 
 /**
