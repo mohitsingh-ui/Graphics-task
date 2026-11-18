@@ -58,7 +58,7 @@ function campaignDto_(c, withDetail) {
     o.taskList = tasks.map(function (t) {
       var ds = dc[t.taskId] || [];
       return { taskId: t.taskId, title: t.title, status: t.status, category: t.creativeType || '', assigneeName: t.assigneeEmail ? displayName_(t.assigneeEmail) : '',
-        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
+        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status === DSTATUS.APPROVED; }).length,
         dueDate: t.dueDate, dueTime: t.dueTime, requirementId: t.requirementId, overdue: isOverdue_(t), hold: t.status === STATUS.ON_HOLD };
     }).sort(function (a, b) { return a.dueDate > b.dueDate ? 1 : -1; });
   }

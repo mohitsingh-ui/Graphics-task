@@ -49,7 +49,7 @@ function notify_(emails, type, title, body, route, sendEmail) {
 
 /** Notification type → the email switch in Settings → Emails (EMAIL_KINDS). */
 var NOTIFY_KIND_ = {
-  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', changes_requested: 'creative_changes',
+  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', creative_skipped: 'creative_changes', changes_requested: 'creative_changes',
   task_overdue: 'task_due', task_due_soon: 'task_due', final_link: 'task_completed', request_edited: 'change_request'
 };
 

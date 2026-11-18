@@ -366,7 +366,7 @@ function api_getTask(taskId) {
           }
           return o;
         });
-      return Object.assign(pick_(d, ['deliverableId', 'title', 'purpose', 'deliverableType', 'status', 'latestVersionNo', 'approvedVersionId', 'createdAt']),
+      return Object.assign(pick_(d, ['deliverableId', 'title', 'purpose', 'deliverableType', 'status', 'latestVersionNo', 'approvedVersionId', 'createdAt', 'variantOf']),
         { versions: vs });
     });
 
@@ -683,7 +683,7 @@ function api_resumeTask(taskId, input) {
  * deliverableIds: which creatives need changes (all when empty). Approved files stay final until replaced.
  */
 function reopenTask_(t, actor, reason, dueDate, dueTime, deliverableIds, strict) {
-  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED; });
+  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED && d.status !== DSTATUS.SKIPPED; });
   var pick = Array.isArray(deliverableIds) && deliverableIds.length ? deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
   var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
   if (!chosen.length && dels.length) {

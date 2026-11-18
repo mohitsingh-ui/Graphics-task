@@ -64,7 +64,7 @@ function showState(state, d) {
   var m = map[state] || map.invalid;
   var extra = '';
   if (state === 'decided' && d && d.decision) {
-    m[1] = d.decision.decision === 'approved' ? 'Creative approved' : 'Changes requested';
+    m[1] = d.decision.decision === 'approved' ? 'Creative approved' : d.decision.decision === 'skipped' ? 'Marked as not selected' : 'Changes requested';
     extra = '<p class="muted">' + h(c.title) + ' · ' + h(c.version) + ' — recorded on ' + fmtDate(d.decision.decidedOn) + '.</p>' +
       (d.decision.comment ? '<div class="alert info" style="text-align:left">' + h(d.decision.comment) + '</div>' : '') +
       '<p class="faint small" style="margin-top:12px">Thank you. The graphics team has been notified.</p>';
@@ -111,6 +111,7 @@ function render() {
     '<textarea id="cm" rows="4" maxlength="4000" placeholder="What should change? Be as specific as you can."></textarea></div>' +
     '<div class="alert bad hidden" data-form-error></div>' +
     '<div class="btns"><button class="btn danger" id="chgBtn">REQUEST CHANGES</button><button class="btn ok" id="okBtn">' + icon('check') + ' APPROVE CREATIVE</button></div>' +
+    '<p class="small" style="margin:0;text-align:center"><button class="btn ghost sm" id="skpBtn">Not selected — I picked another option</button></p>' +
     (mode === 'anonymous' ? '<p class="faint small" style="margin:0">Your review is recorded without your name.</p>' : '') +
     '</div></div></div></div>';
 
@@ -123,6 +124,7 @@ function render() {
   };
   $('#okBtn').onclick = function () { decide('approved'); };
   $('#chgBtn').onclick = function () { decide('changes'); };
+  $('#skpBtn').onclick = function () { decide('skipped'); };
 }
 
 function openOriginal() {
@@ -143,9 +145,9 @@ function decide(decision) {
   if (input.reviewerEmail && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(input.reviewerEmail)) return fieldErrors(document, 'Please enter a valid email.');
   if (decision === 'changes' && input.comment.length < 5) { $('#cm').focus(); return fieldErrors(document, 'Tell the team what to change before requesting changes.'); }
   var c = DATA.creative;
-  var title = decision === 'approved' ? 'Approve ' + c.title + ' (' + c.version + ')?' : 'Request changes on ' + c.title + '?';
-  var msg = decision === 'approved' ? 'This marks the creative as final. You can’t undo this from the link.' : 'The designer will get your feedback and send a new version.';
-  confirmBox(title, msg, decision === 'approved' ? 'Approve' : 'Send feedback', false).then(function (yes) {
+  var title = decision === 'approved' ? 'Approve ' + c.title + ' (' + c.version + ')?' : decision === 'skipped' ? 'Mark ' + c.title + ' as not selected?' : 'Request changes on ' + c.title + '?';
+  var msg = decision === 'approved' ? 'This marks the creative as final. You can’t undo this from the link.' : decision === 'skipped' ? 'Use this when you picked another option. It isn’t a rejection.' : 'The designer will get your feedback and send a new version.';
+  confirmBox(title, msg, decision === 'approved' ? 'Approve' : decision === 'skipped' ? 'Not selected' : 'Send feedback', false).then(function (yes) {
     if (!yes) return;
     $all('#decide button').forEach(function (b) { b.disabled = true; });
     api('api_submitReview', TOKEN, input).then(function () {

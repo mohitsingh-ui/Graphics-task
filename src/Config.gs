@@ -26,7 +26,7 @@ var SCHEMA = {
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
     'visibility', 'createdAt'],
   CreativeSubmissions: ['deliverableId', 'taskId', 'title', 'purpose', 'deliverableType', 'status',
-    'latestVersionNo', 'latestVersionId', 'approvedVersionId', 'createdBy', 'createdAt', 'updatedAt'],
+    'latestVersionNo', 'latestVersionId', 'approvedVersionId', 'createdBy', 'createdAt', 'updatedAt', 'variantOf'],
   CreativeVersions: ['versionId', 'deliverableId', 'taskId', 'versionNo', 'fileId', 'fileName', 'mimeType',
     'sizeBytes', 'note', 'uploadedBy', 'uploadedAt', 'status', 'submittedAt', 'approvedFileId'],
   ApprovalRequests: ['requestId', 'versionId', 'deliverableId', 'taskId', 'status', 'createdBy', 'createdAt',
@@ -48,7 +48,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 12;
+var SCHEMA_VERSION = 13;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -80,9 +80,11 @@ var PRE_ASSIGN = [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY];
 var CLOSED = [STATUS.COMPLETED, STATUS.CANCELLED];
 
 /** Deliverable (creative submission) and version statuses. */
-var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved', REJECTED: 'Rejected' };
+var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved', REJECTED: 'Rejected', SKIPPED: 'Not Selected' };
 var VSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved',
-  SUPERSEDED: 'Superseded', REJECTED: 'Rejected' };
+  SUPERSEDED: 'Superseded', REJECTED: 'Rejected', SKIPPED: 'Not Selected' };
+/** Decisions a reviewer can make. "skipped" = Not selected: another option was picked; no points lost, no penalty. */
+var DECISIONS = ['approved', 'changes', 'rejected', 'skipped'];
 
 /**
  * Manual status transitions. System transitions (upload, review decisions)

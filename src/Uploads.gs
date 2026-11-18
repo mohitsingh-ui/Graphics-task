@@ -115,6 +115,8 @@ function api_startUpload(ctx) {
         if (!taskPermissions_(u, task).canUpload) throw AppError_('INVALID_STATE', 'You can’t upload creatives while the task is ' + task.status.toLowerCase() + '.');
         rec.meta = {
           deliverableId: str_(ctx.deliverableId, 60, 'Deliverable', false),
+          // variant: another option of that creative (a new creative of its own, linked to it)
+          variant: !!ctx.variant && !!ctx.deliverableId,
           title: str_(ctx.title, 150, 'Creative title', !ctx.deliverableId),
           purpose: str_(ctx.purpose, 500, 'What the creative is for', false),
           deliverableType: str_(ctx.deliverableType, 100, 'Deliverable type', false),
@@ -254,7 +256,18 @@ function createVersion_(user, rec, file) {
     if (!taskPermissions_(user, task).canUpload) throw AppError_('INVALID_STATE', 'This task no longer accepts uploads.');
     var now = nowIso_();
     var d;
-    if (rec.meta.deliverableId) {
+    if (rec.meta.variant) {
+      // Another option of a creative: its own creative (approved or not on its own), titled "… — option N".
+      var parent = dbGet_('CreativeSubmissions', rec.meta.deliverableId);
+      var root = parent.variantOf ? dbGet_('CreativeSubmissions', parent.variantOf) || parent : parent;
+      var family = taskDeliverables_(task.taskId).filter(function (x) { return x.variantOf === root.deliverableId; }).length;
+      var vn = taskDeliverables_(task.taskId).length + 1;
+      d = dbInsert_('CreativeSubmissions', {
+        deliverableId: task.taskId + '-D' + vn, taskId: task.taskId, title: (root.title + ' — option ' + (family + 2)).slice(0, 150), purpose: root.purpose,
+        deliverableType: root.deliverableType || task.creativeType, status: DSTATUS.DRAFT, latestVersionNo: '0',
+        latestVersionId: '', approvedVersionId: '', createdBy: user.email, createdAt: now, updatedAt: now, variantOf: root.deliverableId
+      });
+    } else if (rec.meta.deliverableId) {
       d = dbGet_('CreativeSubmissions', rec.meta.deliverableId);
     } else {
       var n = taskDeliverables_(task.taskId).length + 1;

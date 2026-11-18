@@ -28,7 +28,7 @@ var SCHEMA = {
   TaskActivity: ['activityId', 'taskId', 'actorEmail', 'actorRole', 'action', 'fromValue', 'toValue', 'note',
     'visibility', 'createdAt'],
   CreativeSubmissions: ['deliverableId', 'taskId', 'title', 'purpose', 'deliverableType', 'status',
-    'latestVersionNo', 'latestVersionId', 'approvedVersionId', 'createdBy', 'createdAt', 'updatedAt'],
+    'latestVersionNo', 'latestVersionId', 'approvedVersionId', 'createdBy', 'createdAt', 'updatedAt', 'variantOf'],
   CreativeVersions: ['versionId', 'deliverableId', 'taskId', 'versionNo', 'fileId', 'fileName', 'mimeType',
     'sizeBytes', 'note', 'uploadedBy', 'uploadedAt', 'status', 'submittedAt', 'approvedFileId'],
   ApprovalRequests: ['requestId', 'versionId', 'deliverableId', 'taskId', 'status', 'createdBy', 'createdAt',
@@ -50,7 +50,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 12;
+var SCHEMA_VERSION = 13;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -82,9 +82,11 @@ var PRE_ASSIGN = [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY];
 var CLOSED = [STATUS.COMPLETED, STATUS.CANCELLED];
 
 /** Deliverable (creative submission) and version statuses. */
-var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved', REJECTED: 'Rejected' };
+var DSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved', REJECTED: 'Rejected', SKIPPED: 'Not Selected' };
 var VSTATUS = { DRAFT: 'Draft', AWAITING: 'Awaiting Approval', CHANGES: 'Changes Requested', APPROVED: 'Approved',
-  SUPERSEDED: 'Superseded', REJECTED: 'Rejected' };
+  SUPERSEDED: 'Superseded', REJECTED: 'Rejected', SKIPPED: 'Not Selected' };
+/** Decisions a reviewer can make. "skipped" = Not selected: another option was picked; no points lost, no penalty. */
+var DECISIONS = ['approved', 'changes', 'rejected', 'skipped'];
 
 /**
  * Manual status transitions. System transitions (upload, review decisions)
@@ -1066,7 +1068,7 @@ function notify_(emails, type, title, body, route, sendEmail) {
 
 /** Notification type → the email switch in Settings → Emails (EMAIL_KINDS). */
 var NOTIFY_KIND_ = {
-  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', changes_requested: 'creative_changes',
+  task_reassigned: 'task_assigned', creative_rejected: 'creative_changes', creative_skipped: 'creative_changes', changes_requested: 'creative_changes',
   task_overdue: 'task_due', task_due_soon: 'task_due', final_link: 'task_completed', request_edited: 'change_request'
 };
 
@@ -1847,7 +1849,7 @@ function api_getTask(taskId) {
           }
           return o;
         });
-      return Object.assign(pick_(d, ['deliverableId', 'title', 'purpose', 'deliverableType', 'status', 'latestVersionNo', 'approvedVersionId', 'createdAt']),
+      return Object.assign(pick_(d, ['deliverableId', 'title', 'purpose', 'deliverableType', 'status', 'latestVersionNo', 'approvedVersionId', 'createdAt', 'variantOf']),
         { versions: vs });
     });
 
@@ -2164,7 +2166,7 @@ function api_resumeTask(taskId, input) {
  * deliverableIds: which creatives need changes (all when empty). Approved files stay final until replaced.
  */
 function reopenTask_(t, actor, reason, dueDate, dueTime, deliverableIds, strict) {
-  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED; });
+  var dels = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED && d.status !== DSTATUS.SKIPPED; });
   var pick = Array.isArray(deliverableIds) && deliverableIds.length ? deliverableIds.map(String) : dels.map(function (d) { return d.deliverableId; });
   var chosen = dels.filter(function (d) { return pick.indexOf(d.deliverableId) !== -1; });
   if (!chosen.length && dels.length) {
@@ -2620,6 +2622,8 @@ function api_startUpload(ctx) {
         if (!taskPermissions_(u, task).canUpload) throw AppError_('INVALID_STATE', 'You can’t upload creatives while the task is ' + task.status.toLowerCase() + '.');
         rec.meta = {
           deliverableId: str_(ctx.deliverableId, 60, 'Deliverable', false),
+          // variant: another option of that creative (a new creative of its own, linked to it)
+          variant: !!ctx.variant && !!ctx.deliverableId,
           title: str_(ctx.title, 150, 'Creative title', !ctx.deliverableId),
           purpose: str_(ctx.purpose, 500, 'What the creative is for', false),
           deliverableType: str_(ctx.deliverableType, 100, 'Deliverable type', false),
@@ -2759,7 +2763,18 @@ function createVersion_(user, rec, file) {
     if (!taskPermissions_(user, task).canUpload) throw AppError_('INVALID_STATE', 'This task no longer accepts uploads.');
     var now = nowIso_();
     var d;
-    if (rec.meta.deliverableId) {
+    if (rec.meta.variant) {
+      // Another option of a creative: its own creative (approved or not on its own), titled "… — option N".
+      var parent = dbGet_('CreativeSubmissions', rec.meta.deliverableId);
+      var root = parent.variantOf ? dbGet_('CreativeSubmissions', parent.variantOf) || parent : parent;
+      var family = taskDeliverables_(task.taskId).filter(function (x) { return x.variantOf === root.deliverableId; }).length;
+      var vn = taskDeliverables_(task.taskId).length + 1;
+      d = dbInsert_('CreativeSubmissions', {
+        deliverableId: task.taskId + '-D' + vn, taskId: task.taskId, title: (root.title + ' — option ' + (family + 2)).slice(0, 150), purpose: root.purpose,
+        deliverableType: root.deliverableType || task.creativeType, status: DSTATUS.DRAFT, latestVersionNo: '0',
+        latestVersionId: '', approvedVersionId: '', createdBy: user.email, createdAt: now, updatedAt: now, variantOf: root.deliverableId
+      });
+    } else if (rec.meta.deliverableId) {
       d = dbGet_('CreativeSubmissions', rec.meta.deliverableId);
     } else {
       var n = taskDeliverables_(task.taskId).length + 1;
@@ -2985,8 +3000,8 @@ function api_revokeReviewLinks(versionId) {
 function api_leaderDecision(versionId, decision, comment) {
   return respond_(function () {
     var u = requireLeader_();
-    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
+    decision = oneOf_(String(decision || ''), DECISIONS, 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision === 'changes' || decision === 'rejected');
     return withLock_(function () {
       var r = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
       if (!r) throw AppError_('ALREADY_DECIDED', 'This version is no longer waiting for approval.');
@@ -3027,13 +3042,19 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor, op
   } else if (decision === 'rejected') {
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.REJECTED });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.REJECTED, updatedAt: now });
+  } else if (decision === 'skipped') {
+    // Not selected: another option was chosen. Neutral — no points, no penalty, doesn't hold the task up.
+    dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.SKIPPED });
+    // If an earlier version of this creative was approved, that one stays the final file.
+    var keep = d.approvedVersionId && dbGet_('CreativeVersions', d.approvedVersionId);
+    dbUpdate_('CreativeSubmissions', d.deliverableId, { status: keep && keep.status === VSTATUS.APPROVED ? DSTATUS.APPROVED : DSTATUS.SKIPPED, updatedAt: now });
   } else {
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.CHANGES });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now });
   }
 
-  var label = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Changes requested';
-  var action = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'changes_requested';
+  var label = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : decision === 'skipped' ? 'Not selected' : 'Changes requested';
+  var action = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : decision === 'skipped' ? 'not_selected' : 'changes_requested';
   logActivity_(task.taskId, channel === 'public' ? 'reviewer' : actor, action, '', d.title + ' · V' + v.versionNo, comment || '', 'team');
 
   if (opts && opts.quiet) { recomputeTaskStatus_(task.taskId, 'system'); return { task: task, d: d, v: v }; }
@@ -3041,7 +3062,13 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor, op
   var title = label + ': ' + d.title + ' V' + v.versionNo;
   var mail = designerRecipients_(task, v, actor);
   // Email goes only to the designer. Leaders just see it in the portal's bell.
-  var ntype = decision === 'approved' ? 'creative_approved' : decision === 'rejected' ? 'creative_rejected' : 'changes_requested';
+  var ntype = decision === 'approved' ? 'creative_approved' : decision === 'rejected' ? 'creative_rejected' : decision === 'skipped' ? 'creative_skipped' : 'changes_requested';
+  if (decision === 'skipped') {
+    // Bell only, no email: it's not bad news.
+    notify_(mail, ntype, title, 'The reviewer picked another option. No points lost.' + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + task.taskId, false);
+    recomputeTaskStatus_(task.taskId, 'system');
+    return { task: task, d: d, v: v };
+  }
   notify_(mail, ntype, title,
     (decision === 'approved' ? 'Nice work — this creative is approved.' : decision === 'rejected' ? 'This creative won’t be used.\n\nReason: ' + comment +
       '\n\nIf the task still needs more creatives, upload a new one.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId, true);
@@ -3232,9 +3259,9 @@ function api_submitReview(token, input) {
   return respond_(function () {
     input = input || {};
     rateLimit_('reviewsubmit:' + String(token).slice(0, 60), 10, 600);
-    var decision = oneOf_(String(input.decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
-    var comment = str_(input.comment, 4000, 'Feedback', decision !== 'approved');
-    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
+    var decision = oneOf_(String(input.decision || ''), DECISIONS, 'Decision');
+    var comment = str_(input.comment, 4000, 'Feedback', decision === 'changes' || decision === 'rejected');
+    if ((decision === 'changes' || decision === 'rejected') && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     var mode = settings_().reviewerIdentity;
     var reviewer = { name: '', email: '' };
     if (mode !== 'anonymous') {
@@ -3883,7 +3910,7 @@ function api_getMyRequests(token) {
 function requesterVersion_(d) {
   if (d.approvedVersionId) { var a = dbGet_('CreativeVersions', d.approvedVersionId); if (a && a.status === VSTATUS.APPROVED) return a; }
   var vs = dbFind_('CreativeVersions', function (v) {
-    return v.deliverableId === d.deliverableId && [VSTATUS.AWAITING, VSTATUS.CHANGES, VSTATUS.APPROVED, VSTATUS.REJECTED].indexOf(v.status) !== -1;
+    return v.deliverableId === d.deliverableId && [VSTATUS.AWAITING, VSTATUS.CHANGES, VSTATUS.APPROVED, VSTATUS.REJECTED, VSTATUS.SKIPPED].indexOf(v.status) !== -1;
   }).sort(function (x, y) { return Number(y.versionNo) - Number(x.versionNo); });
   return vs[0] || null;
 }
@@ -3892,6 +3919,7 @@ function creativeState_(d, v) {
   if (v.status === VSTATUS.APPROVED) return 'Approved';
   if (v.status === VSTATUS.AWAITING) return 'Waiting for your review';
   if (v.status === VSTATUS.REJECTED) return 'Rejected';
+  if (v.status === VSTATUS.SKIPPED) return 'Not selected';
   return 'Being revised';
 }
 
@@ -3993,9 +4021,9 @@ function api_trackDecide(token, versionId, decision, comment) {
   return respond_(function () {
     var keys = trackKeys_(token);
     rateLimit_('trackdecide:' + keys.join(',').slice(0, 120), 60, 600);
-    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
-    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
+    decision = oneOf_(String(decision || ''), DECISIONS, 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision === 'changes' || decision === 'rejected');
+    if ((decision === 'changes' || decision === 'rejected') && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     return withLock_(function () {
       var reviewer = { name: '', email: '' };
       var rq = trackOpenRequest_(keys, versionId, reviewer, settings_().reviewerIdentity !== 'anonymous');
@@ -4415,6 +4443,8 @@ function pointsTable_(inPeriod, ledger) {
       ev(who, 'creatives', pts, share, when, d.taskId, 'Creative approved: ' + d.title + sizeNote, users[who] && users[who].designation ? users[who].designation : '');
       P(who).creatives = r1(P(who).creatives + share); P(who).creativePts = r1(P(who).creativePts + pts);
       var hadChanges = decs.some(function (x) { return x.decidedAt <= when && (x.decision === 'changes' || x.decision === 'rejected'); });
+      // An extra option made after changes were asked on the original isn't a first-time approval.
+      if (d.variantOf && (decByDel[d.variantOf] || []).some(function (x) { return x.decidedAt <= d.createdAt && (x.decision === 'changes' || x.decision === 'rejected'); })) hadChanges = true;
       if (!hadChanges && Number(s.pointsFirstTime)) {
         var ft = Number(s.pointsFirstTime) * share;
         ev(who, 'firstTime', ft, share, when, d.taskId, 'Approved first time: ' + d.title + sizeNote);
@@ -4675,7 +4705,7 @@ function batchItem_(versionId) {
   var openReq = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
   var dec = dbFind_('ApprovalDecisions', function (x) { return x.versionId === versionId; }).pop();
   var state = openReq && t.status !== STATUS.CANCELLED ? 'open'
-    : v.status === VSTATUS.APPROVED ? 'approved' : v.status === VSTATUS.CHANGES ? 'changes' : v.status === VSTATUS.REJECTED ? 'rejected' : 'closed';
+    : v.status === VSTATUS.APPROVED ? 'approved' : v.status === VSTATUS.CHANGES ? 'changes' : v.status === VSTATUS.REJECTED ? 'rejected' : v.status === VSTATUS.SKIPPED ? 'skipped' : 'closed';
   return {
     versionId: v.versionId, title: d.title || 'Creative', version: 'V' + v.versionNo, task: t.title, purpose: d.purpose || '',
     ext: extOf_(v.fileName), isImage: INLINE_IMAGE_TYPES.indexOf(v.mimeType) !== -1, state: state,
@@ -4758,16 +4788,16 @@ function checkNotOwnWork_(reviewer, v, t) {
 function api_batchDecide(token, versionId, decision, comment, who) {
   return respond_(function () {
     rateLimit_('batchdecide:' + String(token).slice(0, 60), 120, 600);
-    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
-    if (decision !== 'approved' && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
+    decision = oneOf_(String(decision || ''), DECISIONS, 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision === 'changes' || decision === 'rejected');
+    if ((decision === 'changes' || decision === 'rejected') && comment.length < 5) throw AppError_('VALIDATION', decision === 'rejected' ? 'Say why it’s rejected.' : 'Please tell the team what to change.');
     var reviewer = batchReviewer_(who);
     return withLock_(function () {
       var b = batchFromToken_(token), it = batchVersion_(b, versionId);
       if (it.state !== 'open') throw AppError_('ALREADY_DECIDED', 'A decision has already been recorded for this creative.');
       checkNotOwnWork_(reviewer, it._v, it._t);
       applyDecision_(it._req, decision, comment, reviewer, 'public', null);
-      return { state: decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'changes' };
+      return { state: decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : decision === 'skipped' ? 'skipped' : 'changes' };
     });
   });
 }
@@ -5313,7 +5343,7 @@ function campaignDto_(c, withDetail) {
     o.taskList = tasks.map(function (t) {
       var ds = dc[t.taskId] || [];
       return { taskId: t.taskId, title: t.title, status: t.status, category: t.creativeType || '', assigneeName: t.assigneeEmail ? displayName_(t.assigneeEmail) : '',
-        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status !== DSTATUS.REJECTED; }).length,
+        required: filesRequired_(t), approved: ds.filter(function (d) { return d.approvedVersionId && d.status === DSTATUS.APPROVED; }).length,
         dueDate: t.dueDate, dueTime: t.dueTime, requirementId: t.requirementId, overdue: isOverdue_(t), hold: t.status === STATUS.ON_HOLD };
     }).sort(function (a, b) { return a.dueDate > b.dueDate ? 1 : -1; });
   }

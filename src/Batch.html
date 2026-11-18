@@ -28,7 +28,7 @@
   .it .acts .btn { height: 36px; padding: 0 8px; font-size: 13px; }
   .chip { align-self: flex-start; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
   .chip.open { background: var(--warn-soft); color: #7a4f00; } .chip.approved { background: var(--ok-soft); color: var(--ok); }
-  .chip.changes { background: var(--bad-soft); color: var(--bad); } .chip.rejected { background: #f3e1df; color: #7d1f16; } .chip.closed { background: var(--muted-soft); color: var(--text-3); }
+  .chip.changes { background: var(--bad-soft); color: var(--bad); } .chip.rejected { background: #f3e1df; color: #7d1f16; } .chip.closed, .chip.skipped { background: var(--muted-soft); color: var(--text-3); }
   .dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0,0,0,.06); z-index: 20; }
   .dock .in { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
   .dock .btn { height: 44px; padding: 0 18px; }
@@ -69,11 +69,11 @@ function load() {
   }).catch(function (e) { fail(errMsg(e)); });
 }
 
-var LABEL = { open: 'Waiting for you', approved: 'Approved', changes: 'Changes requested', rejected: 'Rejected', closed: 'No longer open' };
-var GLABEL = { open: 'Waiting for your review', approved: 'Approved', changes: 'Changes requested', rejected: 'Rejected', closed: 'No longer open' };
+var LABEL = { open: 'Waiting for you', approved: 'Approved', changes: 'Changes requested', rejected: 'Rejected', skipped: 'Not selected', closed: 'No longer open' };
+var GLABEL = { open: 'Waiting for your review', approved: 'Approved', changes: 'Changes requested', rejected: 'Rejected', skipped: 'Not selected', closed: 'No longer open' };
 
 function draw() {
-  var items = DATA.items, n = { open: 0, approved: 0, changes: 0, rejected: 0, closed: 0 };
+  var items = DATA.items, n = { open: 0, approved: 0, changes: 0, rejected: 0, skipped: 0, closed: 0 };
   items.forEach(function (x) { n[x.state]++; });
   var askName = DATA.reviewerIdentity !== 'anonymous';
   $('#main').innerHTML =
@@ -86,7 +86,7 @@ function draw() {
       return '<div class="it"><button class="ph" data-i="' + i + '" aria-label="View ' + h(x.title) + '"' + (THUMBS[x.versionId] ? ' style="background-image:url(&quot;' + THUMBS[x.versionId] + '&quot;)"' : '') + '>' + (THUMBS[x.versionId] ? '' : h(x.ext || 'file')) + '</button>' +
         '<div class="bd"><span class="chip ' + x.state + '">' + LABEL[x.state] + '</span><div class="t">' + h(x.title) + ' <span class="faint small">' + h(x.version) + '</span></div>' +
         (x.purpose ? '<div class="s">' + h(x.purpose) + '</div>' : '') + (x.comment ? '<div class="fb">“' + h(x.comment) + '”</div>' : '') +
-        (x.state === 'open' ? '<div class="acts"><button class="btn danger sm" data-chg="' + i + '">Changes</button><button class="btn ok sm" data-ok="' + i + '">' + icon('check') + ' Approve</button></div>' : '') +
+        (x.state === 'open' ? '<div class="acts"><button class="btn ghost sm" data-skp="' + i + '" title="Another option was picked">Not selected</button><button class="btn danger sm" data-chg="' + i + '">Changes</button><button class="btn ok sm" data-ok="' + i + '">' + icon('check') + ' Approve</button></div>' : '') +
         '</div></div>';
     }).join('') + '</div>';
   if ($('#whoName')) {
@@ -95,6 +95,7 @@ function draw() {
   $all('[data-i]').forEach(function (b) { b.onclick = function () { openGal(Number(b.getAttribute('data-i'))); }; });
   $all('[data-ok]').forEach(function (b) { b.onclick = function () { decideOne(Number(b.getAttribute('data-ok')), 'approved', ''); }; });
   $all('[data-chg]').forEach(function (b) { b.onclick = function () { askChanges(Number(b.getAttribute('data-chg'))); }; });
+  $all('[data-skp]').forEach(function (b) { b.onclick = function () { decideOne(Number(b.getAttribute('data-skp')), 'skipped', ''); }; });
   $('#dock').classList.toggle('hidden', n.open < 2);
   $('#dockTxt').textContent = n.open + ' creatives waiting for you';
   $('#allBtn').innerHTML = icon('check') + ' Approve all ' + n.open;
@@ -138,12 +139,12 @@ function decide(i, decision, comment) {
     return api('api_batchDecide', TOKEN, DATA.items[i].versionId, decision, comment, who());
   }).then(function (r) {
     DATA.items[i].state = r.state;
-    if (decision !== 'approved') DATA.items[i].comment = comment;
+    if (comment) DATA.items[i].comment = comment;
   });
 }
 
 function decideOne(i, decision, comment) {
-  decide(i, decision, comment).then(function () { toast(decision === 'approved' ? 'Approved' : 'Feedback sent'); draw(); })
+  decide(i, decision, comment).then(function () { toast(decision === 'approved' ? 'Approved' : decision === 'skipped' ? 'Marked as not selected' : 'Feedback sent'); draw(); })
     .catch(function (e) { if (!e.quiet) toast(errMsg(e), true); if (e.code === 'ALREADY_DECIDED') load(); });
 }
 

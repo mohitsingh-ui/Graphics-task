@@ -1611,6 +1611,91 @@ scenario('Requester reopens a finished request from My requests (chosen creative
   err(call('', 'api_trackReopen', other.trackToken, sub.requirementId, { reason: 'Sneaky change', dueDate: future(2) }), 'NOT_FOUND');
 });
 
+scenario('Extras + options: upload more than asked, give 2–4 options of one creative; reviewer picks; "Not selected" costs nothing', () => {
+  ok(call(LEADER, 'api_saveSettings', { pointsRejected: 3 })); env.ctx.SETTINGS_MEMO_ = null;
+  const me = () => ok(call(B, 'api_listRewards')).me;
+  // 1) asked for 2, designer uploads 3 for safety; 2 approved, 1 not selected → done, full points for 2, no penalty
+  const t1 = ok(call(LEADER, 'api_createDirectTask', { title: 'Two ghee posts', assigneeEmail: B, dueDate: future(3), quantity: 2 })).taskId;
+  const p0 = me();
+  const three = ['Post A', 'Post B', 'Post C'].map(n => upload(B, { kind: 'version', taskId: t1, title: n }, n.replace(' ', '') + '.png', png(200)).versionId);
+  ok(call(B, 'api_submitForApproval', t1, three));
+  ok(call(LEADER, 'api_leaderDecision', three[0], 'approved', ''));
+  ok(call(LEADER, 'api_leaderDecision', three[2], 'approved', ''));
+  assert.notStrictEqual(ok(call(B, 'api_getTask', t1)).task.status, 'Completed', 'the extra still waits for a decision');
+  const mails = state.mail.length;
+  ok(call(LEADER, 'api_leaderDecision', three[1], 'skipped', ''));
+  assert.ok(!state.mail.slice(mails).some(m => /Not selected/i.test(m.subject + m.body)), '"not selected" sends no email');
+  assert.strictEqual(ok(call(B, 'api_getTask', t1)).task.status, 'Completed');
+  let p1 = me();
+  assert.strictEqual(p1.breakdown.creatives - p0.breakdown.creatives, 2);
+  assert.strictEqual(p1.breakdown.rejected, p0.breakdown.rejected, 'not a rejection');
+  assert.ok(ok(call(B, 'api_getNotifications')).items.some(n => /Not selected/.test(n.title)));
+  // all three approved → points for three
+  const t2 = ok(call(LEADER, 'api_createDirectTask', { title: 'One banner', assigneeEmail: B, dueDate: future(3), quantity: 1 })).taskId;
+  const a = upload(B, { kind: 'version', taskId: t2, title: 'Banner' }, 'b1.png', png(200));
+  ok(call(B, 'api_submitForApproval', t2, [a.versionId]));
+  ok(call(LEADER, 'api_leaderDecision', a.versionId, 'changes', 'Make the jar bigger'));
+  // 2) changes asked → designer sends a new version + 2 more options in one go
+  const v2 = upload(B, { kind: 'version', taskId: t2, deliverableId: a.deliverableId }, 'b2.png', png(200));
+  const o2 = upload(B, { kind: 'version', taskId: t2, deliverableId: a.deliverableId, variant: true }, 'b3.png', png(200));
+  const o3 = upload(B, { kind: 'version', taskId: t2, deliverableId: a.deliverableId, variant: true }, 'b4.png', png(200));
+  const dels = ok(call(B, 'api_getTask', t2)).deliverables;
+  assert.strictEqual(dels.length, 3);
+  assert.deepStrictEqual(dels.map(d => d.title).sort(), ['Banner', 'Banner — option 2', 'Banner — option 3']);
+  assert.ok(dels.filter(d => d.variantOf === a.deliverableId).length === 2);
+  ok(call(B, 'api_submitForApproval', t2, [v2.versionId, o2.versionId, o3.versionId]));
+  // the requester / leader picks option 2 and option 3, the new version isn't needed
+  p1 = me();
+  ok(call(LEADER, 'api_leaderDecision', o2.versionId, 'approved', ''));
+  ok(call(LEADER, 'api_leaderDecision', o3.versionId, 'approved', ''));
+  ok(call(LEADER, 'api_leaderDecision', v2.versionId, 'skipped', ''));
+  assert.strictEqual(ok(call(B, 'api_getTask', t2)).task.status, 'Completed');
+  let p2 = me();
+  assert.strictEqual(p2.breakdown.creatives - p1.breakdown.creatives, 2, 'every approved option counts');
+  assert.strictEqual(p2.breakdown.firstTime, p1.breakdown.firstTime, 'options made after changes are not first-time');
+  // 3) options on the first upload: both approved first time
+  const t3 = ok(call(LEADER, 'api_createDirectTask', { title: 'Story', assigneeEmail: B, dueDate: future(3), quantity: 1 })).taskId;
+  const s1 = upload(B, { kind: 'version', taskId: t3, title: 'Story' }, 's1.png', png(200));
+  const s2 = upload(B, { kind: 'version', taskId: t3, deliverableId: s1.deliverableId, variant: true }, 's2.png', png(200));
+  ok(call(B, 'api_submitForApproval', t3, [s1.versionId, s2.versionId]));
+  const fresh = env.ctx.dbFind_('ReviewTokens', () => true).length;
+  // the requester-side links work too: batch link for the founder
+  const batch = tokenFrom(ok(call(LEADER, 'api_createBatchLink', [s1.versionId, s2.versionId], 'Story options')).url);
+  assert.strictEqual(ok(call('', 'api_batchDecide', batch, s1.versionId, 'skipped', '', { reviewerName: 'Founder' })).state, 'skipped');
+  assert.strictEqual(ok(call('', 'api_batchDecide', batch, s2.versionId, 'approved', '', { reviewerName: 'Founder' })).state, 'approved');
+  assert.strictEqual(ok(call(B, 'api_getTask', t3)).task.status, 'Completed');
+  assert.strictEqual(me().breakdown.firstTime - p2.breakdown.firstTime, 5, 'option approved first time');
+  // 4) a creative approved earlier keeps its approved file if the new version isn't selected
+  ok(call(LEADER, 'api_reopenTask', t3, { reason: 'Try a red background', dueDate: future(2), deliverableIds: [s2.deliverableId] }));
+  const r2 = upload(B, { kind: 'version', taskId: t3, deliverableId: s2.deliverableId }, 's3.png', png(200));
+  ok(call(B, 'api_submitForApproval', t3, [r2.versionId]));
+  ok(call(LEADER, 'api_leaderDecision', r2.versionId, 'skipped', ''));
+  const d3 = ok(call(B, 'api_getTask', t3)).deliverables.find(d => d.deliverableId === s2.deliverableId);
+  assert.strictEqual(d3.status, 'Approved'); assert.strictEqual(d3.approvedVersionId, s2.versionId);
+  assert.strictEqual(ok(call(B, 'api_getTask', t3)).task.status, 'Completed');
+  // a variant must belong to the same task
+  const t4 = ok(call(LEADER, 'api_createDirectTask', { title: 'Open one', assigneeEmail: B, dueDate: future(3), quantity: 1 })).taskId;
+  err(call(B, 'api_startUpload', { kind: 'version', taskId: t4, deliverableId: s1.deliverableId, variant: true, fileName: 'x.png', size: 10 }), 'NOT_FOUND');
+  ok(call(LEADER, 'api_saveSettings', { pointsRejected: 0 })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
+scenario('Requester can mark an option "Not selected" from My requests and from a review link', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Neha', department: 'Brand', email: 'neha@example.org', brief: 'Pick a hamper banner', preferredDate: future(5), quantity: 1 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' }));
+  const x1 = upload(A, { kind: 'version', taskId: tid, title: 'Hamper' }, 'h1.png', png(200));
+  const x2 = upload(A, { kind: 'version', taskId: tid, deliverableId: x1.deliverableId, variant: true }, 'h2.png', png(200));
+  ok(call(A, 'api_submitForApproval', tid, [x1.versionId, x2.versionId]));
+  const my = ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(r => r.requirementId === sub.requirementId);
+  assert.strictEqual(my.creatives.length, 2);
+  ok(call('', 'api_trackDecide', sub.trackToken, x1.versionId, 'skipped', ''));
+  const rv = ok(call(LEADER, 'api_createReviewLink', x2.versionId));
+  ok(call('', 'api_submitReview', tokenFrom(rv.url), { decision: 'approved', reviewerName: 'Neha', reviewerEmail: 'neha@example.org' }));
+  assert.strictEqual(ok(call(A, 'api_getTask', tid)).task.status, 'Completed');
+  const st = ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(r => r.requirementId === sub.requirementId).creatives.map(c => c.state).sort();
+  assert.deepStrictEqual(st, ['Approved', 'Not selected']);
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

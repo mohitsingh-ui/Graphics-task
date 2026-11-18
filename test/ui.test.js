@@ -900,6 +900,49 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.strictEqual(d.deliverables.filter(x => x.status === 'Changes Requested').length, 1);
     });
 
+    await step('Options: designer answers changes with a new version + 2 more options; leader approves two, marks one Not selected', async () => {
+      const t = env.call(LEADER, 'api_createDirectTask', { title: 'Hamper hero banner', assigneeEmail: A, dueDate: future(3), quantity: 1 }).data;
+      const b0 = await bannerPng('Hamper V1', 25);
+      const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: t.taskId, title: 'Hamper hero', fileName: 'h.png', size: b0.length }).data;
+      const v1 = env.call(A, 'api_uploadChunk', st.uploadId, 0, b0.toString('base64')).data;
+      env.call(A, 'api_submitForApproval', t.taskId, [v1.versionId]);
+      env.call(LEADER, 'api_leaderDecision', v1.versionId, 'changes', 'Try warmer colours');
+      await page.goto(BASE + '/page?as=' + A + '&r=task/' + t.taskId);
+      await page.waitForSelector('#aUpload');
+      await page.click('#aUpload');
+      await page.waitForSelector('#u_target');
+      assert.strictEqual(await page.inputValue('#u_target'), v1.deliverableId, 'the creative with changes is picked');
+      const fc = page.waitForEvent('filechooser');
+      await page.click('#u_drop');
+      await (await fc).setFiles([
+        { name: 'warm-1.png', mimeType: 'image/png', buffer: await bannerPng('Warm 1', 30) },
+        { name: 'warm-2.png', mimeType: 'image/png', buffer: await bannerPng('Warm 2', 15) },
+        { name: 'warm-3.png', mimeType: 'image/png', buffer: await bannerPng('Warm 3', 40) }]);
+      await page.waitForFunction(() => document.querySelectorAll('#u_files .file-row').length === 3);
+      assert.ok(await page.isVisible('#u_varHint'));
+      assert.ok((await page.inputValue('#u_ver')).includes('2 more option'));
+      await shot('76-upload-options');
+      await page.click('.modal-f >> text=Upload');
+      await page.waitForFunction(() => /option 3/.test(document.body.textContent), null, { timeout: 15000 });
+      const d = env.call(LEADER, 'api_getTask', t.taskId).data;
+      assert.strictEqual(d.deliverables.length, 3);
+      const open = d.deliverables.map(x => x.versions.find(v => v.status === 'Awaiting Approval')).filter(Boolean);
+      assert.strictEqual(open.length, 3, 'all three sent for approval');
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + t.taskId);
+      await page.waitForSelector('[data-skip]');
+      await shot('77-leader-options');
+      const opt = name => d.deliverables.find(x => x.title === name).versions.find(v => v.status === 'Awaiting Approval').versionId;
+      for (const n of ['Hamper hero — option 2', 'Hamper hero — option 3']) {
+        await page.click('[data-ok="' + opt(n) + '"]');
+        await page.click('.modal-f >> text=Approve');
+        await page.waitForSelector('[data-ok="' + opt(n) + '"]', { state: 'detached' });
+      }
+      await page.click('[data-skip="' + opt('Hamper hero') + '"]');
+      await page.click('.modal-f >> text=Not selected');
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Completed/.test(x.textContent); }, null, { timeout: 8000 });
+      assert.strictEqual(env.call(LEADER, 'api_getTask', t.taskId).data.task.status, 'Completed');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

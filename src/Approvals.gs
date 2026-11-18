@@ -130,8 +130,8 @@ function api_revokeReviewLinks(versionId) {
 function api_leaderDecision(versionId, decision, comment) {
   return respond_(function () {
     var u = requireLeader_();
-    decision = oneOf_(String(decision || ''), ['approved', 'changes', 'rejected'], 'Decision');
-    comment = str_(comment, 4000, 'Feedback', decision !== 'approved');
+    decision = oneOf_(String(decision || ''), DECISIONS, 'Decision');
+    comment = str_(comment, 4000, 'Feedback', decision === 'changes' || decision === 'rejected');
     return withLock_(function () {
       var r = dbFind_('ApprovalRequests', function (x) { return x.versionId === versionId && x.status === 'Open'; })[0];
       if (!r) throw AppError_('ALREADY_DECIDED', 'This version is no longer waiting for approval.');
@@ -172,13 +172,19 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor, op
   } else if (decision === 'rejected') {
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.REJECTED });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.REJECTED, updatedAt: now });
+  } else if (decision === 'skipped') {
+    // Not selected: another option was chosen. Neutral — no points, no penalty, doesn't hold the task up.
+    dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.SKIPPED });
+    // If an earlier version of this creative was approved, that one stays the final file.
+    var keep = d.approvedVersionId && dbGet_('CreativeVersions', d.approvedVersionId);
+    dbUpdate_('CreativeSubmissions', d.deliverableId, { status: keep && keep.status === VSTATUS.APPROVED ? DSTATUS.APPROVED : DSTATUS.SKIPPED, updatedAt: now });
   } else {
     dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.CHANGES });
     dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.CHANGES, updatedAt: now });
   }
 
-  var label = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Changes requested';
-  var action = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'changes_requested';
+  var label = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : decision === 'skipped' ? 'Not selected' : 'Changes requested';
+  var action = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : decision === 'skipped' ? 'not_selected' : 'changes_requested';
   logActivity_(task.taskId, channel === 'public' ? 'reviewer' : actor, action, '', d.title + ' · V' + v.versionNo, comment || '', 'team');
 
   if (opts && opts.quiet) { recomputeTaskStatus_(task.taskId, 'system'); return { task: task, d: d, v: v }; }
@@ -186,7 +192,13 @@ function applyDecision_(request, decision, comment, reviewer, channel, actor, op
   var title = label + ': ' + d.title + ' V' + v.versionNo;
   var mail = designerRecipients_(task, v, actor);
   // Email goes only to the designer. Leaders just see it in the portal's bell.
-  var ntype = decision === 'approved' ? 'creative_approved' : decision === 'rejected' ? 'creative_rejected' : 'changes_requested';
+  var ntype = decision === 'approved' ? 'creative_approved' : decision === 'rejected' ? 'creative_rejected' : decision === 'skipped' ? 'creative_skipped' : 'changes_requested';
+  if (decision === 'skipped') {
+    // Bell only, no email: it's not bad news.
+    notify_(mail, ntype, title, 'The reviewer picked another option. No points lost.' + (comment ? '\n\n“' + comment + '”' : ''), 'task/' + task.taskId, false);
+    recomputeTaskStatus_(task.taskId, 'system');
+    return { task: task, d: d, v: v };
+  }
   notify_(mail, ntype, title,
     (decision === 'approved' ? 'Nice work — this creative is approved.' : decision === 'rejected' ? 'This creative won’t be used.\n\nReason: ' + comment +
       '\n\nIf the task still needs more creatives, upload a new one.' : 'Feedback from the reviewer:\n\n' + comment), 'task/' + task.taskId, true);

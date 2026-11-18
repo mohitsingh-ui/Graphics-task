@@ -479,13 +479,13 @@ VIEWS.approvals = function (arg, el, token) {
           '<div class="thumb" data-thumb="' + h(r.versionId) + '" data-name="' + h(r.deliverableTitle + ' · V' + r.versionNo) + '" data-sub="' + h(r.taskId + ' · ' + r.taskTitle + ' · by ' + r.uploadedByName) + '"' +
             ' data-status="' + h(r.status === 'Open' ? 'Awaiting approval' : r.decision ? (r.decision.decision === 'approved' ? 'Approved' : 'Changes requested') : '') + '">' + ext(r.fileName) + '</div>' +
           '<div class="grow"><div class="row wrap"><b>' + h(r.deliverableTitle) + '</b><span class="badge plain">V' + h(r.versionNo) + '</span>' +
-          (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : dec.decision === 'rejected' ? 'Rejected' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
+          (r.status === 'Open' ? statusBadge('Awaiting Approval') : dec ? statusBadge(dec.decision === 'approved' ? 'Approved' : dec.decision === 'rejected' ? 'Rejected' : dec.decision === 'skipped' ? 'Not Selected' : 'Changes Requested') : statusBadge(r.status)) + '</div>' +
           '<div class="faint small"><a href="#" data-go="task/' + h(r.taskId) + '">' + h(r.taskId) + '</a> · ' + h(r.taskTitle) + ' · by <b>' + h(r.uploadedByName) + '</b> · sent ' + fmtDateTime(r.createdAt) + '</div>' +
           (dec ? '<div class="feedback ' + (dec.decision === 'approved' ? 'approved' : 'changes') + '">' + (dec.decision === 'rejected' ? '<b>Rejected</b> · ' : '') + (dec.reviewerName ? h(dec.reviewerName) + (dec.reviewerEmail ? ' (' + h(dec.reviewerEmail) + ')' : '') : 'Anonymous reviewer') +
             ' · ' + fmtDateTime(dec.decidedAt) + (dec.channel === 'portal' ? ' · in portal' : '') + (dec.comment ? '<div class="pre">' + h(dec.comment) + '</div>' : '') + '</div>' : '') +
           '</div>' +
           (r.status === 'Open' ? '<div class="row wrap" style="flex:none"><button class="btn sm" data-link="' + h(r.versionId) + '">' + icon('link') + ' Link</button>' +
-            '<button class="btn sm ghost" data-rej="' + h(r.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(r.versionId) + '">Changes</button><button class="btn sm ok" data-ok="' + h(r.versionId) + '">Approve</button></div>' : '') +
+            '<button class="btn sm ghost" data-skip="' + h(r.versionId) + '" title="Another option was picked — no points lost">Not selected</button><button class="btn sm ghost" data-rej="' + h(r.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(r.versionId) + '">Changes</button><button class="btn sm ok" data-ok="' + h(r.versionId) + '">Approve</button></div>' : '') +
           '</div>';
       }).join('') : emptyState(scope === 'open' ? 'Nothing waiting for a decision.' : 'No decisions yet.', '', 'check')) + '</div>' +
       (scope === 'open' ? '<div id="sharedLinks"></div>' : '');
@@ -495,6 +495,7 @@ VIEWS.approvals = function (arg, el, token) {
     $all('[data-ok]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-ok'), 'approved'); }; });
     $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes'); }; });
     $all('[data-rej]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-rej'), 'rejected'); }; });
+    $all('[data-skip]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-skip'), 'skipped'); }; });
     $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
     if ($('#selAll')) {
       var picks = $all('[data-pick]', el), sync = function () {
@@ -658,6 +659,13 @@ function openAsset(kind, id, name) {
 }
 
 function leaderDecide(versionId, decision, after) {
+  if (decision === 'skipped') {
+    return confirmBox('Mark as not selected?', 'Use this when another option was picked, or it’s an extra you don’t need. It isn’t a rejection — the designer loses no points, and it doesn’t hold the task up.', 'Not selected', false).then(function (y) {
+      if (!y) return;
+      api('api_leaderDecision', versionId, 'skipped', '').then(function () { toast('Marked as not selected'); if (after) after(); else render(APP.route); loadNotifications(); })
+        .catch(function (e) { toast(errMsg(e), true); });
+    });
+  }
   var approve = decision === 'approved', reject = decision === 'rejected';
   modal({
     title: approve ? 'Approve this creative?' : reject ? 'Reject this creative?' : 'Request changes',

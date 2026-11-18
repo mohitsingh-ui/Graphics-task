@@ -392,18 +392,20 @@ function gallery(items, opts) {
       };
       return;
     }
-    a.innerHTML = info + '<div class="row lb-btns">' + (opts.noReject ? '' : '<button class="btn ghost lb-rej" data-rej>Reject</button>') +
+    a.innerHTML = info + '<div class="row lb-btns">' + (opts.noSkip ? '' : '<button class="btn ghost lb-rej" data-skp title="Another option was picked — the designer loses no points">Not selected</button>') +
+      (opts.noReject ? '' : '<button class="btn ghost lb-rej" data-rej>Reject</button>') +
       '<button class="btn danger" data-chg>Request changes</button><button class="btn ok solid" data-okk>' + icon('check') + ' Approve</button></div>';
     $('[data-chg]', a).onclick = function () { mode = 'changes'; drawActions(); };
     if ($('[data-rej]', a)) $('[data-rej]', a).onclick = function () { mode = 'rejected'; drawActions(); };
+    if ($('[data-skp]', a)) $('[data-skp]', a).onclick = function () { decide('skipped', '', this); };
     $('[data-okk]', a).onclick = function () { decide('approved', '', this); };
   }
   function decide(decision, comment, btn) {
     var it = items[i];
     $all('[data-a] button', lb).forEach(function (b) { b.disabled = true; });
     opts.decide(it, decision, comment).then(function () {
-      changed = true; it.canDecide = false; it.status = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Changes requested';
-      toast(decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Feedback sent');
+      changed = true; it.canDecide = false; it.status = decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : decision === 'skipped' ? 'Not selected' : 'Changes requested';
+      toast(decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : decision === 'skipped' ? 'Marked as not selected' : 'Feedback sent');
       // Move on to the next creative still waiting for a decision.
       for (var k = 1; k < items.length; k++) { var j = (i + k) % items.length; if (items[j].canDecide) return show(j); }
       mode = ''; drawActions();

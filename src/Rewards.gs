@@ -90,6 +90,8 @@ function pointsTable_(inPeriod, ledger) {
       ev(who, 'creatives', pts, share, when, d.taskId, 'Creative approved: ' + d.title + sizeNote, users[who] && users[who].designation ? users[who].designation : '');
       P(who).creatives = r1(P(who).creatives + share); P(who).creativePts = r1(P(who).creativePts + pts);
       var hadChanges = decs.some(function (x) { return x.decidedAt <= when && (x.decision === 'changes' || x.decision === 'rejected'); });
+      // An extra option made after changes were asked on the original isn't a first-time approval.
+      if (d.variantOf && (decByDel[d.variantOf] || []).some(function (x) { return x.decidedAt <= d.createdAt && (x.decision === 'changes' || x.decision === 'rejected'); })) hadChanges = true;
       if (!hadChanges && Number(s.pointsFirstTime)) {
         var ft = Number(s.pointsFirstTime) * share;
         ev(who, 'firstTime', ft, share, when, d.taskId, 'Approved first time: ' + d.title + sizeNote);

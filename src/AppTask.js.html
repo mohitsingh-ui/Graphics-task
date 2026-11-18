@@ -147,6 +147,7 @@ function drawTask(el) {
   if ($('#approveAll')) $('#approveAll').onclick = function () { bulkApprove(this.getAttribute('data-ids').split(','), reloadTask); };
   $all('[data-chg]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-chg'), 'changes', reloadTask); }; });
   $all('[data-rej]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-rej'), 'rejected', reloadTask); }; });
+  $all('[data-skip]', el).forEach(function (b) { b.onclick = function () { leaderDecide(b.getAttribute('data-skip'), 'skipped', reloadTask); }; });
   $all('[data-link]', el).forEach(function (b) { b.onclick = function () { newReviewLink(b.getAttribute('data-link')); }; });
   $all('[data-revoke]', el).forEach(function (b) {
     b.onclick = function () {
@@ -200,13 +201,13 @@ function deliverablesCard(d) {
           '<div class="faint small">' + h(v.uploadedByName || v.uploadedBy) + ' · uploaded ' + fmtDateTime(v.uploadedAt) + ' · ' + fileSize(v.sizeBytes) + (v.submittedAt ? ' · sent ' + fmtDateTime(v.submittedAt) : '') + '</div>' +
           (v.note ? '<div class="small pre muted" style="margin-top:4px">“' + h(v.note) + '”</div>' : '') +
           v.decisions.map(function (x) {
-            return '<div class="feedback ' + (x.decision === 'approved' ? 'approved' : 'changes') + '"><b>' + (x.decision === 'approved' ? 'Approved' : x.decision === 'rejected' ? 'Rejected' : 'Changes requested') + '</b>' +
+            return '<div class="feedback ' + (x.decision === 'approved' ? 'approved' : 'changes') + '"><b>' + (x.decision === 'approved' ? 'Approved' : x.decision === 'rejected' ? 'Rejected' : x.decision === 'skipped' ? 'Not selected' : 'Changes requested') + '</b>' +
               (leader ? ' by ' + h(x.reviewerName || 'anonymous reviewer') + (x.reviewerEmail ? ' (' + h(x.reviewerEmail) + ')' : '') + (x.channel === 'portal' ? ' in portal' : ' via review link') : '') +
               ' · ' + fmtDateTime(x.decidedAt) + (x.comment ? '<div class="pre">' + h(x.comment) + '</div>' : '') + '</div>';
           }).join('') +
           (leader && v.request && v.request.status === 'Open' ? '<div class="row wrap" style="margin-top:8px"><span class="faint small">' + v.request.activeLinks + ' active review link(s)</span>' +
             '<button class="btn sm" data-link="' + h(v.versionId) + '">' + icon('link') + ' New link</button><button class="btn sm ghost" data-revoke="' + h(v.versionId) + '">Revoke links</button>' +
-            '<button class="btn sm ghost" data-rej="' + h(v.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(v.versionId) + '">Request changes</button><button class="btn sm ok" data-ok="' + h(v.versionId) + '">Approve</button></div>' : '') +
+            '<button class="btn sm ghost" data-skip="' + h(v.versionId) + '" title="Another option was picked — no points lost">Not selected</button><button class="btn sm ghost" data-rej="' + h(v.versionId) + '">Reject</button><button class="btn sm danger" data-chg="' + h(v.versionId) + '">Request changes</button><button class="btn sm ok" data-ok="' + h(v.versionId) + '">Approve</button></div>' : '') +
           '</div></div>';
       }).join('') + '</div>';
   }).join('') : emptyState('No creatives uploaded yet.', p.canUpload ? 'Use “Upload creative” to add your first version.' : '', 'image');
@@ -214,7 +215,7 @@ function deliverablesCard(d) {
   d.deliverables.forEach(function (dv) { dv.versions.forEach(function (v) { if (v.request && v.request.status === 'Open') waiting.push(v.versionId); }); });
   var bulk = (leader && waiting.length ? '<button class="btn sm" id="shareAll" data-ids="' + h(waiting.join(',')) + '">' + icon('link') + ' Share for review</button>' : '') +
     (leader && waiting.length > 1 ? '<button class="btn sm ok" id="approveAll" data-ids="' + h(waiting.join(',')) + '">' + icon('check') + ' Approve all ' + waiting.length + '</button>' : '');
-  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.filter(function (x) { return x.status !== 'Rejected'; }).length + ' of ' + h(d.task.filesRequired || d.task.deliverablesRequired) + ((d.task.sizeList || []).length > 1 ? ' files (' + (d.task.sizeList || []).length + ' sizes each)' : ' required') + '</span></div></div><div class="card-b">' + body + '</div></div>';
+  return '<div class="card"><div class="card-h"><h3>Creatives & versions</h3><div class="row" style="gap:10px">' + bulk + '<span class="faint small">' + d.deliverables.filter(function (x) { return x.status !== 'Rejected' && x.status !== 'Not Selected'; }).length + ' of ' + h(d.task.filesRequired || d.task.deliverablesRequired) + ((d.task.sizeList || []).length > 1 ? ' files (' + (d.task.sizeList || []).length + ' sizes each)' : ' required') + '</span></div></div><div class="card-b">' + body + '</div></div>';
 }
 
 function activityTimeline(d) {
@@ -751,7 +752,10 @@ function uploadModal(deliverableId) {
       '<div class="field"><label>Version</label><input type="text" id="u_ver" readonly></div>' +
       '<div class="field"><label class="req">File(s)</label><div class="drop" id="u_drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files</b> or click to choose</div>' +
       '<div class="faint small">Max ' + h(APP.boot.maxUploadMB) + ' MB · ' + h(APP.boot.extensions.join(', ')) + '</div></div><div id="u_files" class="stack" style="gap:6px;margin-top:8px"></div>' +
-      '<span class="hint" id="u_multi">Several files = several creatives, numbered automatically.</span></div>' +
+      '<span class="hint" id="u_multi">Several files = several creatives, numbered automatically.</span>' +
+      '<div id="u_modeBox" class="stack hidden" style="gap:4px;margin-top:6px"><label class="check"><input type="radio" name="u_mode" value="separate" checked> Separate creatives</label>' +
+      '<label class="check"><input type="radio" name="u_mode" value="options"> Options of <b>one</b> creative — the reviewer picks one or more</label></div>' +
+      '<span class="hint hidden" id="u_varHint">Several files here = <b>options</b>: the first is the new version, the others are extra options. The reviewer can approve one, some or all — every approved one counts for points.</span></div>' +
       '<div class="field"><label>Submission note</label><textarea id="u_note" rows="2" maxlength="1000" placeholder="Optional — what changed, anything the reviewer should know"></textarea></div>' +
       '<div class="field"><label>Google Drive link to final files <span class="faint">(optional)</span></label><input type="url" id="u_link" placeholder="https://drive.google.com/…" value="' + h(t.finalLink || '') + '">' +
       '<span class="hint">Share it as “Anyone with the link – Viewer”. The requester gets a download button.</span></div>' +
@@ -764,28 +768,27 @@ function uploadModal(deliverableId) {
     var target = $('#u_target', el).value;
     $('#u_new', el).classList.toggle('hidden', !!target);
     $('#u_multi', el).classList.toggle('hidden', !!target);
+    $('#u_varHint', el).classList.toggle('hidden', !target);
+    $('#u_modeBox', el).classList.toggle('hidden', !!target || files.length < 2);
     var d = dels.filter(function (x) { return x.deliverableId === target; })[0];
-    $('#u_ver', el).value = d ? 'V' + (Number(d.latestVersionNo) + 1) + ' (automatic)' : 'V1 (automatic)';
-    if (target && files.length > 1) { files = files.slice(0, 1); drawFiles(); }
+    $('#u_ver', el).value = d ? 'V' + (Number(d.latestVersionNo) + 1) + (files.length > 1 ? ' + ' + (files.length - 1) + ' more option(s)' : '') + ' (automatic)' : 'V1 (automatic)';
   }
   function drawFiles() {
     $('#u_files', el).innerHTML = files.map(function (x, i) {
       return '<div class="file-row"><span class="thumb" style="width:32px;height:32px">' + ext(x.file.name) + '</span><span class="grow ellipsis">' + h(x.file.name) + ' <span class="faint">· ' + fileSize(x.file.size) + '</span></span>' +
         (x.state === 'ready' ? '<button class="btn ghost sm" data-rm="' + i + '">Remove</button>' : x.state === 'done' ? '<span class="badge s-approved">Done</span>' : x.state === 'error' ? '<span class="badge s-changes-requested" title="' + h(x.error) + '">Failed</span>' : progressBar(x.progress * 100)) + '</div>';
     }).join('');
-    $all('[data-rm]', el).forEach(function (b) { b.onclick = function () { files.splice(Number(b.getAttribute('data-rm')), 1); drawFiles(); }; });
+    $all('[data-rm]', el).forEach(function (b) { b.onclick = function () { files.splice(Number(b.getAttribute('data-rm')), 1); drawFiles(); sync(); }; });
   }
   function add(list) {
-    var single = !!$('#u_target', el).value;
     list.forEach(function (f) {
       var err = checkFile(f); if (err) return toast(err, true);
-      if (single) files = [];
       files.push({ file: f, state: 'ready', progress: 0 });
     });
-    drawFiles();
+    drawFiles(); sync();
   }
   var drop = $('#u_drop', el);
-  drop.onclick = function () { pickFiles(!$('#u_target', el).value, add); };
+  drop.onclick = function () { pickFiles(true, add); };
   ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
   ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
   drop.addEventListener('drop', function (e) { add(Array.prototype.slice.call(e.dataTransfer.files)); });
@@ -803,14 +806,32 @@ function uploadModal(deliverableId) {
     var finalLink = $('#u_link', el).value.trim();
     if (finalLink && !/^https:\/\/\S+$/i.test(finalLink)) return fieldErrors(el, 'The Drive link should start with https://');
     var created = [], errs = [];
-    // A new version of one creative is a single file; new creatives upload 3 at a time.
-    var chain = runPool(pending, target ? 1 : 3, function (x) {
+    var options = !target && files.length > 1 && $('input[name=u_mode]:checked', el).value === 'options';
+    var type = $('#u_type', el).value.trim();
+    function up(x, ctx) {
       x.state = 'uploading'; drawFiles();
-      var ctx = { kind: 'version', taskId: t.taskId, deliverableId: target, note: note,
-        title: target ? '' : (files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title), purpose: purpose, deliverableType: $('#u_type', el).value.trim() };
       return uploadFile(x.file, ctx, function (p) { x.progress = p; drawFiles(); })
-        .then(function (res) { x.state = 'done'; created.push(res.versionId); drawFiles(); }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); errs.push(e); });
-    }).then(function () { if (errs.length) throw errs[0]; });
+        .then(function (res) { x.state = 'done'; x.res = res; created.push(res.versionId); drawFiles(); return res; }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); errs.push(e); });
+    }
+    var base = { kind: 'version', taskId: t.taskId, note: note, purpose: purpose, deliverableType: type };
+    var chain;
+    if (target || options) {
+      // First file: the new version (or the new creative); the rest: extra options of it.
+      var first = files[0];
+      var firstDone = first.state === 'done' ? Promise.resolve(first.res) :
+        up(first, Object.assign({}, base, target ? { deliverableId: target, title: '' } : { title: title }));
+      chain = firstDone.then(function (res) {
+        var parent = target || (res && res.deliverableId);
+        if (!parent) return;
+        return runPool(files.slice(1).filter(function (x) { return x.state !== 'done'; }), 3, function (x) {
+          return up(x, Object.assign({}, base, { deliverableId: parent, variant: true, title: '' }));
+        });
+      }).then(function () { if (errs.length) throw errs[0]; });
+    } else {
+      chain = runPool(pending, 3, function (x) {
+        return up(x, Object.assign({}, base, { title: files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title }));
+      }).then(function () { if (errs.length) throw errs[0]; });
+    }
     return chain.then(function () {
       if (finalLink !== (t.finalLink || '')) return api('api_setFinalLink', t.taskId, finalLink);
     }).then(function () {
