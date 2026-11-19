@@ -89,7 +89,7 @@ function api_submitForApproval(taskId, versionIds) {
       var s = settings_();
       var req = dbGet_('Requirements', task.requirementId);
       if (s.sendReviewLinkToRequester && req && requesterEmails_(req).length) {
-        mailRequesters_(req, 'req_review', 'Please review: ' + task.title,
+        mailRequesters_(req, 'req_review_mail', 'Please review: ' + task.title,
           'Hi ' + req.requesterName + ',\n\nThe graphics team has creative(s) ready for your approval on "' + req.title + '" (' + req.requirementId + ').\n\n' +
           lines.join('\n') + '\n\nOpen each link to approve it or ask for changes. Links expire in ' + s.tokenExpiryDays + ' days.', null);
       }

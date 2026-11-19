@@ -315,7 +315,8 @@ VIEWS.settings = function (arg, el, token) {
         '<table class="email-rules" id="emailRules">' + ['team', 'requester'].map(function (grp) {
           return '<tr class="grp"><td colspan="3">' + (grp === 'team' ? 'To the graphics team' : 'To requesters (other departments)') + '</td></tr>' +
             (d.emailKinds || []).filter(function (k) { return k.who === grp; }).map(function (k) {
-              var on = k.always || ((s.emailRules || {})[k.id] !== false && !(k.id === 'req_received' && s.emailRequesterOnSubmit === false) && !(k.id === 'req_review' && s.sendReviewLinkToRequester === false));
+              var rules = s.emailRules || {};
+              var on = k.always || ((rules.hasOwnProperty(k.id) ? rules[k.id] !== false : k.def !== false) && !(k.id === 'req_received' && s.emailRequesterOnSubmit === false));
               return '<tr><td>' + h(k.label) + (k.always ? ' <span class="faint small">(always — they asked for it)</span>' : '') + '</td><td class="faint small">' + h(k.to) + '</td>' +
                 '<td><label class="switch" title="' + (on ? 'On' : 'Off') + '"><input type="checkbox" data-er="' + h(k.id) + '"' + (on ? ' checked' : '') + (k.always ? ' disabled' : '') + '><span></span></label></td></tr>';
             }).join('');

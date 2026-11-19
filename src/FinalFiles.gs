@@ -194,6 +194,64 @@ function finalFolderUrl_(req) {
   try { return DriveApp.getFolderById(c ? c.folderId : req.finalFolderId).getUrl(); } catch (e) { return ''; }
 }
 
+/**
+ * The final-files folder of a request — the whole campaign's folder when it's in a campaign —
+ * with every approved creative filed in, opened as "anyone with the link can VIEW" (download, not edit).
+ * The graphics team can edit (see teamEditors_). Caller holds the lock.
+ * Returns { url, shared: 'anyone' | 'domain' | '', campaign }.
+ */
+function shareFinalFolder_(req) {
+  var c = campaignOf_(req);
+  var root = finalFolder_(req);
+  var tasks = c ? campaignTasks_(c.campaignId) : dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.status !== STATUS.CANCELLED; });
+  fileInto_(root, tasks);
+  var shared = '';
+  try { root.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); shared = 'anyone'; }
+  catch (e) {
+    // Workspace may block public links: fall back to "anyone at the company with the link".
+    try { root.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); shared = 'domain'; } catch (e2) { shared = ''; }
+  }
+  if (shared) {
+    if (c) dbUpdate_('Campaigns', c.campaignId, { shared: '1', updatedAt: nowIso_() });
+    else dbUpdate_('Requirements', req.requirementId, { finalShared: '1', updatedAt: nowIso_() });
+  }
+  try { teamEditors_(); } catch (e) { /* editing rights are a nice-to-have */ }
+  return { url: root.getUrl(), shared: shared, campaign: c ? c.name : '' };
+}
+
+/**
+ * Everyone active on the graphics team can edit the approved-creatives folders (they inherit it),
+ * so the team can fix or add files; everyone else only views. Re-checked when the team changes.
+ */
+function teamEditors_() {
+  var team = dbFind_('Users', function (x) { return bool_(x.active); }).map(function (x) { return x.email.toLowerCase(); }).sort();
+  var props = PropertiesService.getScriptProperties(), key = 'TEAM_EDITORS';
+  if (props.getProperty(key) === team.join(',')) return;
+  var root = DriveApp.getFolderById(ensureFolderId_('approved', []));
+  var have = {};
+  root.getEditors().forEach(function (e) { have[String(e.getEmail()).toLowerCase()] = 1; });
+  try { have[String(root.getOwner().getEmail()).toLowerCase()] = 1; } catch (e) { /* shared drive */ }
+  team.forEach(function (em) { if (!have[em]) { try { root.addEditor(em); } catch (e) { /* outside the domain etc. */ } } });
+  props.setProperty(key, team.join(','));
+}
+
+/** Zip of approved creatives, in category folders (Apps Script can return ~50 MB at most). */
+function zipApproved_(list, label) {
+  if (!list.length) throw AppError_('VALIDATION', 'No approved creatives yet.');
+  var total = 0, blobs = [], seen = {};
+  list.forEach(function (a) {
+    var f = fileOrNull_(a.v.approvedFileId) || fileOrNull_(a.v.fileId);
+    if (!f) return;
+    total += f.getSize();
+    if (total > 45 * 1024 * 1024) throw AppError_('TOO_LARGE', 'These files are over 45 MB together — use the Google Drive link and download the folder from Drive instead.');
+    var name = categoryOf_(a.task, a.d) + '/' + approvedName_(a.d, a.v);
+    if (seen[name]) name = name.replace(/(\.[^.]+)?$/, ' (' + (++seen[name]) + ')$1'); else seen[name] = 1;
+    blobs.push(f.getBlob().setName(name));
+  });
+  var zip = Utilities.zip(blobs, cleanFolderName_(label + ' approved creatives') + '.zip');
+  return { fileName: zip.getName(), mimeType: 'application/zip', base64: Utilities.base64Encode(zip.getBytes()), count: blobs.length };
+}
+
 /** All approved creatives of a request (or one task) as a .zip, in category folders. */
 function api_downloadApprovedZip(id, taskOnly) {
   return respond_(function () {
@@ -201,19 +259,7 @@ function api_downloadApprovedZip(id, taskOnly) {
     var x = finalScope_(u, id);
     var tasks = taskOnly ? x.tasks.filter(function (t) { return t.taskId === id; }) : x.tasks;
     var list = approvedOf_(tasks);
-    if (!list.length) throw AppError_('VALIDATION', 'No approved creatives yet.');
-    var total = 0, blobs = [], seen = {};
-    list.forEach(function (a) {
-      var f = fileOrNull_(a.v.approvedFileId) || fileOrNull_(a.v.fileId);
-      if (!f) return;
-      total += f.getSize();
-      if (total > 45 * 1024 * 1024) throw AppError_('TOO_LARGE', 'These files are over 45 MB together — use “Drive link” and download the folder from Drive instead.');
-      var name = categoryOf_(a.task, a.d) + '/' + approvedName_(a.d, a.v);
-      if (seen[name]) name = name.replace(/(\.[^.]+)?$/, ' (' + (++seen[name]) + ')$1'); else seen[name] = 1;
-      blobs.push(f.getBlob().setName(name));
-    });
-    var zip = Utilities.zip(blobs, cleanFolderName_(x.label + ' approved creatives') + '.zip');
-    return { fileName: zip.getName(), mimeType: 'application/zip', base64: Utilities.base64Encode(zip.getBytes()), count: blobs.length };
+    return zipApproved_(list, x.label);
   });
 }
 

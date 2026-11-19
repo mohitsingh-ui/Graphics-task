@@ -1032,6 +1032,36 @@ function renderMy() {
           } }] });
       };
     });
+    $all('[data-zipall]', el).forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-zipall'), label = b.innerHTML;
+        b.disabled = true; b.innerHTML = '<span class="spinner" style="width:13px;height:13px"></span> Preparing…';
+        api('api_trackZip', TRACKS, id).then(function (z) { downloadBase64(z.fileName, z.mimeType, z.base64); toast(z.count + ' creatives downloaded'); })
+          .catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; b.innerHTML = label; });
+      };
+    });
+    $all('[data-drive]', el).forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-drive');
+        b.disabled = true;
+        api('api_trackDriveLink', TRACKS, id).then(function (x) {
+          var who = x.shared === 'anyone' ? 'Anyone with this link can open and download the files — they can’t edit them.' :
+            x.shared === 'domain' ? 'Anyone at the company with this link can open and download — they can’t edit.' : 'Only people with access can open this folder.';
+          var m = modal({ title: x.campaign ? x.campaign + ' — all creatives' : 'Google Drive link',
+            body: (x.campaign ? '<p class="muted" style="margin-top:0">This request is part of the <b>' + h(x.campaign) + '</b> campaign, so the link has every creative of the campaign, sorted into folders.</p>' : '') +
+              '<div class="field"><input type="text" id="drvUrl" readonly value="' + h(x.url) + '"></div><p class="hint" style="margin:0">' + icon('users').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h(who) + '</p>',
+            actions: [{ label: 'Close' },
+              { label: 'WhatsApp', onClick: function (close) { window.open('https://wa.me/?text=' + encodeURIComponent((x.campaign ? x.campaign + ' creatives: ' : 'Creatives: ') + x.url), '_blank', 'noopener'); close(); } },
+              { label: 'Open', onClick: function (close) { window.open(x.url, '_blank', 'noopener'); close(); } },
+              { label: 'Copy link', cls: 'primary', onClick: function (close) {
+                var inp = $('#drvUrl', m.el); inp.select();
+                var done = function () { toast('Link copied'); close(); };
+                if (navigator.clipboard) return navigator.clipboard.writeText(x.url).then(done, function () { document.execCommand('copy'); done(); });
+                document.execCommand('copy'); done();
+              } }] });
+        }).catch(function (e) { toast(errMsg(e), true); }).then(function () { b.disabled = false; });
+      };
+    });
     $all('[data-reopen]', el).forEach(function (b) {
       b.onclick = function () {
         var r = list.filter(function (x) { return x.requirementId === b.getAttribute('data-reopen'); })[0];
@@ -1208,7 +1238,9 @@ function reqCard(r) {
   }).concat(r.finalLinks.map(function (u, i) {
     return '<a class="btn ok sm" href="' + h(u) + '" target="_blank" rel="noopener">' + icon('download') + ' Download final files' + (r.finalLinks.length > 1 ? ' ' + (i + 1) : '') + '</a>';
   })).join('');
-  if (r.finalFolderUrl) acts = '<a class="btn ok sm" href="' + h(r.finalFolderUrl) + '" target="_blank" rel="noopener">' + icon('download') + ' All approved files (Google Drive)</a>' + acts;
+  // One click for every approved creative, and a view-only Drive link they can pass on.
+  if (r.approved > 0) acts = '<button class="btn ok sm" data-zipall="' + h(r.requirementId) + '">' + icon('download') + ' Download all (' + r.approved + ')</button>' +
+    '<button class="btn sm" data-drive="' + h(r.requirementId) + '">' + icon('link') + ' Share Drive link</button>' + acts;
   acts = (r.hold ? '<button class="btn primary sm" data-sendinfo="' + h(r.requirementId) + '">' + icon('send') + ' Send the details</button>' : '') + all + acts +
     (r.canReopen ? '<button class="btn primary sm" data-reopen="' + h(r.requirementId) + '">' + icon('refresh') + ' Reopen for changes</button>' :
       r.status === 'Completed' ? '<button class="btn sm" data-askchg="' + h(r.requirementId) + '">Need changes?</button>' : '') +

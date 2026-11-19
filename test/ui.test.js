@@ -31,7 +31,7 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
   env.state.currentUser = LEADER; env.ctx.setup();
   env.call(LEADER, 'api_saveUser', { email: A, name: 'Asha Verma', role: 'designer' });
   env.call(LEADER, 'api_saveUser', { email: 'bilal@rosierfoods.com', name: 'Bilal Khan', role: 'designer' });
-  env.call(LEADER, 'api_saveSettings', { publicUrl: 'https://script.google.com/macros/s/PUB/exec' });
+  env.call(LEADER, 'api_saveSettings', { publicUrl: 'https://script.google.com/macros/s/PUB/exec', emailRules: { req_review_mail: true } }); // the walkthrough uses the review emails
 
   const browser = await pw.chromium.launch();
   const errors = [];
@@ -474,8 +474,8 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.waitForSelector('.badge.s-rejected');
       await page.waitForSelector('#driveReq');
       await page.click('#driveReq');
-      await page.waitForSelector('#dfShare');
-      await page.click('#dfShare');
+      await page.waitForSelector('#dfShare, #dfUrl');
+      if (await page.$('#dfShare')) await page.click('#dfShare');   // already shared once the request is complete
       await page.waitForSelector('#dfUrl');
       await shot('45-drive-folder-modal');
       await page.click('.modal-f >> text=Close');
@@ -558,8 +558,8 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.ok((await page.textContent('main')).includes('Listing images'));
       await shot('52-campaign-page');
       await page.click('#cpDrive');
-      await page.waitForSelector('#dfShare');
-      await page.click('#dfShare');
+      await page.waitForSelector('#dfShare, #dfUrl');
+      if (await page.$('#dfShare')) await page.click('#dfShare');   // already shared once the request is complete
       await page.waitForSelector('#dfUrl');
       assert.ok((await page.textContent('.modal')).includes('Campaign: Diwali Sale 2026'));
       await shot('53-campaign-drive-link');
@@ -941,6 +941,35 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.click('.modal-f >> text=Not selected');
       await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Completed/.test(x.textContent); }, null, { timeout: 8000 });
       assert.strictEqual(env.call(LEADER, 'api_getTask', t.taskId).data.task.status, 'Completed');
+    });
+
+    await step('My requests: Download all in one click + Share Drive link (view-only)', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Kavya', department: 'Category', email: 'kavya@example.org', brief: 'Oil labels', preferredDate: future(5), quantity: 2 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      env.call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' });
+      const vs = [];
+      for (const n of ['Mustard oil', 'Coconut oil']) {
+        const b = await bannerPng(n, 30);
+        const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: tid, title: n, fileName: 'o.png', size: b.length }).data;
+        vs.push(env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data.versionId);
+      }
+      env.call(A, 'api_submitForApproval', tid, vs);
+      env.call('', 'api_trackApproveMany', s.trackToken, vs);
+      const mail = env.state.mail.filter(m => m.to === 'kavya@example.org' && /Google Drive link/.test(m.subject)).pop();
+      assert.ok(mail && /drive\.google\.com\/drive\/folders\//.test(mail.body), 'the email has the Drive link');
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 }, acceptDownloads: true });
+      mob.on('pageerror', e => errors.push('final files: ' + e.message));
+      await mob.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await mob.waitForSelector('[data-zipall="' + s.requirementId + '"]');
+      const dl = mob.waitForEvent('download');
+      await mob.click('[data-zipall="' + s.requirementId + '"]');
+      assert.ok((await (await dl).suggestedFilename()).endsWith('.zip'));
+      await mob.click('[data-drive="' + s.requirementId + '"]');
+      await mob.waitForSelector('#drvUrl');
+      assert.ok((await mob.inputValue('#drvUrl')).includes('drive.google.com/drive/folders/'));
+      assert.ok(/can’t edit/.test(await mob.textContent('.modal')));
+      await shot('78-my-requests-drive-link', mob);
+      await mob.close();
     });
 
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {

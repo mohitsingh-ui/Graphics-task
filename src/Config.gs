@@ -236,9 +236,9 @@ var EMAIL_KINDS = [
   { id: 'task_deleted', who: 'team', label: 'Task deleted', to: 'The designer' },
   { id: 'team_invite', who: 'team', label: 'Welcome email when someone is added to the team', to: 'The new member' },
   { id: 'req_received', who: 'requester', label: 'Confirmation with the reference ID', to: 'Requester' },
-  { id: 'req_review', who: 'requester', label: 'Creatives ready for their review', to: 'Requester' },
+  { id: 'req_review_mail', who: 'requester', label: 'An email for each creative sent for their review (they can always review in “My requests”)', to: 'Requester', def: false },
   { id: 'req_hold', who: 'requester', label: '“We need something from you” (task on hold)', to: 'Requester' },
-  { id: 'req_ready', who: 'requester', label: 'Request completed — final files ready', to: 'Requester' },
+  { id: 'req_ready', who: 'requester', label: 'Request completed — Google Drive link to all final creatives (the campaign folder for campaigns)', to: 'Requester' },
   { id: 'req_coowner', who: 'requester', label: 'Added as a co-owner of a request', to: 'The added person' },
   { id: 'req_link', who: 'requester', label: 'Their “My requests” link when they ask for it', to: 'Requester', always: true }
 ];

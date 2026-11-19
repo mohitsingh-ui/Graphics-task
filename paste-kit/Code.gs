@@ -238,9 +238,9 @@ var EMAIL_KINDS = [
   { id: 'task_deleted', who: 'team', label: 'Task deleted', to: 'The designer' },
   { id: 'team_invite', who: 'team', label: 'Welcome email when someone is added to the team', to: 'The new member' },
   { id: 'req_received', who: 'requester', label: 'Confirmation with the reference ID', to: 'Requester' },
-  { id: 'req_review', who: 'requester', label: 'Creatives ready for their review', to: 'Requester' },
+  { id: 'req_review_mail', who: 'requester', label: 'An email for each creative sent for their review (they can always review in “My requests”)', to: 'Requester', def: false },
   { id: 'req_hold', who: 'requester', label: '“We need something from you” (task on hold)', to: 'Requester' },
-  { id: 'req_ready', who: 'requester', label: 'Request completed — final files ready', to: 'Requester' },
+  { id: 'req_ready', who: 'requester', label: 'Request completed — Google Drive link to all final creatives (the campaign folder for campaigns)', to: 'Requester' },
   { id: 'req_coowner', who: 'requester', label: 'Added as a co-owner of a request', to: 'The added person' },
   { id: 'req_link', who: 'requester', label: 'Their “My requests” link when they ask for it', to: 'Requester', always: true }
 ];
@@ -1078,7 +1078,7 @@ function mailRule_(kind) {
   var k = EMAIL_KINDS.filter(function (x) { return x.id === kind; })[0];
   if (!k || k.always) return true;
   var rules = settings_().emailRules || {};
-  return rules[kind] !== false;
+  return rules.hasOwnProperty(kind) ? rules[kind] !== false : k.def !== false;
 }
 
 /** Everyone who owns a request: the person who raised it plus anyone added as a co-owner. */
@@ -1585,18 +1585,26 @@ function completeTask_(task, actor, note) {
     });
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
+      // Everything is done: the final files go into one Drive folder (the whole campaign's folder for
+      // campaign requests), shared as view-only, and the requester gets that link straight in the email.
+      var share = null;
+      try { share = shareFinalFolder_(dbGet_('Requirements', req.requirementId)); } catch (e) { share = null; }
       if (settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
-        var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
-          .map(function (t) { return t.finalLink; });
-        if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
-        var folderUrl = finalFolderUrl_(req);
-        if (folderUrl) finals.unshift(folderUrl);
+        var extra = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; }).map(function (t) { return t.finalLink; });
+        if (task.finalLink && extra.indexOf(task.finalLink) === -1) extra.push(task.finalLink);
+        var link = share && share.url;
         requesterEmails_(req).forEach(function (em) {
           var track = trackUrl_(issueTrackToken_(em));
-          sendMail_(em, 'Your creative is ready (' + req.requirementId + ')',
-            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
-            (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
-            '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+          sendMail_(em, (share && share.campaign ? share.campaign + ': ' : '') + 'Your creatives are ready — Google Drive link (' + req.requirementId + ')',
+            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and ready.\n\n' +
+            (link ? (share.campaign ? 'This request is part of the ' + share.campaign + ' campaign. This link has every creative of the campaign, sorted into folders:\n' :
+              'Open and download all the final creatives here:\n') + link + '\n\n' +
+              (share.shared === 'anyone' ? 'Anyone with this link can open and download the files (they can’t edit them), so you can forward it.' :
+                share.shared === 'domain' ? 'Anyone at the company with this link can open and download the files (they can’t edit them).' : '') :
+              'The final files are on your requests page.') +
+            (extra.length ? '\n\nOther final files:\n' + extra.join('\n') : '') +
+            '\n\nTo download everything in one go or share the link later, open your requests: ' + track,
+            link ? { label: share.campaign ? 'Open the ' + share.campaign + ' folder' : 'Open the Drive folder', url: link } : { label: 'See my requests', url: track });
         });
       }
     }
@@ -2959,7 +2967,7 @@ function api_submitForApproval(taskId, versionIds) {
       var s = settings_();
       var req = dbGet_('Requirements', task.requirementId);
       if (s.sendReviewLinkToRequester && req && requesterEmails_(req).length) {
-        mailRequesters_(req, 'req_review', 'Please review: ' + task.title,
+        mailRequesters_(req, 'req_review_mail', 'Please review: ' + task.title,
           'Hi ' + req.requesterName + ',\n\nThe graphics team has creative(s) ready for your approval on "' + req.title + '" (' + req.requirementId + ').\n\n' +
           lines.join('\n') + '\n\nOpen each link to approve it or ask for changes. Links expire in ' + s.tokenExpiryDays + ' days.', null);
       }
@@ -4350,6 +4358,36 @@ function api_trackReopen(token, requirementId, input) {
   });
 }
 
+
+/* ---------- final files for the requester: one-click download + shareable Drive link ---------- */
+
+/** All approved creatives of the request as one .zip (up to ~45 MB; bigger → use the Drive link). */
+function api_trackZip(token, requirementId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackzip:' + keys.join(',').slice(0, 120), 20, 600);
+    var x = trackRequirement_(keys, requirementId);
+    return zipApproved_(approvedOf_(x.tasks), x.r.requirementId + ' ' + (x.r.title || ''));
+  });
+}
+
+/**
+ * The Drive folder with the final creatives (the whole campaign's folder for campaign requests),
+ * opened as "anyone with the link can view" — the requester can share it; only the team can edit.
+ */
+function api_trackDriveLink(token, requirementId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackdrive:' + keys.join(',').slice(0, 120), 20, 600);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      if (!approvedOf_(x.tasks).length) throw AppError_('VALIDATION', 'The link is ready once the first creative is approved.');
+      var s = shareFinalFolder_(x.r);
+      return { url: s.url, shared: s.shared, campaign: s.campaign };
+    });
+  });
+}
+
 /* ======================= Rewards.gs ======================= */
 /**
  * Rewards.gs — the team leader recognises good work with badges and points.
@@ -5212,6 +5250,64 @@ function finalFolderUrl_(req) {
   try { return DriveApp.getFolderById(c ? c.folderId : req.finalFolderId).getUrl(); } catch (e) { return ''; }
 }
 
+/**
+ * The final-files folder of a request — the whole campaign's folder when it's in a campaign —
+ * with every approved creative filed in, opened as "anyone with the link can VIEW" (download, not edit).
+ * The graphics team can edit (see teamEditors_). Caller holds the lock.
+ * Returns { url, shared: 'anyone' | 'domain' | '', campaign }.
+ */
+function shareFinalFolder_(req) {
+  var c = campaignOf_(req);
+  var root = finalFolder_(req);
+  var tasks = c ? campaignTasks_(c.campaignId) : dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.status !== STATUS.CANCELLED; });
+  fileInto_(root, tasks);
+  var shared = '';
+  try { root.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); shared = 'anyone'; }
+  catch (e) {
+    // Workspace may block public links: fall back to "anyone at the company with the link".
+    try { root.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); shared = 'domain'; } catch (e2) { shared = ''; }
+  }
+  if (shared) {
+    if (c) dbUpdate_('Campaigns', c.campaignId, { shared: '1', updatedAt: nowIso_() });
+    else dbUpdate_('Requirements', req.requirementId, { finalShared: '1', updatedAt: nowIso_() });
+  }
+  try { teamEditors_(); } catch (e) { /* editing rights are a nice-to-have */ }
+  return { url: root.getUrl(), shared: shared, campaign: c ? c.name : '' };
+}
+
+/**
+ * Everyone active on the graphics team can edit the approved-creatives folders (they inherit it),
+ * so the team can fix or add files; everyone else only views. Re-checked when the team changes.
+ */
+function teamEditors_() {
+  var team = dbFind_('Users', function (x) { return bool_(x.active); }).map(function (x) { return x.email.toLowerCase(); }).sort();
+  var props = PropertiesService.getScriptProperties(), key = 'TEAM_EDITORS';
+  if (props.getProperty(key) === team.join(',')) return;
+  var root = DriveApp.getFolderById(ensureFolderId_('approved', []));
+  var have = {};
+  root.getEditors().forEach(function (e) { have[String(e.getEmail()).toLowerCase()] = 1; });
+  try { have[String(root.getOwner().getEmail()).toLowerCase()] = 1; } catch (e) { /* shared drive */ }
+  team.forEach(function (em) { if (!have[em]) { try { root.addEditor(em); } catch (e) { /* outside the domain etc. */ } } });
+  props.setProperty(key, team.join(','));
+}
+
+/** Zip of approved creatives, in category folders (Apps Script can return ~50 MB at most). */
+function zipApproved_(list, label) {
+  if (!list.length) throw AppError_('VALIDATION', 'No approved creatives yet.');
+  var total = 0, blobs = [], seen = {};
+  list.forEach(function (a) {
+    var f = fileOrNull_(a.v.approvedFileId) || fileOrNull_(a.v.fileId);
+    if (!f) return;
+    total += f.getSize();
+    if (total > 45 * 1024 * 1024) throw AppError_('TOO_LARGE', 'These files are over 45 MB together — use the Google Drive link and download the folder from Drive instead.');
+    var name = categoryOf_(a.task, a.d) + '/' + approvedName_(a.d, a.v);
+    if (seen[name]) name = name.replace(/(\.[^.]+)?$/, ' (' + (++seen[name]) + ')$1'); else seen[name] = 1;
+    blobs.push(f.getBlob().setName(name));
+  });
+  var zip = Utilities.zip(blobs, cleanFolderName_(label + ' approved creatives') + '.zip');
+  return { fileName: zip.getName(), mimeType: 'application/zip', base64: Utilities.base64Encode(zip.getBytes()), count: blobs.length };
+}
+
 /** All approved creatives of a request (or one task) as a .zip, in category folders. */
 function api_downloadApprovedZip(id, taskOnly) {
   return respond_(function () {
@@ -5219,19 +5315,7 @@ function api_downloadApprovedZip(id, taskOnly) {
     var x = finalScope_(u, id);
     var tasks = taskOnly ? x.tasks.filter(function (t) { return t.taskId === id; }) : x.tasks;
     var list = approvedOf_(tasks);
-    if (!list.length) throw AppError_('VALIDATION', 'No approved creatives yet.');
-    var total = 0, blobs = [], seen = {};
-    list.forEach(function (a) {
-      var f = fileOrNull_(a.v.approvedFileId) || fileOrNull_(a.v.fileId);
-      if (!f) return;
-      total += f.getSize();
-      if (total > 45 * 1024 * 1024) throw AppError_('TOO_LARGE', 'These files are over 45 MB together — use “Drive link” and download the folder from Drive instead.');
-      var name = categoryOf_(a.task, a.d) + '/' + approvedName_(a.d, a.v);
-      if (seen[name]) name = name.replace(/(\.[^.]+)?$/, ' (' + (++seen[name]) + ')$1'); else seen[name] = 1;
-      blobs.push(f.getBlob().setName(name));
-    });
-    var zip = Utilities.zip(blobs, cleanFolderName_(x.label + ' approved creatives') + '.zip');
-    return { fileName: zip.getName(), mimeType: 'application/zip', base64: Utilities.base64Encode(zip.getBytes()), count: blobs.length };
+    return zipApproved_(list, x.label);
   });
 }
 

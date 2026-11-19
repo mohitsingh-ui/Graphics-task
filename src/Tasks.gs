@@ -102,18 +102,26 @@ function completeTask_(task, actor, note) {
     });
     if (open.length === 0) {
       dbUpdate_('Requirements', req.requirementId, { status: 'Completed', updatedAt: nowIso_() });
+      // Everything is done: the final files go into one Drive folder (the whole campaign's folder for
+      // campaign requests), shared as view-only, and the requester gets that link straight in the email.
+      var share = null;
+      try { share = shareFinalFolder_(dbGet_('Requirements', req.requirementId)); } catch (e) { share = null; }
       if (settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
-        var finals = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; })
-          .map(function (t) { return t.finalLink; });
-        if (task.finalLink && finals.indexOf(task.finalLink) === -1) finals.push(task.finalLink);
-        var folderUrl = finalFolderUrl_(req);
-        if (folderUrl) finals.unshift(folderUrl);
+        var extra = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; }).map(function (t) { return t.finalLink; });
+        if (task.finalLink && extra.indexOf(task.finalLink) === -1) extra.push(task.finalLink);
+        var link = share && share.url;
         requesterEmails_(req).forEach(function (em) {
           var track = trackUrl_(issueTrackToken_(em));
-          sendMail_(em, 'Your creative is ready (' + req.requirementId + ')',
-            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and complete.\n\n' +
-            (finals.length ? 'Download the final files:\n' + finals.join('\n') : 'The graphics team will add the final files link shortly — it will appear on your requests page.') +
-            '\n\nYour requests: ' + track, finals.length ? { label: 'Download final files', url: finals[0] } : { label: 'See my requests', url: track });
+          sendMail_(em, (share && share.campaign ? share.campaign + ': ' : '') + 'Your creatives are ready — Google Drive link (' + req.requirementId + ')',
+            'Hi ' + req.requesterName + ',\n\nAll creatives for "' + req.title + '" are approved and ready.\n\n' +
+            (link ? (share.campaign ? 'This request is part of the ' + share.campaign + ' campaign. This link has every creative of the campaign, sorted into folders:\n' :
+              'Open and download all the final creatives here:\n') + link + '\n\n' +
+              (share.shared === 'anyone' ? 'Anyone with this link can open and download the files (they can’t edit them), so you can forward it.' :
+                share.shared === 'domain' ? 'Anyone at the company with this link can open and download the files (they can’t edit them).' : '') :
+              'The final files are on your requests page.') +
+            (extra.length ? '\n\nOther final files:\n' + extra.join('\n') : '') +
+            '\n\nTo download everything in one go or share the link later, open your requests: ' + track,
+            link ? { label: share.campaign ? 'Open the ' + share.campaign + ' folder' : 'Open the Drive folder', url: link } : { label: 'See my requests', url: track });
         });
       }
     }

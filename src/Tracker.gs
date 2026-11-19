@@ -571,3 +571,33 @@ function api_trackReopen(token, requirementId, input) {
     });
   });
 }
+
+
+/* ---------- final files for the requester: one-click download + shareable Drive link ---------- */
+
+/** All approved creatives of the request as one .zip (up to ~45 MB; bigger → use the Drive link). */
+function api_trackZip(token, requirementId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackzip:' + keys.join(',').slice(0, 120), 20, 600);
+    var x = trackRequirement_(keys, requirementId);
+    return zipApproved_(approvedOf_(x.tasks), x.r.requirementId + ' ' + (x.r.title || ''));
+  });
+}
+
+/**
+ * The Drive folder with the final creatives (the whole campaign's folder for campaign requests),
+ * opened as "anyone with the link can view" — the requester can share it; only the team can edit.
+ */
+function api_trackDriveLink(token, requirementId) {
+  return respond_(function () {
+    var keys = trackKeys_(token);
+    rateLimit_('trackdrive:' + keys.join(',').slice(0, 120), 20, 600);
+    return withLock_(function () {
+      var x = trackRequirement_(keys, requirementId);
+      if (!approvedOf_(x.tasks).length) throw AppError_('VALIDATION', 'The link is ready once the first creative is approved.');
+      var s = shareFinalFolder_(x.r);
+      return { url: s.url, shared: s.shared, campaign: s.campaign };
+    });
+  });
+}

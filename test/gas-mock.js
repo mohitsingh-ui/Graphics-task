@@ -91,7 +91,8 @@ function createEnv(opts = {}) {
       setTrashed: v => { f.trashed = !!v; },
       setName: n => { f.name = n; },
       setSharing: (a, p) => { if (state.blockPublicSharing && a === 'ANYONE_WITH_LINK') throw new Error('Sharing blocked by admin'); f.sharing = a; },
-      getSharingAccess: () => 'PRIVATE',
+      getSharingAccess: () => f.sharing || 'PRIVATE',
+      getOwner: () => ({ getEmail: () => 'owner@rosierfoods.com' }),
       getFiles: () => iter(Object.values(state.files).filter(x => x.parent === f.id && !x.trashed).map(fileApi)),
       getFoldersByName: n => iter(Object.values(state.folders).filter(x => x.parent === f.id && x.name === n && !x.trashed).map(folderApi)),
       createFolder: n => folderApi(newFolder(n, f.id)),
@@ -114,7 +115,7 @@ function createEnv(opts = {}) {
     };
   }
   const DriveApp = {
-    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', PRIVATE: 'PRIVATE' }, Permission: { VIEW: 'VIEW', NONE: 'NONE' },
+    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', DOMAIN_WITH_LINK: 'DOMAIN_WITH_LINK', PRIVATE: 'PRIVATE' }, Permission: { VIEW: 'VIEW', NONE: 'NONE' },
     createFolder: n => folderApi(newFolder(n, 'root')),
     getFolderById: id => { const f = state.folders[id]; if (!f) throw new Error('No folder ' + id); return folderApi(f); },
     getFileById: id => { const f = state.files[id]; if (!f || f.trashed) throw new Error('No file ' + id); return fileApi(f); }

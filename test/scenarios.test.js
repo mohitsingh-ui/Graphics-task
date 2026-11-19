@@ -227,6 +227,7 @@ scenario('3. Privacy: Designer A cannot reach Designer B’s task by id; non-mem
 
 let ver1, deliv1;
 scenario('4. Designer A uploads V1 → stored in Drive, linked to task, review request created', () => {
+  ok(call(LEADER, 'api_saveSettings', { emailRules: { req_review_mail: true } })); env.ctx.SETTINGS_MEMO_ = null; // older flows use the per-creative review emails
   ok(call(A, 'api_updateProgress', task1.taskId, 50, 'First draft'));
   assert.strictEqual(ok(call(A, 'api_getTask', task1.taskId)).task.status, 'In Progress');
   const bytes = png(9 * 1024 * 1024 + 123); // 3 chunks
@@ -1376,7 +1377,8 @@ scenario('Co-owners: requester adds a colleague by email; both see, edit and app
   const dec = env.ctx.dbFind_('ApprovalDecisions', d => d.versionId === v)[0];
   assert.strictEqual(dec.reviewerEmail, 'rahul@example.org');
   // both get the "ready" email; editing a finished request is refused
-  assert.ok(state.mail.filter(m => /Your creative is ready/.test(m.subject) && m.body.includes(sub.requirementId) || (m.to === 'rahul@example.org' && /Your creative is ready/.test(m.subject))).length >= 1);
+  const ready = state.mail.filter(m => /Your creatives are ready/.test(m.subject) && m.subject.includes(sub.requirementId)).map(m => m.to).sort();
+  assert.deepStrictEqual(ready, ['priya@example.org', 'rahul@example.org'], 'both owners get the Drive link');
   err(call('', 'api_trackEditRequest', sub.trackToken, sub.requirementId, { brief: 'one more change please' }), 'INVALID_STATE');
   // leader adds and removes owners from the task page
   ok(call(LEADER, 'api_setRequestOwners', sub.requirementId, { add: 'neha@example.org' }));
@@ -1694,6 +1696,72 @@ scenario('Requester can mark an option "Not selected" from My requests and from 
   assert.strictEqual(ok(call(A, 'api_getTask', tid)).task.status, 'Completed');
   const st = ok(call('', 'api_getMyRequests', sub.trackToken)).requests.find(r => r.requirementId === sub.requirementId).creatives.map(c => c.state).sort();
   assert.deepStrictEqual(st, ['Approved', 'Not selected']);
+});
+
+scenario('Requester emails: confirmation, then only the Drive link when done (campaign link for campaigns); Download all + Share Drive link', () => {
+  ok(call(LEADER, 'api_saveSettings', { emailRules: {} })); env.ctx.SETTINGS_MEMO_ = null;
+  const at = () => state.mail.length;
+  const to = (n, em) => state.mail.slice(n).filter(m => m.to === em);
+  let n0 = at();
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Kavya', department: 'Category', email: 'kavya@example.org', brief: 'Two oil labels', preferredDate: future(5), quantity: 2 }));
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  assert.ok(to(n0, 'kavya@example.org').some(m => /We’ve got your request/.test(m.subject)), 'confirmation on submit');
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', tid, { assigneeEmail: A, dueDate: future(4), priority: 'High' }));
+  const vs = ['Mustard', 'Coconut'].map(nm => upload(A, { kind: 'version', taskId: tid, title: nm }, nm + '.png', png(300)).versionId);
+  n0 = at();
+  ok(call(A, 'api_submitForApproval', tid, vs));
+  assert.strictEqual(to(n0, 'kavya@example.org').length, 0, 'no "please review" emails');
+  // before anything is approved there is nothing to download
+  err(call('', 'api_trackDriveLink', sub.trackToken, sub.requirementId), 'VALIDATION');
+  err(call('', 'api_trackZip', sub.trackToken, sub.requirementId), 'VALIDATION');
+  n0 = at();
+  ok(call(LEADER, 'api_leaderDecision', vs[0], 'approved', ''));
+  assert.strictEqual(to(n0, 'kavya@example.org').length, 0, 'no email per approval');
+  // halfway: requester can already download what's approved and share the view-only link
+  const z = ok(call('', 'api_trackZip', sub.trackToken, sub.requirementId));
+  assert.strictEqual(z.count, 1); assert.ok(z.fileName.endsWith('.zip'));
+  const link = ok(call('', 'api_trackDriveLink', sub.trackToken, sub.requirementId));
+  assert.strictEqual(link.shared, 'anyone');
+  const folderId = /folders\/(\w+)/.exec(link.url)[1];
+  assert.strictEqual(state.folders[folderId].sharing, 'ANYONE_WITH_LINK', 'anyone with the link can view');
+  // the whole graphics team can edit the approved-creatives folders
+  let root = state.folders[folderId]; while (state.folders[root.parent] && !/Approved/i.test(root.name)) root = state.folders[root.parent];
+  assert.ok(root.editors.includes(A), 'designers get edit rights on the approved folders');
+  // done: one email with the Drive link in it
+  n0 = at();
+  ok(call('', 'api_trackDecide', sub.trackToken, vs[1], 'approved', ''));
+  const done = to(n0, 'kavya@example.org');
+  assert.strictEqual(done.length, 1, 'exactly one email when complete');
+  assert.ok(/Google Drive link/.test(done[0].subject) && done[0].body.includes(link.url) && /can’t edit/.test(done[0].body));
+  assert.ok(ok(call('', 'api_trackZip', sub.trackToken, sub.requirementId)).count === 2);
+  // someone else's link can't get the files
+  const other = ok(call('', 'api_submitRequirement', { requesterName: 'Z', department: 'Sales', email: 'z1@example.org', brief: 'Other', preferredDate: future(5), quantity: 1 }));
+  err(call('', 'api_trackZip', other.trackToken, sub.requirementId), 'NOT_FOUND');
+  err(call('', 'api_trackDriveLink', other.trackToken, sub.requirementId), 'NOT_FOUND');
+  // campaign request: the email carries the whole campaign folder
+  const camp = ok(call(LEADER, 'api_saveCampaign', { name: 'Winter Sale' }));
+  const cs = ok(call('', 'api_submitRequirement', { requesterName: 'Kavya', department: 'Category', email: 'kavya@example.org', brief: 'Winter banner', preferredDate: future(5), quantity: 1 }));
+  ok(call(LEADER, 'api_setRequestCampaign', cs.requirementId, camp.campaignId));
+  const ct = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === cs.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', ct, { assigneeEmail: A, dueDate: future(4), priority: 'High' }));
+  const cv = upload(A, { kind: 'version', taskId: ct, title: 'Winter banner' }, 'w.png', png(300)).versionId;
+  ok(call(A, 'api_submitForApproval', ct, [cv]));
+  n0 = at();
+  ok(call(LEADER, 'api_leaderDecision', cv, 'approved', ''));
+  const cm = to(n0, 'kavya@example.org');
+  assert.strictEqual(cm.length, 1);
+  const cf = env.ctx.dbGet_('Campaigns', camp.campaignId);
+  assert.ok(cm[0].subject.includes('] Winter Sale:') && cm[0].body.includes(cf.folderId) && /every creative of the campaign/.test(cm[0].body));
+  assert.strictEqual(state.folders[cf.folderId].sharing, 'ANYONE_WITH_LINK');
+  assert.ok(ok(call('', 'api_trackDriveLink', cs.trackToken, cs.requirementId)).campaign === 'Winter Sale');
+  // Workspace blocks public links → falls back to company-only view link
+  state.blockPublicSharing = true;
+  const l2 = ok(call('', 'api_trackDriveLink', sub.trackToken, sub.requirementId));
+  assert.strictEqual(l2.shared, 'domain');
+  state.blockPublicSharing = false;
+  // the leader can still turn per-creative review emails back on
+  assert.strictEqual(ok(call(LEADER, 'api_getSettings')).emailKinds.find(k => k.id === 'req_review_mail').def, false);
 });
 
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {

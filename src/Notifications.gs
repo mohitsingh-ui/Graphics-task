@@ -59,7 +59,7 @@ function mailRule_(kind) {
   var k = EMAIL_KINDS.filter(function (x) { return x.id === kind; })[0];
   if (!k || k.always) return true;
   var rules = settings_().emailRules || {};
-  return rules[kind] !== false;
+  return rules.hasOwnProperty(kind) ? rules[kind] !== false : k.def !== false;
 }
 
 /** Everyone who owns a request: the person who raised it plus anyone added as a co-owner. */
