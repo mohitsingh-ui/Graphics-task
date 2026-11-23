@@ -1060,6 +1060,29 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.assigneeEmail, A);
     });
 
+    await step('Upload window: leader picks a campaign; files land in its folder', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Ila', department: 'NDP', email: 'ila@example.org', brief: 'Ghee jar label', preferredDate: future(5), quantity: 1 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      const camp = env.call(LEADER, 'api_saveCampaign', { name: 'Ghee Relaunch' }).data;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#aSelf');
+      await page.click('#aSelf');
+      await page.waitForSelector('#u_cp');
+      await page.fill('#u_title', 'Ghee jar front');
+      await page.selectOption('#u_cp', camp.campaignId);
+      const fc = page.waitForEvent('filechooser');
+      await page.click('#u_drop');
+      await (await fc).setFiles({ name: 'ghee.png', mimeType: 'image/png', buffer: await bannerPng('Ghee', 20) });
+      await page.locator('#u_cp').scrollIntoViewIfNeeded();
+      await shot('83-upload-with-campaign');
+      await page.click('.modal-f >> text=Upload & complete');
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Completed/.test(x.textContent); }, null, { timeout: 15000 });
+      assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.campaign.campaignId, camp.campaignId);
+      assert.strictEqual(env.call(LEADER, 'api_finalFolder', camp.campaignId, false).data.total, 1, 'file is in the campaign folder');
+      const m = env.state.mail.filter(x => x.to === 'ila@example.org' && /Google Drive link/.test(x.subject)).pop();
+      assert.ok(m && /Ghee Relaunch/.test(m.subject), 'requester gets the campaign link');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {

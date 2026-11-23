@@ -2802,6 +2802,7 @@ function uploadModal(deliverableId, opts) {
       '<div class="field"><label>What the creative is for <span class="faint">(optional)</span></label><input type="text" id="u_purpose" maxlength="500" value="' + h(t.purpose ? t.purpose.slice(0, 500) : '') + '"></div>' +
       '<div class="field"><label>Category <span class="faint">(Drive folder)</span></label><input type="text" id="u_type" maxlength="80" list="u_typeL" value="' + h(t.creativeType) + '" placeholder="e.g. Meta ads">' +
         '<datalist id="u_typeL">' + (APP.boot.categories || []).map(function (c) { return '<option value="' + h(c) + '">'; }).join('') + '</datalist></div></div>' +
+      (APP.role === 'leader' && TASK.campaigns ? campaignField('u_cp') : '') +
       '<div class="field"><label>Version</label><input type="text" id="u_ver" readonly></div>' +
       '<div class="field"><label class="req">File(s)</label><div class="drop" id="u_drop" tabindex="0" role="button">' + icon('upload') + '<div><b>Drop files</b> or click to choose</div>' +
       '<div class="faint small">Max ' + h(APP.boot.maxUploadMB) + ' MB · ' + h(APP.boot.extensions.join(', ')) + '</div></div><div id="u_files" class="stack" style="gap:6px;margin-top:8px"></div>' +
@@ -2847,6 +2848,7 @@ function uploadModal(deliverableId, opts) {
   drop.addEventListener('drop', function (e) { add(Array.prototype.slice.call(e.dataTransfer.files)); });
   $('#u_target', el).onchange = sync;
   sync();
+  var getCamp = wireCampaignField(el, 'u_cp');
 
   function doUpload(close, el, btn) {
     fieldErrors(el, '');
@@ -2858,6 +2860,8 @@ function uploadModal(deliverableId, opts) {
     var note = $('#u_note', el).value.trim(), andSubmit = !opts.finish && $('#u_submit', el).checked;
     var finalLink = $('#u_link', el).value.trim();
     if (finalLink && !/^https:\/\/\S+$/i.test(finalLink)) return fieldErrors(el, 'The Drive link should start with https://');
+    var camp = getCamp();
+    if (camp.newCampaign === '') return fieldErrors(el, 'Type a name for the new campaign.');
     var created = [], errs = [];
     var options = !target && files.length > 1 && $('input[name=u_mode]:checked', el).value === 'options';
     var type = $('#u_type', el).value.trim();
@@ -2867,6 +2871,9 @@ function uploadModal(deliverableId, opts) {
         .then(function (res) { x.state = 'done'; x.res = res; created.push(res.versionId); drawFiles(); return res; }, function (e) { x.state = 'error'; x.error = errMsg(e); drawFiles(); errs.push(e); });
     }
     var base = { kind: 'version', taskId: t.taskId, note: note, purpose: purpose, deliverableType: type };
+    // Campaign first, so the files are filed straight into its Drive folder.
+    var pre = camp.campaignId !== undefined || camp.newCampaign ? api('api_setTasksCampaign', [t.taskId], camp.campaignId || '', camp.newCampaign || '') : Promise.resolve();
+    var chain = pre.then(function () {
     var chain;
     if (target || options) {
       // First file: the new version (or the new creative); the rest: extra options of it.
@@ -2885,6 +2892,8 @@ function uploadModal(deliverableId, opts) {
         return up(x, Object.assign({}, base, { title: files.length > 1 ? title + ' — ' + (files.indexOf(x) + 1) : title }));
       }).then(function () { if (errs.length) throw errs[0]; });
     }
+    return chain;
+    });
     return chain.then(function () {
       if (finalLink !== (t.finalLink || '')) return api('api_setFinalLink', t.taskId, finalLink);
     }).then(function () {
