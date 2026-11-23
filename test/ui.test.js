@@ -1084,6 +1084,57 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.ok(m && /Ghee Relaunch/.test(m.subject), 'requester gets the campaign link');
     });
 
+    await step('Request form inside a frame that blocks the mic (like Google’s): recorder window opens, no file picker', async () => {
+      const host = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+      host.on('pageerror', e => errors.push('framed form: ' + e.message));
+      let picker = 0;
+      host.on('filechooser', () => { picker++; });
+      // An iframe with no allow="microphone", from another origin — the same as Apps Script's sandbox.
+      await host.setContent('<iframe id="app" src="' + BASE + '/page" style="width:100%;height:820px;border:0"></iframe>');
+      const frame = await (await host.waitForSelector('#app')).contentFrame();
+      await frame.waitForSelector('#micBtn');
+      assert.strictEqual(await frame.evaluate(() => recordInPage('audio')), false, 'framed page should not record in-page');
+      // voice note in the recorder window
+      const [pop] = await Promise.all([host.waitForEvent('popup'), frame.click('#micBtn')]);
+      pop.on('pageerror', e => errors.push('recorder window: ' + e.message));
+      pop.on('filechooser', () => { picker++; });
+      await pop.waitForSelector('body.rec', { timeout: 10000 });
+      await frame.waitForSelector('#recBar:not(.hidden)');
+      await pop.waitForTimeout(2000);
+      await shot('83a-recorder-window-voice', pop);
+      const closed = pop.waitForEvent('close');
+      await pop.click('#done');
+      await closed;
+      await frame.waitForSelector('.note-row audio');
+      assert.ok(await frame.evaluate(() => /^Voice note 1\.(webm|m4a|ogg)$/.test(FILES[0].file.name) && FILES[0].file.size > 500), 'voice note attached');
+      await frame.waitForFunction(() => document.querySelector('#recBar').classList.contains('hidden') && !document.querySelector('#micBtn').disabled);
+      // video in the recorder window
+      const [pop2] = await Promise.all([host.waitForEvent('popup'), frame.click('#camBtn')]);
+      await pop2.waitForSelector('body.rec', { timeout: 10000 });
+      await pop2.waitForTimeout(1800);
+      await shot('83b-recorder-window-video', pop2);
+      const closed2 = pop2.waitForEvent('close');
+      await pop2.click('#done');
+      await closed2;
+      await frame.waitForFunction(() => document.querySelectorAll('.note-row').length === 2);
+      // cancel in the recorder window throws it away
+      const [pop3] = await Promise.all([host.waitForEvent('popup'), frame.click('#micBtn')]);
+      await pop3.waitForSelector('body.rec', { timeout: 10000 });
+      const closed3 = pop3.waitForEvent('close');
+      await pop3.click('#cancel');
+      await closed3;
+      await frame.waitForFunction(() => !document.querySelector('#micBtn').disabled);
+      assert.strictEqual(await frame.locator('.note-row').count(), 2);
+      // closing the window by hand also resets the form
+      const [pop4] = await Promise.all([host.waitForEvent('popup'), frame.click('#micBtn')]);
+      await pop4.waitForSelector('body.rec', { timeout: 10000 });
+      await pop4.close();
+      await frame.waitForFunction(() => !document.querySelector('#micBtn').disabled && document.querySelector('#recBar').classList.contains('hidden'));
+      assert.strictEqual(picker, 0, 'no file picker should ever open');
+      await shot('83c-framed-form-with-notes', host);
+      await host.close();
+    });
+
     await step('Request form: record a voice note and a video, send with no typed brief; team plays it', async () => {
       const f = await browser.newPage({ viewport: { width: 390, height: 844 } });
       f.on('pageerror', e => errors.push('voice note: ' + e.message));
