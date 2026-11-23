@@ -28,18 +28,22 @@ function drawTask(el) {
   setCrumb(t.taskId + ' · ' + t.title);
 
   var actions = '';
-  if (p.canUpload) actions += '<button class="btn primary" id="aUpload">' + icon('upload') + ' Upload creative</button>';
+  // Leader doing it themselves: upload the final files and complete in one go.
+  if (p.canDeliver && (!t.assigneeEmail || t.assigneeEmail === APP.boot.user.email)) actions += '<button class="btn primary" id="aSelf">' + icon('upload') + ' Upload final files & complete</button>';
+  if (p.canUpload) actions += '<button class="btn' + (p.canDeliver && !t.assigneeEmail ? '' : ' primary') + '" id="aUpload">' + icon('upload') + ' Upload creative</button>';
   if (p.canUpload && drafts.length) actions += '<button class="btn ok" id="aSubmit">' + icon('send') + ' Submit for approval (' + drafts.length + ')</button>';
   if (p.canAssign) actions += '<button class="btn' + (t.assigneeEmail ? '' : ' primary') + '" id="aAssign">' + icon('users') + ' ' + (t.assigneeEmail ? 'Reassign' : 'Assign designer') + '</button>';
   if (p.canAssign && !d.deliverables.length && !(d.requestParts || []).length) actions += '<button class="btn" id="aDivide">' + icon('board') + ' Divide among team</button>';
   if (p.canEdit) actions += '<button class="btn" id="aEdit">Edit details</button>';
   if (p.canResume) actions += '<button class="btn primary" id="aResume">' + icon('refresh') + ' Resume task</button>';
   if (p.canHold) actions += '<button class="btn" id="aHold">' + icon('clock') + ' Put on hold</button>';
-  if (p.canReopen) actions += '<button class="btn primary" id="aReopen">' + icon('refresh') + ' Reopen for changes</button>';
+  if (p.canReopen) actions += '<button class="btn primary" id="aReopen">' + icon('refresh') + ' ' + (leader ? 'Reopen for changes' : 'Reopen to update a file') + '</button>';
+  if (p.canShareWork && (!leader || d.deliverables.length)) actions += '<button class="btn" id="aShareWork">' + icon('users') + ' Share work with team</button>';
   if (p.canShare) actions += '<button class="btn" id="aShare">' + icon('link') + ' Share</button>';
   if (leader && (t.status === 'Completed' || t.status === 'Approved')) actions += '<button class="btn" id="aMore">' + icon('plus') + ' Add more creatives</button>';
   if (p.transitions.length || p.canOverrideComplete) actions += '<button class="btn" id="aStatus">Change status</button>';
   if (leader && t.assigneeEmail && t.assigneeEmail !== APP.boot.user.email) actions += '<button class="btn" id="aReward">' + icon('award') + ' Reward</button>';
+  if (p.canClose) actions += '<button class="btn ghost" id="aClose" title="Close the whole request — with or without files">' + icon('x') + ' Close request</button>';
   if (leader) actions += '<button class="btn ghost danger" id="aDelete" title="Delete task">' + icon('trash') + ' Delete</button>';
 
   var changes = [];
@@ -78,7 +82,10 @@ function drawTask(el) {
 
   wireGo(el);
   loadThumbs(el);
-  if ($('#aUpload')) $('#aUpload').onclick = uploadModal;
+  if ($('#aUpload')) $('#aUpload').onclick = function () { uploadModal(); };
+  if ($('#aSelf')) $('#aSelf').onclick = function () { uploadModal('', { finish: true }); };
+  if ($('#aClose')) $('#aClose').onclick = closeRequestModal;
+  if ($('#aShareWork')) $('#aShareWork').onclick = shareWorkModal;
   if ($('#aSubmit')) $('#aSubmit').onclick = function () { submitModal(drafts); };
   if ($('#aAssign')) $('#aAssign').onclick = assignModal;
   if ($('#aDivide')) $('#aDivide').onclick = divideModal;
@@ -650,6 +657,55 @@ function reopenModal() {
   });
 }
 
+/** Leader closes the whole request — with or without files. */
+function closeRequestModal() {
+  var t = TASK.task, r = TASK.requirement || {};
+  var approved = TASK.deliverables.filter(function (x) { return x.status === 'Approved'; }).length;
+  modal({ title: 'Close request ' + (r.requirementId || t.requirementId),
+    body: '<p class="muted" style="margin-top:0">' + (approved ? 'Tasks with approved creatives are completed and the requester gets those files; everything else is cancelled.' :
+      'Nothing is approved yet, so every task on this request is cancelled.') + ' Designers are told no more work is needed.</p>' +
+      '<div class="field"><label class="req" for="clR">Reason</label><textarea id="clR" rows="3" maxlength="1000" placeholder="e.g. Campaign dropped / duplicate request / done offline"></textarea></div>' +
+      '<label class="check"><input type="checkbox" id="clN" checked> Email the requester the reason' + (approved ? ' and the Drive link' : '') + '</label><div class="alert bad hidden" data-form-error></div>',
+    actions: [{ label: 'Cancel' }, { label: 'Close request', cls: 'danger', onClick: function (close, m) {
+      var reason = $('#clR', m).value.trim();
+      if (reason.length < 3) return fieldErrors(m, 'Add a short reason.');
+      return api('api_closeRequest', t.requirementId, { reason: reason, notify: $('#clN', m).checked })
+        .then(function (x) { close(); toast('Request closed' + (x.completed ? ' — ' + x.completed + ' task(s) completed' : '')); loadNotifications(); reloadTask(); })
+        .catch(function (e) { fieldErrors(m, errMsg(e)); });
+    } }] });
+}
+
+/** Designer hands some of their creatives to teammates (same request → same Drive folder). */
+function shareWorkModal() {
+  var t = TASK.task;
+  Promise.resolve(TASK.mates || (TASK.team || []).filter(function (x) { return x.email !== t.assigneeEmail; })).then(function (team) {
+    var mates = team.filter(function (x) { return x.email !== APP.boot.user.email && x.email !== t.assigneeEmail; });
+    if (!mates.length) return toast('No teammates to share with.', true);
+    var qty = Number(t.deliverablesRequired) || 1;
+    var row = function (i) {
+      return '<div class="grid-3 sw-row" data-i="' + i + '"><div class="field"><label>Teammate</label><select class="swE">' + mates.map(function (x) { return '<option value="' + h(x.email) + '">' + h(x.name) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field"><label>Creatives</label><input type="number" class="swC" min="1" max="' + (qty - 1) + '" value="' + Math.max(1, Math.floor(qty / 2)) + '"></div>' +
+        '<div class="field"><label>Note <span class="faint">(optional)</span></label><input type="text" class="swN" maxlength="300" placeholder="e.g. take the story sizes"></div></div>';
+    };
+    var m = modal({ title: 'Share work with the team', wide: true,
+      body: '<p class="muted" style="margin-top:0">This task needs <b>' + qty + '</b> creative(s). Give some to teammates — each gets their own task in the same request, with the same brief and due date, and all files still go to <b>one Drive folder</b>. Your team leader is told.</p>' +
+        '<div id="swRows">' + row(0) + '</div><button type="button" class="btn ghost sm" id="swAdd">' + icon('plus') + ' Another teammate</button>' +
+        '<p class="hint" id="swLeft" style="margin-bottom:0"></p><div class="alert bad hidden" data-form-error></div>',
+      actions: [{ label: 'Cancel' }, { label: 'Share', cls: 'primary', onClick: function (close, el) {
+        var parts = $all('.sw-row', el).map(function (r) { return { assigneeEmail: $('.swE', r).value, count: Number($('.swC', r).value), note: $('.swN', r).value.trim() }; });
+        return api('api_shareWork', t.taskId, { parts: parts }).then(function (x) { close(); toast('Shared — you keep ' + x.kept + ' creative(s)'); loadNotifications(); reloadTask(); })
+          .catch(function (e) { fieldErrors(el, errMsg(e)); });
+      } }] });
+    var left = function () {
+      var give = $all('.swC', m.el).reduce(function (a, x) { return a + (Number(x.value) || 0); }, 0);
+      $('#swLeft', m.el).textContent = 'You keep ' + Math.max(0, qty - give) + ' of ' + qty + '.';
+    };
+    $('#swAdd', m.el).onclick = function () { $('#swRows', m.el).insertAdjacentHTML('beforeend', row($all('.sw-row', m.el).length)); wire(); };
+    var wire = function () { $all('.swC', m.el).forEach(function (x) { x.oninput = left; }); left(); };
+    wire();
+  }).catch(function (e) { toast(errMsg(e), true); });
+}
+
 function shareTaskModal() {
   var t = TASK.task;
   var m = modal({
@@ -729,15 +785,18 @@ function uploadRefs(files) {
 }
 
 /** Upload modal. If deliverableId is given, it uploads a new version of that creative. */
-function uploadModal(deliverableId) {
+function uploadModal(deliverableId, opts) {
+  opts = opts || {};
   var t = TASK.task;
   var dels = TASK.deliverables;
   var files = [];
   var pre = typeof deliverableId === 'string' ? deliverableId : '';
   if (!pre) { var needs = dels.filter(function (x) { return x.status === 'Changes Requested'; })[0]; if (needs) pre = needs.deliverableId; }
   var m = modal({
-    title: 'Upload creative', wide: false, sticky: true,
+    title: opts.finish ? 'Upload final files & complete' : 'Upload creative', wide: false, sticky: true,
     body:
+      (opts.finish ? '<div class="alert info small" style="margin-bottom:4px">You’re doing this one yourself. The files go straight to <b>final</b> (no approval round), the task completes' +
+        ' and the requester gets the Google Drive link by email.</div>' : '') +
       ((t.sizeList || []).length > 1 ? '<div class="alert info small" style="margin-bottom:4px"><b>Upload each creative in every size:</b> ' + t.sizeList.map(h).join(' · ') +
         '. Name each file with its size, e.g. “Banner 1 — ' + h(t.sizeList[0]) + '”. ' + sizesLine(t) + '.</div>' : '') +
       '<div class="grid-2"><div class="field"><label>Task</label><input type="text" readonly value="' + h(t.taskId) + '"></div>' +
@@ -759,9 +818,9 @@ function uploadModal(deliverableId) {
       '<div class="field"><label>Submission note</label><textarea id="u_note" rows="2" maxlength="1000" placeholder="Optional — what changed, anything the reviewer should know"></textarea></div>' +
       '<div class="field"><label>Google Drive link to final files <span class="faint">(optional)</span></label><input type="url" id="u_link" placeholder="https://drive.google.com/…" value="' + h(t.finalLink || '') + '">' +
       '<span class="hint">Share it as “Anyone with the link – Viewer”. The requester gets a download button.</span></div>' +
-      '<label class="check"><input type="checkbox" id="u_submit" checked> Send for approval right after upload</label>' +
+      (opts.finish ? '' : '<label class="check"><input type="checkbox" id="u_submit" checked> Send for approval right after upload</label>') +
       '<div class="alert bad hidden" data-form-error></div>',
-    actions: [{ label: 'Cancel' }, { label: 'Upload', cls: 'primary', onClick: function (close, el, btn) { return doUpload(close, el, btn); } }]
+    actions: [{ label: 'Cancel' }, { label: opts.finish ? 'Upload & complete' : 'Upload', cls: 'primary', onClick: function (close, el, btn) { return doUpload(close, el, btn); } }]
   });
   var el = m.el;
   function sync() {
@@ -802,7 +861,7 @@ function uploadModal(deliverableId) {
     var pending = files.filter(function (x) { return x.state !== 'done'; });
     if (!pending.length) return fieldErrors(el, files.length ? 'Everything is uploaded.' : 'Choose a file to upload.');
     if (!target && !title) return fieldErrors(el, 'Give the creative a title, e.g. “Homepage banner – desktop”.');
-    var note = $('#u_note', el).value.trim(), andSubmit = $('#u_submit', el).checked;
+    var note = $('#u_note', el).value.trim(), andSubmit = !opts.finish && $('#u_submit', el).checked;
     var finalLink = $('#u_link', el).value.trim();
     if (finalLink && !/^https:\/\/\S+$/i.test(finalLink)) return fieldErrors(el, 'The Drive link should start with https://');
     var created = [], errs = [];
@@ -835,10 +894,11 @@ function uploadModal(deliverableId) {
     return chain.then(function () {
       if (finalLink !== (t.finalLink || '')) return api('api_setFinalLink', t.taskId, finalLink);
     }).then(function () {
+      if (opts.finish && created.length) return api('api_leaderDeliver', t.taskId, created).then(function () { return null; });
       if (andSubmit && created.length) return api('api_submitForApproval', t.taskId, created).then(function (r) { return r; });
     }).then(function (r) {
       close();
-      toast(andSubmit ? 'Uploaded and sent for approval' : 'Uploaded — submit it when you’re ready');
+      toast(opts.finish ? 'Done — the task is complete and the requester has the Drive link' : andSubmit ? 'Uploaded and sent for approval' : 'Uploaded — submit it when you’re ready');
       if (r && r.links && r.links.length) showLinks(r.links);
       loadNotifications();
       reloadTask();

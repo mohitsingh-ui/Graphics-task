@@ -12,7 +12,7 @@ var SCHEMA = {
   Requirements: ['requirementId', 'requesterName', 'department', 'email', 'phone', 'title', 'creativeType',
     'purpose', 'brief', 'campaign', 'product', 'quantity', 'dimensions', 'platform', 'copyText',
     'referenceUrls', 'typeFields', 'preferredDate', 'priorityRequested', 'instructions', 'folderId',
-    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId', 'coOwners'],
+    'status', 'notifiedAt', 'submittedAt', 'updatedAt', 'preferredTime', 'submittedBy', 'finalFolderId', 'finalShared', 'campaignId', 'coOwners', 'closedAt', 'closedBy', 'closedReason'],
   ReferenceFiles: ['attachmentId', 'requirementId', 'taskId', 'fileId', 'fileName', 'mimeType', 'sizeBytes',
     'uploadedBy', 'uploadedAt'],
   Tasks: ['taskId', 'requirementId', 'title', 'brief', 'creativeType', 'purpose', 'campaign', 'product',
@@ -48,7 +48,7 @@ var SCHEMA = {
 };
 
 /** Bump when columns are appended to SCHEMA; Db.gs migrates the live sheet once. */
-var SCHEMA_VERSION = 13;
+var SCHEMA_VERSION = 14;
 
 var ROLES = { LEADER: 'leader', DESIGNER: 'designer' };
 
@@ -151,6 +151,8 @@ var DEFAULT_SETTINGS = {
   countEachSize: false,      // false: a creative made in 2–3 sizes earns points once; true: every size file counts as its own creative
   allowPersonalTheme: true,  // team members may pick their own colours on their profile
   teamChat: true,            // team chat on/off
+  designersCanShare: true,   // designers can hand part of their task to teammates (same request, same Drive folder)
+  designersCanReopen: true,  // designers can reopen their own finished task to replace a file
   requesterCanReopen: true,  // requesters can reopen their own finished request for changes from "My requests"
   emailRules: {},            // which automatic emails go out — see EMAIL_KINDS; missing key = on
   theme: 'rosier',           // colour theme for every page (see THEMES)
@@ -210,7 +212,7 @@ var EDITABLE_SETTINGS = {
   dueSoonHours: 'number', maxUploadMB: 'number', maxPublicUploadMB: 'number', maxPublicFiles: 'number',
   allowedExtensions: 'list', publicExtensions: 'list', creativeTypes: 'json',
   creativeCategories: 'list', designations: 'designations', theme: 'theme', accentColor: 'color', pointsOnTime: 'number', pointsFirstTime: 'number', pointsRejected: 'number',
-  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', requesterCanReopen: 'boolean', emailRules: 'emailRules'
+  pointsReopen: 'number', countEachSize: 'boolean', allowPersonalTheme: 'boolean', teamChat: 'boolean', requesterCanReopen: 'boolean', designersCanShare: 'boolean', designersCanReopen: 'boolean', emailRules: 'emailRules'
 };
 
 /**
@@ -239,6 +241,7 @@ var EMAIL_KINDS = [
   { id: 'req_review_mail', who: 'requester', label: 'An email for each creative sent for their review (they can always review in “My requests”)', to: 'Requester', def: false },
   { id: 'req_hold', who: 'requester', label: '“We need something from you” (task on hold)', to: 'Requester' },
   { id: 'req_ready', who: 'requester', label: 'Request completed — Google Drive link to all final creatives (the campaign folder for campaigns)', to: 'Requester' },
+  { id: 'req_closed', who: 'requester', label: 'Request closed by the team lead (with the reason)', to: 'Requester' },
   { id: 'req_coowner', who: 'requester', label: 'Added as a co-owner of a request', to: 'The added person' },
   { id: 'req_link', who: 'requester', label: 'Their “My requests” link when they ask for it', to: 'Requester', always: true }
 ];

@@ -818,7 +818,7 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       await page.locator('[data-pm="dtFp"]').scrollIntoViewIfNeeded();
       await shot('74-assign-fixed-points');
       await page.click('.modal-f >> text=Assign task');
-      await page.waitForFunction(() => /5 pts for this task/.test(document.querySelector('.page-h').textContent));
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /5 pts for this task/.test(x.textContent); });
       const tid = (await page.textContent('.page-h .mono')).trim();
       assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.fixedPoints, '5');
       // switch back to automatic from Edit details
@@ -827,7 +827,7 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.strictEqual(await page.inputValue('#e_fp'), '5');
       await page.click('[data-pm="e_fp"] [data-v="auto"]');
       await page.click('.modal-f >> text=Save');
-      await page.waitForFunction(() => !/pts for this task/.test(document.querySelector('.page-h').textContent));
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && !/pts for this task/.test(x.textContent); });
       assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.fixedPoints, '');
     });
 
@@ -970,6 +970,74 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.ok(/can’t edit/.test(await mob.textContent('.modal')));
       await shot('78-my-requests-drive-link', mob);
       await mob.close();
+    });
+
+    await step('Leader uploads final files & completes a request without assigning anyone', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Ritu', department: 'Ops', email: 'ritu@example.org', brief: 'Quick label fix', preferredDate: future(3), quantity: 1 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#aSelf');
+      await page.click('#aSelf');
+      await page.waitForSelector('#u_title');
+      await page.fill('#u_title', 'Label fix');
+      const fc = page.waitForEvent('filechooser');
+      await page.click('#u_drop');
+      await (await fc).setFiles({ name: 'label.png', mimeType: 'image/png', buffer: await bannerPng('Label', 30) });
+      await shot('79-leader-upload-complete');
+      await page.click('.modal-f >> text=Upload & complete');
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Completed/.test(x.textContent); }, null, { timeout: 15000 });
+      assert.ok(env.state.mail.some(m => m.to === 'ritu@example.org' && /Google Drive link/.test(m.subject)));
+    });
+
+    await step('Leader closes a request with a reason; requester sees "Closed"', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Om', department: 'Sales', email: 'om@example.org', brief: 'Not needed', preferredDate: future(3), quantity: 1 }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#aClose');
+      await page.click('#aClose');
+      await page.fill('#clR', 'Campaign dropped');
+      await shot('80-close-request');
+      await page.click('.modal-f >> text=Close request');
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Cancelled/.test(x.textContent); }, null, { timeout: 10000 });
+      const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      await mob.goto(BASE + '/page?p=my&t=' + s.trackToken);
+      await mob.waitForFunction(() => /Closed by the graphics team/.test(document.body.textContent));
+      await mob.close();
+    });
+
+    await step('Designer shares part of the task with a teammate', async () => {
+      const d = env.call(LEADER, 'api_createDirectTask', { title: 'Diwali Meta ads', assigneeEmail: A, dueDate: future(5), quantity: 10 }).data;
+      await page.goto(BASE + '/page?as=' + A + '&r=task/' + d.taskId);
+      await page.waitForSelector('#aShareWork');
+      await page.click('#aShareWork');
+      await page.waitForSelector('.swE');
+      await page.selectOption('.swE', B);
+      await page.fill('.swC', '4');
+      await page.fill('.swN', 'Take the story sizes');
+      assert.ok((await page.textContent('#swLeft')).includes('6 of 10'));
+      await shot('81-share-work');
+      await page.click('.modal-f >> text=Share');
+      await page.waitForSelector('.toast');
+      assert.ok((await page.textContent('.toast')).includes('keep 6'));
+      assert.strictEqual(env.call(A, 'api_getTask', d.taskId).data.task.deliverablesRequired, '6');
+    });
+
+    await step('Designer reopens their own finished task to replace a file', async () => {
+      const d = env.call(LEADER, 'api_createDirectTask', { title: 'Honey label', assigneeEmail: A, dueDate: future(3), quantity: 1 }).data;
+      const b = await bannerPng('Honey', 30);
+      const st = env.call(A, 'api_startUpload', { kind: 'version', taskId: d.taskId, title: 'Label', fileName: 'h.png', size: b.length }).data;
+      const v = env.call(A, 'api_uploadChunk', st.uploadId, 0, b.toString('base64')).data;
+      env.call(A, 'api_submitForApproval', d.taskId, [v.versionId]);
+      env.call(LEADER, 'api_leaderDecision', v.versionId, 'approved', '');
+      await page.goto(BASE + '/page?as=' + A + '&r=task/' + d.taskId);
+      await page.waitForSelector('#aReopen');
+      assert.ok((await page.textContent('#aReopen')).includes('Reopen to update'));
+      await page.click('#aReopen');
+      await page.fill('#roR', 'Moving the barcode up');
+      await page.fill('#roD', future(1));
+      await page.click('.modal-f >> text=Reopen task');
+      await page.waitForFunction(() => { const x = document.querySelector('.page-h'); return x && /Changes Requested/.test(x.textContent); }, null, { timeout: 10000 });
+      assert.ok(await page.$('#aUpload'), 'can upload the new file right away');
     });
 
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {

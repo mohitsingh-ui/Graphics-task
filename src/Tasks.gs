@@ -106,7 +106,7 @@ function completeTask_(task, actor, note) {
       // campaign requests), shared as view-only, and the requester gets that link straight in the email.
       var share = null;
       try { share = shareFinalFolder_(dbGet_('Requirements', req.requirementId)); } catch (e) { share = null; }
-      if (settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
+      if (!dbGet_('Requirements', req.requirementId).closedAt && settings_().emailNotifications && mailRule_('req_ready') && requesterEmails_(req).length) {
         var extra = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId && t.finalLink; }).map(function (t) { return t.finalLink; });
         if (task.finalLink && extra.indexOf(task.finalLink) === -1) extra.push(task.finalLink);
         var link = share && share.url;
@@ -407,6 +407,12 @@ function api_getTask(taskId) {
       permissions: taskPermissions_(u, t),
       brandGuidelinesUrl: settings_().brandGuidelinesUrl
     };
+    // Teammates a designer can share work with (names only).
+    if (!leader && out.permissions.canShareWork) {
+      out.mates = dbFind_('Users', function (x) { return bool_(x.active) && x.email.toLowerCase() !== u.email; })
+        .map(function (x) { return { email: x.email.toLowerCase(), name: x.name, role: x.role }; })
+        .sort(function (a, b) { return (a.role === 'designer' ? 0 : 1) - (b.role === 'designer' ? 0 : 1) || (a.name < b.name ? -1 : 1); });
+    }
     if (leader) {
       out.folderOptions = folderOptions_(req);
       out.folderRoot = req.campaignId ? ((dbGet_('Campaigns', req.campaignId) || {}).name || '') : req.requirementId;
@@ -433,7 +439,10 @@ function taskPermissions_(u, t) {
   var isAssignee = t.assigneeEmail === u.email;
   // Uploads continue while a task is on hold (e.g. waiting for the NI table), as long as someone is assigned.
   var uploadable = [STATUS.ASSIGNED, STATUS.IN_PROGRESS, STATUS.SUBMITTED, STATUS.CHANGES, STATUS.RESUBMITTED, STATUS.APPROVED]
-    .concat(t.assigneeEmail ? [STATUS.ON_HOLD] : []);
+    .concat(t.assigneeEmail ? [STATUS.ON_HOLD] : [])
+    // The leader can do a request themselves, without assigning anyone.
+    .concat(leader && !t.assigneeEmail ? [STATUS.NEW, STATUS.UNDER_REVIEW, STATUS.READY] : []);
+  var s = settings_();
   var manual = Object.keys(MANUAL_TRANSITIONS[t.status] || {}).filter(function (to) {
     return MANUAL_TRANSITIONS[t.status][to].indexOf(u.role) !== -1;
   });
@@ -447,7 +456,10 @@ function taskPermissions_(u, t) {
     canOverrideComplete: leader && [STATUS.COMPLETED, STATUS.CANCELLED].indexOf(t.status) === -1,
     canResume: (leader || isAssignee) && t.status === STATUS.ON_HOLD,
     canHold: (leader || isAssignee) && CLOSED.indexOf(t.status) === -1 && t.status !== STATUS.ON_HOLD,
-    canReopen: leader && t.status === STATUS.COMPLETED,
+    canReopen: (leader || (isAssignee && !!s.designersCanReopen)) && t.status === STATUS.COMPLETED,
+    canShareWork: (leader || (isAssignee && !!s.designersCanShare)) && !!t.assigneeEmail && CLOSED.indexOf(t.status) === -1,
+    canDeliver: leader && CLOSED.indexOf(t.status) === -1,
+    canClose: leader && CLOSED.indexOf(t.status) === -1,
     canShare: leader || isAssignee,
     transitions: manual
   };
@@ -719,7 +731,7 @@ function reopenTask_(t, actor, reason, dueDate, dueTime, deliverableIds, strict)
 
 function api_reopenTask(taskId, input) {
   return respond_(function () {
-    var u = requireLeader_();
+    var u = currentUser_();
     input = input || {};
     var reason = str_(input.reason, 2000, 'What needs to change', true);
     if (reason.length < 5) throw AppError_('VALIDATION', 'Describe the changes needed.');
@@ -728,7 +740,11 @@ function api_reopenTask(taskId, input) {
     return withLock_(function () {
       var t = requireTask_(u, taskId);
       if (t.status !== STATUS.COMPLETED && t.status !== STATUS.APPROVED) throw AppError_('INVALID_STATE', 'Only a completed task can be reopened.');
+      if (!isLeader_(u) && !settings_().designersCanReopen) throw AppError_('FORBIDDEN', 'Ask your team leader to reopen this task.');
       var chosen = reopenTask_(t, u, reason, dueDate, dueTime, input.deliverableIds, true);
+      // A designer reopening their own work: the leader is told (no reopen bonus for this — see pointsTable_).
+      if (!isLeader_(u)) notify_(leaderEmails_(), 'task_reopened', displayName_(u.email) + ' reopened ' + t.title,
+        displayName_(u.email) + ' reopened their finished task ' + t.taskId + ' to update it.\n\n“' + reason + '”', 'task/' + t.taskId, false);
       return { status: STATUS.CHANGES, reopened: chosen.length };
     });
   });
@@ -798,7 +814,7 @@ function assignInternal_(u, t, o) {
     (previous && previous !== patch.assigneeEmail ? 'Reassigned to you: ' : 'New task: ') + t.title,
     t.taskId + ' · due ' + dueText_(dueDate, dueTime) + ' · ' + priority + ' priority' + (bonus ? '\n\nBonus: +' + bonus + ' points when this task is completed.' : '') +
     (fresh.fixedPoints !== '' && fresh.fixedPoints !== undefined ? '\n\nPoints for this task: ' + fresh.fixedPoints + ' (set by the team leader, paid when completed).' : '') +
-    (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
+    (note ? '\n\n' + note : '') + (instructions ? '\n\n' + instructions : ''), 'task/' + t.taskId);
   if (previous && previous !== patch.assigneeEmail) {
     notify_([previous], 'task_reassigned', 'Task moved off your list: ' + t.title, t.taskId + ' has been reassigned by the team leader.', 'overview');
   }
@@ -1025,6 +1041,162 @@ function api_deleteTask(taskId) {
       }
       console.log('Task ' + id + ' deleted by ' + u.email + (dropReq ? ' (with requirement ' + t.requirementId + ')' : ''));
       return { deleted: id, requirementDeleted: dropReq ? t.requirementId : '' };
+    });
+  });
+}
+
+
+/* ---------- leader does it themselves / closes a request ---------- */
+
+/**
+ * Leader uploaded the final files themselves (no designer): the drafts on the task are approved
+ * as final and the task completes — the requester gets the usual Drive-link email when it's the last one.
+ */
+function api_leaderDeliver(taskId, versionIds) {
+  return respond_(function () {
+    var u = requireLeader_();
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '.');
+      var wanted = Array.isArray(versionIds) && versionIds.length ? versionIds.map(String) : null;
+      var drafts = dbFind_('CreativeVersions', function (v) { return v.taskId === t.taskId && v.status === VSTATUS.DRAFT && (!wanted || wanted.indexOf(v.versionId) !== -1); });
+      if (!drafts.length) throw AppError_('VALIDATION', 'Upload the files first.');
+      if (!t.assigneeEmail) {
+        dbUpdate_('Tasks', t.taskId, { assigneeEmail: u.email, assignedBy: u.email, assignedAt: nowIso_(), status: STATUS.IN_PROGRESS, prevStatus: t.status, updatedAt: nowIso_() });
+        logActivity_(t.taskId, u, 'assigned', '', u.email, 'Done by the team leader', 'team');
+      }
+      var ids = drafts.map(function (v) {
+        var d = dbGet_('CreativeSubmissions', v.deliverableId);
+        supersedeOpenRequests_(d.deliverableId, null);
+        dbInsert_('ApprovalRequests', { requestId: 'APR-' + uuid_(), versionId: v.versionId, deliverableId: d.deliverableId, taskId: t.taskId, status: 'Open', createdBy: u.email, createdAt: nowIso_(), closedAt: '' });
+        dbUpdate_('CreativeVersions', v.versionId, { status: VSTATUS.AWAITING, submittedAt: nowIso_() });
+        dbUpdate_('CreativeSubmissions', d.deliverableId, { status: DSTATUS.AWAITING, updatedAt: nowIso_() });
+        return v.versionId;
+      });
+      approveMany_(ids, '', { name: u.name, email: u.email }, 'portal', u, function (id) {
+        return dbFind_('ApprovalRequests', function (x) { return x.versionId === id && x.status === 'Open'; })[0];
+      });
+      var fresh = dbGet_('Tasks', t.taskId);
+      if (fresh.status !== STATUS.COMPLETED) completeTask_(fresh, u, 'Final files uploaded by the team leader');
+      return { approved: ids.length, status: STATUS.COMPLETED };
+    });
+  });
+}
+
+/**
+ * Leader closes a whole request — with or without files. Tasks that already have approved
+ * creatives complete; the rest are cancelled. The requester gets one email with the reason
+ * (and the Drive link if anything was approved).
+ */
+function api_closeRequest(id, input) {
+  return respond_(function () {
+    var u = requireLeader_();
+    input = input || {};
+    var reason = str_(input.reason, 1000, 'Reason', true);
+    if (reason.length < 3) throw AppError_('VALIDATION', 'Add a short reason.');
+    return withLock_(function () {
+      var req = dbGet_('Requirements', str_(id, 40, 'Request', true));
+      if (!req) { var tt = dbGet_('Tasks', id); req = tt && dbGet_('Requirements', tt.requirementId); }
+      if (!req) throw AppError_('NOT_FOUND', 'Request not found.');
+      var tasks = dbFind_('Tasks', function (t) { return t.requirementId === req.requirementId; });
+      var open = tasks.filter(function (t) { return CLOSED.indexOf(t.status) === -1; });
+      if (!open.length) throw AppError_('INVALID_STATE', 'This request is already finished.');
+      dbUpdate_('Requirements', req.requirementId, { closedAt: nowIso_(), closedBy: u.email, closedReason: reason, updatedAt: nowIso_() });
+      var completed = 0, cancelled = 0;
+      open.forEach(function (t) {
+        // Nothing left waiting for a decision on a closed request.
+        dbFind_('ApprovalRequests', function (x) { return x.taskId === t.taskId && x.status === 'Open'; }).forEach(function (x) {
+          dbUpdate_('ApprovalRequests', x.requestId, { status: 'Closed', closedAt: nowIso_() });
+          try { revokeTokens_(x.requestId, 'request closed'); } catch (e) { /* none */ }
+        });
+        var hasApproved = taskDeliverables_(t.taskId).some(function (d) { return d.status === DSTATUS.APPROVED; });
+        if (hasApproved) { completeTask_(dbGet_('Tasks', t.taskId), u, 'Request closed: ' + reason); completed++; }
+        else {
+          dbUpdate_('Tasks', t.taskId, { status: STATUS.CANCELLED, prevStatus: t.status, updatedAt: nowIso_() });
+          logActivity_(t.taskId, u, 'status', t.status, STATUS.CANCELLED, 'Request closed: ' + reason, 'team');
+          if (t.assigneeEmail && t.assigneeEmail !== u.email) notify_([t.assigneeEmail], 'task_closed', 'Closed: ' + t.title, 'The team leader closed this request — no more work needed.\n\n“' + reason + '”', 'task/' + t.taskId, true);
+          cancelled++;
+        }
+      });
+      dbUpdate_('Requirements', req.requirementId, { status: 'Closed', updatedAt: nowIso_() });
+      var share = null;
+      if (completed) { try { share = shareFinalFolder_(dbGet_('Requirements', req.requirementId)); } catch (e) { share = null; } }
+      if (input.notify !== false && settings_().emailNotifications && mailRule_('req_closed')) {
+        requesterEmails_(req).forEach(function (em) {
+          var track = trackUrl_(issueTrackToken_(em));
+          sendMail_(em, 'Your request was closed (' + req.requirementId + ')',
+            'Hi ' + req.requesterName + ',\n\nThe graphics team closed your request "' + req.title + '".\n\nReason: ' + reason +
+            (share && share.url ? '\n\nThe creatives that were finished are here:\n' + share.url : '') + '\n\nYour requests: ' + track,
+            share && share.url ? { label: 'Open the Drive folder', url: share.url } : { label: 'See my requests', url: track });
+        });
+      }
+      return { completed: completed, cancelled: cancelled };
+    });
+  });
+}
+
+/* ---------- designer shares part of their task with teammates ---------- */
+
+/**
+ * The designer (or leader) hands some creatives to teammates. Each helper gets their own task in the
+ * same request — same brief, due date and Drive folder — so all files still land in one place.
+ * parts: [{ assigneeEmail, count, note }]
+ */
+function api_shareWork(taskId, input) {
+  return respond_(function () {
+    var u = currentUser_();
+    input = input || {};
+    var parts = Array.isArray(input.parts) ? input.parts : [];
+    if (!parts.length || parts.length > 8) throw AppError_('VALIDATION', 'Choose 1 to 8 teammates.');
+    var clean = parts.map(function (p, i) {
+      return { assignee: email_(p.assigneeEmail, 'Teammate ' + (i + 1), true), count: int_(p.count, 1, 50, 'Creatives for teammate ' + (i + 1)), note: str_(p.note, 1000, 'Note', false) };
+    });
+    return withLock_(function () {
+      var t = requireTask_(u, taskId);
+      if (!taskPermissions_(u, t).canShareWork) throw AppError_(isLeader_(u) || settings_().designersCanShare ? 'INVALID_STATE' : 'FORBIDDEN',
+        isLeader_(u) || settings_().designersCanShare ? 'This task can’t be shared now.' : 'Ask your team leader to divide this task.');
+      var seen = {};
+      clean.forEach(function (p) {
+        var m = userByEmail_(p.assignee);
+        if (!m || !bool_(m.active)) throw AppError_('VALIDATION', p.assignee + ' is not an active team member.');
+        if (p.assignee === t.assigneeEmail) throw AppError_('VALIDATION', 'Pick teammates other than the person doing the task.');
+        if (seen[p.assignee]) throw AppError_('VALIDATION', 'Each teammate only once.'); seen[p.assignee] = 1;
+      });
+      var qty = Math.max(1, Number(t.deliverablesRequired) || 1), nSizes = Math.max(1, sizesOf_(t).length);
+      var files = taskDeliverables_(t.taskId).filter(function (d) { return d.status !== DSTATUS.REJECTED && d.status !== DSTATUS.SKIPPED; }).length;
+      var used = Math.ceil(files / nSizes);
+      var give = clean.reduce(function (a, p) { return a + p.count; }, 0);
+      var keep = qty - give;
+      if (keep < Math.max(1, used)) throw AppError_('VALIDATION', 'You can share up to ' + Math.max(0, qty - Math.max(1, used)) + ' creative(s) — ' +
+        (used ? used + ' already uploaded stay with this task.' : 'keep at least one for yourself, or ask the leader to reassign.'));
+      var fixed = t.fixedPoints !== '' && t.fixedPoints !== undefined && t.fixedPoints !== null ? Number(t.fixedPoints) || 0 : null;
+      var owner = displayName_(t.assigneeEmail), base = t.title;
+      var ids = [];
+      clean.forEach(function (p) {
+        var newId = nextSeqId_('GFX'), now = nowIso_(), copy = {};
+        SCHEMA.Tasks.forEach(function (c) { copy[c] = t[c]; });
+        Object.assign(copy, {
+          taskId: newId, title: (base + ' — help from ' + displayName_(p.assignee)).slice(0, 150), deliverablesRequired: String(p.count),
+          assigneeEmail: '', assignedBy: '', assignedAt: '', status: STATUS.READY, prevStatus: '', progress: '0', completedAt: '',
+          dueSoonNotifiedAt: '', overdueNotifiedAt: '', internalNotes: '', bonusPoints: '', reopenedAt: '', reopenReason: '', reopenCount: '',
+          holdReason: '', holdParty: '', holdDept: '', holdSince: '', heldMs: '',
+          fixedPoints: fixed === null ? '' : String(Math.round(fixed * p.count / qty)), createdBy: u.email, createdAt: now, updatedAt: now
+        });
+        dbInsert_('Tasks', copy);
+        logActivity_(newId, u, 'created', '', STATUS.READY, 'Shared from ' + t.taskId + ' by ' + displayName_(u.email), 'team');
+        assignInternal_(u, dbGet_('Tasks', newId), { assignee: p.assignee, dueDate: t.dueDate, dueTime: t.dueTime, priority: t.priority,
+          note: (displayName_(u.email) + ' asked you to help with ' + p.count + ' of the creatives on ' + t.taskId + '.' + (p.note ? '\n\n' + p.note : '')) });
+        ids.push(newId);
+      });
+      var patch = { deliverablesRequired: String(keep), updatedAt: nowIso_() };
+      if (fixed !== null) patch.fixedPoints = String(Math.max(0, fixed - clean.reduce(function (a, p) { return a + Math.round(fixed * p.count / qty); }, 0)));
+      dbUpdate_('Tasks', t.taskId, patch);
+      logActivity_(t.taskId, u, 'shared_work', String(qty), String(keep), 'Shared ' + give + ' creative(s) with ' + clean.map(function (p) { return displayName_(p.assignee) + ' (' + p.count + ')'; }).join(', '), 'team');
+      recomputeTaskStatus_(t.taskId, u);
+      if (!isLeader_(u)) notify_(leaderEmails_(), 'task_shared', owner + ' shared work on ' + t.title,
+        owner + ' handed ' + give + ' of ' + qty + ' creatives on ' + t.taskId + ' to ' + clean.map(function (p) { return displayName_(p.assignee) + ' (' + p.count + ')'; }).join(', ') +
+        '. Everything still goes to the same Drive folder.', 'task/' + t.taskId, false);
+      return { taskIds: ids, kept: keep };
     });
   });
 }

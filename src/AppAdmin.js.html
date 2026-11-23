@@ -307,6 +307,8 @@ VIEWS.settings = function (arg, el, token) {
         txt('tokenExpiryDays', 'Link expiry (days)', '1–90. Links also stop working once a decision is made or a newer version is sent.', 'number') +
         chk('allowReviewerDownload', 'Let reviewers download the file (up to 20 MB)') + '<p class="faint small" style="margin:0">Emailing review links to requesters is under <b>Emails</b>.</p>') +
       sec('Workflow', chk('autoCompleteOnApproval', 'Mark tasks Completed automatically once every required creative is approved') +
+        chk('designersCanShare', 'Let designers share part of their task with teammates (same request, same Drive folder)') +
+        chk('designersCanReopen', 'Let designers reopen their own finished task to replace a file (no reopen bonus for that)') +
         chk('requesterCanReopen', 'Let requesters reopen their finished request for changes from “My requests” (off: they send a “Need changes?” message and you decide)') +
         '<div class="grid-2">' + txt('workloadThreshold', 'Workload alert at (active tasks)', '', 'number') + txt('dueSoonHours', 'Due-soon reminder (hours before)', '', 'number') + '</div>' +
         txt('priorities', 'Priorities (comma separated, highest last)', 'Used in the form and on tasks.')) +
@@ -386,7 +388,7 @@ VIEWS.settings = function (arg, el, token) {
       var patch = {};
       ['companyName', 'portalName', 'allowedDomain', 'publicUrl', 'internalUrl', 'brandGuidelinesUrl', 'reviewerIdentity', 'priorities', 'allowedExtensions', 'publicExtensions', 'creativeTypes'].forEach(function (k) { patch[k] = $('#s_' + k).value.trim(); });
       ['tokenExpiryDays', 'workloadThreshold', 'dueSoonHours', 'maxUploadMB', 'maxPublicUploadMB', 'maxPublicFiles'].forEach(function (k) { patch[k] = Number($('#s_' + k).value); });
-      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'autoCompleteOnApproval', 'emailNotifications', 'teamChat', 'allowPersonalTheme', 'countEachSize', 'requesterCanReopen'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
+      ['allowEmbedding', 'requireRequesterDomain', 'allowReviewerDownload', 'autoCompleteOnApproval', 'emailNotifications', 'teamChat', 'allowPersonalTheme', 'countEachSize', 'requesterCanReopen', 'designersCanShare', 'designersCanReopen'].forEach(function (k) { patch[k] = $('#s_' + k).checked; });
       // The per-email switches below replace the two older checkboxes.
       patch.emailRequesterOnSubmit = true; patch.sendReviewLinkToRequester = true;
       patch.emailRules = {};

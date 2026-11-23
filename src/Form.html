@@ -63,7 +63,7 @@
   .st-ready-for-your-review { background: var(--warn-soft); color: var(--warn); }
   .st-being-revised { background: var(--info-soft); color: var(--info); }
   .st-completed { background: var(--ok-soft); color: var(--ok); }
-  .st-cancelled { background: var(--muted-soft); color: var(--text-3); }
+  .st-cancelled, .st-closed { background: var(--muted-soft); color: var(--text-3); }
   .ro-list { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
   .ro-item { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
   .ro-item:last-child { border-bottom: 0; }
@@ -388,6 +388,7 @@ function reqCard(r) {
     ' · needed by ' + fmtDue(r.deadlineDate, r.deadlineTime) + ' · ' + h(r.quantity) + ' creative(s)</div></div>' + st + '</div>' + owners +
     (r.hold ? '<div class="alert warn" style="margin-top:12px"><b>We need something from you' + (r.hold.dept ? ' (' + h(r.hold.dept) + ')' : '') + '</b><div class="pre" style="margin-top:4px">' + h(r.hold.reason) +
       '</div><div class="small" style="margin-top:6px">The design is ready to see below. The work is paused until we get this.</div></div>' : '') +
+    (r.closedReason ? '<div class="alert info" style="margin-top:12px"><b>Closed by the graphics team</b><div class="pre" style="margin-top:4px">' + h(r.closedReason) + '</div></div>' : '') +
     (r.reopened ? '<div class="alert info" style="margin-top:12px">Reopened for changes — the ★ final files stay available until the new ones are approved.</div>' : '') +
     progress + galleryHtml +
     (r.campaign ? '<div class="camp-strip"><span>' + icon('board') + ' Part of <b>' + h(r.campaign.name) + '</b> — ' + r.campaign.approved + ' approved creative(s) from everyone</span>' +

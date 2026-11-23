@@ -97,7 +97,7 @@ function api_getMyRequests(token) {
         requirementId: r.requirementId, title: r.title, brief: String(r.brief || '').slice(0, 280),
         department: r.department, quantity: r.quantity, submittedAt: r.submittedAt,
         deadlineDate: r.preferredDate, deadlineTime: r.preferredTime || '',
-        status: requesterStatus_(tasks),
+        status: r.closedAt ? 'Closed' : requesterStatus_(tasks), closedReason: r.closedAt ? r.closedReason || '' : '',
         approved: dels.filter(function (d) { return d.status === DSTATUS.APPROVED; }).length,
         required: required || Number(r.quantity) || 0,
         awaiting: awaiting,

@@ -358,7 +358,7 @@ scenario('6 + 9. Approval recorded & notified; 1 of 5 approved does not complete
 
 scenario('Approval after change: a new version of an approved creative needs fresh approval', () => {
   err(call(LEADER, 'api_setTaskStatus', task1.taskId, 'In Progress', { reason: 'x' }), 'INVALID_TRANSITION');   // use Reopen
-  err(call(A, 'api_reopenTask', task1.taskId, { reason: 'Client wants one tweak', dueDate: future(2) }), 'FORBIDDEN');
+  err(call(B, 'api_reopenTask', task1.taskId, { reason: 'Client wants one tweak', dueDate: future(2) }), 'NOT_FOUND');   // only its own designer or the leader
   ok(call(LEADER, 'api_reopenTask', task1.taskId, { reason: 'Client wants one tweak', deliverableIds: [deliv1], dueDate: future(2) }));
   const ro = ok(call(A, 'api_getTask', task1.taskId));
   assert.strictEqual(ro.task.status, 'Changes Requested');
@@ -1762,6 +1762,108 @@ scenario('Requester emails: confirmation, then only the Drive link when done (ca
   state.blockPublicSharing = false;
   // the leader can still turn per-creative review emails back on
   assert.strictEqual(ok(call(LEADER, 'api_getSettings')).emailKinds.find(k => k.id === 'req_review_mail').def, false);
+});
+
+scenario('Leader does a request themselves: uploads on an unassigned task, files go final, request completes with the Drive link', () => {
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Ritu', department: 'Ops', email: 'ritu@example.org', brief: 'Quick label fix', preferredDate: future(3), quantity: 2 }));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  let d = ok(call(LEADER, 'api_getTask', tid));
+  assert.ok(!d.task.assigneeEmail && d.permissions.canUpload && d.permissions.canDeliver);
+  assert.ok(!ok(call(LEADER, 'api_getTask', tid)).permissions.canShareWork, 'nothing to share before anyone is on it');
+  err(call(LEADER, 'api_leaderDeliver', tid, []), 'VALIDATION');
+  const v1 = upload(LEADER, { kind: 'version', taskId: tid, title: 'Label front' }, 'f.png', png(200)).versionId;
+  const v2 = upload(LEADER, { kind: 'version', taskId: tid, title: 'Label back' }, 'b.png', png(200)).versionId;
+  const n0 = state.mail.length;
+  const r = ok(call(LEADER, 'api_leaderDeliver', tid, [v1, v2]));
+  assert.strictEqual(r.approved, 2);
+  d = ok(call(LEADER, 'api_getTask', tid));
+  assert.strictEqual(d.task.status, 'Completed'); assert.strictEqual(d.task.assigneeEmail, LEADER);
+  assert.ok(d.deliverables.every(x => x.status === 'Approved'));
+  const m = state.mail.slice(n0).filter(x => x.to === 'ritu@example.org');
+  assert.strictEqual(m.length, 1); assert.ok(/Google Drive link/.test(m[0].subject));
+  // designers can't use it
+  const t2 = ok(call(LEADER, 'api_createDirectTask', { title: 'X', assigneeEmail: A, dueDate: future(3), quantity: 1 })).taskId;
+  err(call(A, 'api_leaderDeliver', t2, []), 'FORBIDDEN');
+});
+
+scenario('Leader closes a request: with nothing done (cancelled) or part done (completes, Drive link); requester told once', () => {
+  const s1 = ok(call('', 'api_submitRequirement', { requesterName: 'Om', department: 'Sales', email: 'om@example.org', brief: 'Not needed any more', preferredDate: future(3), quantity: 1 }));
+  const t1 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s1.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', t1, { assigneeEmail: A, dueDate: future(3), priority: 'Low' }));
+  err(call(A, 'api_closeRequest', s1.requirementId, { reason: 'dup' }), 'FORBIDDEN');
+  err(call(LEADER, 'api_closeRequest', s1.requirementId, { reason: '' }), 'VALIDATION');
+  let n0 = state.mail.length;
+  const c1 = ok(call(LEADER, 'api_closeRequest', s1.requirementId, { reason: 'Campaign dropped' }));
+  assert.deepStrictEqual([c1.completed, c1.cancelled], [0, 1]);
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t1)).task.status, 'Cancelled');
+  const om = state.mail.slice(n0).filter(x => x.to === 'om@example.org');
+  assert.strictEqual(om.length, 1); assert.ok(/closed/.test(om[0].subject) && /Campaign dropped/.test(om[0].body));
+  assert.ok(ok(call(A, 'api_getNotifications')).items.some(x => /Closed:/.test(x.title)));
+  const my = ok(call('', 'api_getMyRequests', s1.trackToken)).requests.find(x => x.requirementId === s1.requirementId);
+  assert.strictEqual(my.status, 'Closed'); assert.strictEqual(my.closedReason, 'Campaign dropped'); assert.ok(!my.canEdit && !my.canReopen);
+  err(call(LEADER, 'api_closeRequest', s1.requirementId, { reason: 'again' }), 'INVALID_STATE');
+  // part done: 1 of 3 approved → that task completes, files linked, no separate "ready" email
+  const s2 = ok(call('', 'api_submitRequirement', { requesterName: 'Om', department: 'Sales', email: 'om@example.org', brief: 'Three posts', preferredDate: future(3), quantity: 3 }));
+  const t2 = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === s2.requirementId).taskId;
+  ok(call(LEADER, 'api_assignTask', t2, { assigneeEmail: A, dueDate: future(3), priority: 'Low' }));
+  const v = upload(A, { kind: 'version', taskId: t2, title: 'Post 1' }, 'p.png', png(200)).versionId;
+  const w = upload(A, { kind: 'version', taskId: t2, title: 'Post 2' }, 'q.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', t2, [v, w])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  n0 = state.mail.length;
+  const c2 = ok(call(LEADER, 'api_closeRequest', t2, { reason: 'One is enough' }));
+  assert.deepStrictEqual([c2.completed, c2.cancelled], [1, 0]);
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t2)).task.status, 'Completed');
+  const om2 = state.mail.slice(n0).filter(x => x.to === 'om@example.org');
+  assert.strictEqual(om2.length, 1, 'only the closure email'); assert.ok(/drive\.google\.com/.test(om2[0].body));
+  assert.ok(!env.ctx.dbFind_('ApprovalRequests', x => x.versionId === w && x.status === 'Open').length, 'pending one no longer waits');
+  // quiet close
+  const s3 = ok(call('', 'api_submitRequirement', { requesterName: 'Om', department: 'Sales', email: 'om@example.org', brief: 'Quiet close', preferredDate: future(3), quantity: 1 }));
+  n0 = state.mail.length;
+  ok(call(LEADER, 'api_closeRequest', s3.requirementId, { reason: 'Spam', notify: false }));
+  assert.ok(!state.mail.slice(n0).some(x => x.to === 'om@example.org'));
+});
+
+scenario('Designer shares part of their task with teammates: same request & folder; limits; leader told; switchable', () => {
+  const d0 = ok(call(LEADER, 'api_createDirectTask', { title: 'Diwali Meta ads', assigneeEmail: A, dueDate: future(5), quantity: 10, fixedPoints: 50 }));
+  const v = upload(A, { kind: 'version', taskId: d0.taskId, title: 'Ad 1' }, 'a1.png', png(200)).versionId;
+  err(call(A, 'api_shareWork', d0.taskId, { parts: [{ assigneeEmail: B, count: 10 }] }), 'VALIDATION');
+  err(call(A, 'api_shareWork', d0.taskId, { parts: [{ assigneeEmail: A, count: 2 }] }), 'VALIDATION');
+  err(call(B, 'api_shareWork', d0.taskId, { parts: [{ assigneeEmail: B, count: 2 }] }), 'NOT_FOUND');
+  const r = ok(call(A, 'api_shareWork', d0.taskId, { parts: [{ assigneeEmail: B, count: 4, note: 'Take the story sizes' }] }));
+  assert.strictEqual(r.kept, 6); assert.strictEqual(r.taskIds.length, 1);
+  const mine = ok(call(A, 'api_getTask', d0.taskId)).task, help = ok(call(B, 'api_getTask', r.taskIds[0])).task;
+  assert.strictEqual(mine.deliverablesRequired, '6'); assert.strictEqual(help.deliverablesRequired, '4');
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', r.taskIds[0])).task.assigneeEmail, B); assert.strictEqual(help.requirementId, mine.requirementId, 'same request → same Drive folder');
+  assert.strictEqual(help.dueDate, mine.dueDate);
+  assert.strictEqual(Number(mine.fixedPoints) + Number(help.fixedPoints), 50, 'fixed points split, not doubled');
+  assert.ok(ok(call(B, 'api_getNotifications')).items.some(x => /help/.test(x.body)));
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(x => /shared work/.test(x.title)));
+  assert.ok(ok(call(A, 'api_getTask', d0.taskId)).activity.some(a => a.action === 'shared_work'));
+  // switched off → designers ask the leader
+  ok(call(LEADER, 'api_saveSettings', { designersCanShare: false })); env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(!ok(call(A, 'api_getTask', d0.taskId)).permissions.canShareWork);
+  err(call(A, 'api_shareWork', d0.taskId, { parts: [{ assigneeEmail: B, count: 1 }] }), 'FORBIDDEN');
+  ok(call(LEADER, 'api_saveSettings', { designersCanShare: true })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
+scenario('Designer reopens their own finished task to replace a file; no reopen bonus for that; leader told; switchable', () => {
+  ok(call(LEADER, 'api_saveSettings', { pointsReopen: 15 })); env.ctx.SETTINGS_MEMO_ = null;
+  const d = ok(call(LEADER, 'api_createDirectTask', { title: 'Honey label', assigneeEmail: A, dueDate: future(3), quantity: 1 }));
+  const v = upload(A, { kind: 'version', taskId: d.taskId, title: 'Label' }, 'l.png', png(200));
+  ok(call(A, 'api_submitForApproval', d.taskId, [v.versionId])); ok(call(LEADER, 'api_leaderDecision', v.versionId, 'approved', ''));
+  assert.ok(ok(call(A, 'api_getTask', d.taskId)).permissions.canReopen);
+  const before = ok(call(A, 'api_listRewards')).me.breakdown.reopen;
+  ok(call(A, 'api_reopenTask', d.taskId, { reason: 'Fixing the barcode position', dueDate: future(1) }));
+  assert.strictEqual(ok(call(A, 'api_getTask', d.taskId)).task.status, 'Changes Requested');
+  assert.ok(ok(call(LEADER, 'api_getNotifications')).items.some(x => /reopened/.test(x.title)));
+  const v2 = upload(A, { kind: 'version', taskId: d.taskId, deliverableId: v.deliverableId }, 'l2.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', d.taskId, [v2])); ok(call(LEADER, 'api_leaderDecision', v2, 'approved', ''));
+  assert.strictEqual(ok(call(A, 'api_getTask', d.taskId)).task.status, 'Completed');
+  assert.strictEqual(ok(call(A, 'api_listRewards')).me.breakdown.reopen, before, 'no bonus for reopening your own work');
+  ok(call(LEADER, 'api_saveSettings', { designersCanReopen: false })); env.ctx.SETTINGS_MEMO_ = null;
+  assert.ok(!ok(call(A, 'api_getTask', d.taskId)).permissions.canReopen);
+  err(call(A, 'api_reopenTask', d.taskId, { reason: 'one more change', dueDate: future(1) }), 'FORBIDDEN');
+  ok(call(LEADER, 'api_saveSettings', { designersCanReopen: true })); env.ctx.SETTINGS_MEMO_ = null;
 });
 
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {

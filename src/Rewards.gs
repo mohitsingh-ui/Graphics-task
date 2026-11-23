@@ -130,6 +130,7 @@ function pointsTable_(inPeriod, ledger) {
       if (a.action !== 'reopened') return;
       var t = tasks[a.taskId];
       if (!t || isFixed(t) || t.status !== STATUS.COMPLETED || !t.assigneeEmail || !t.completedAt || a.createdAt > t.completedAt) return;
+      if (String(a.actorEmail || '').toLowerCase() === String(t.assigneeEmail).toLowerCase()) return;   // reopened their own task: no bonus
       ev(t.assigneeEmail, 'reopen', Number(s.pointsReopen), 1, t.completedAt, t.taskId, 'Reopened task finished', String(a.note || '').split(' · ')[0]);
       P(t.assigneeEmail).reopen += Number(s.pointsReopen); P(t.assigneeEmail).reopenCount++;
     });
