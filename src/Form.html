@@ -478,7 +478,7 @@ function renderForm() {
   $('#micBtn').onclick = function () { startRecording('audio'); };
   $('#camBtn').onclick = function () { startRecording('video'); };
   $('#recStop').onclick = function () { stopRecording(true); };
-  $('#recCancel').onclick = function () { stopRecording(false); };
+  $('#recCancel').onclick = function () { if (POPREC) { popClosed(); return toast('Recording discarded'); } stopRecording(false); };
   inp.onchange = function () { addFiles(inp.files); inp.value = ''; };
   ['dragenter', 'dragover'].forEach(function (ev) { mail.addEventListener(ev, function (e) { e.preventDefault(); mail.classList.add('dragging'); }); });
   ['dragleave', 'drop'].forEach(function (ev) { mail.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || !mail.contains(e.relatedTarget)) mail.classList.remove('dragging'); }); });
@@ -502,10 +502,26 @@ function pickRecType(kind) {
   return '';
 }
 
+/**
+ * Can this page use the mic / camera itself? The portal runs inside Google's frame, which
+ * normally isn't allowed to — then we record in a small window of its own instead, where the
+ * browser can ask "Allow microphone?" like any website. Either way: tap, talk, Done. No file picker.
+ */
+function recordInPage(kind) {
+  if (window.FORCE_REC_POPUP) return false;
+  var fp = document.permissionsPolicy || document.featurePolicy;
+  if (fp && fp.allowsFeature) { try { return fp.allowsFeature(kind === 'audio' ? 'microphone' : 'camera'); } catch (e) { /* fall through */ } }
+  try { return window.self === window.top; } catch (e) { return false; }
+}
+
+function canRecordHere() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder); }
+
 function startRecording(kind) {
   if (REC) return;
+  if (POPREC && !POPREC.win.closed) { try { POPREC.win.focus(); } catch (e) { } return; }
   if (FILES.length >= CFG.maxFiles) return toast('You can attach up to ' + CFG.maxFiles + ' files.', true);
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) return recordFallback(kind);
+  if (!window.MediaRecorder) return toast('This browser can’t record. Please open the form in Chrome, Edge or Safari (latest version).', true);
+  if (!recordInPage(kind) || !canRecordHere()) return openRecorderWindow(kind);
   var cons = kind === 'audio' ? { audio: { echoCancellation: true, noiseSuppression: true } } :
     { audio: true, video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } };
   navigator.mediaDevices.getUserMedia(cons).then(function (stream) {
@@ -525,10 +541,7 @@ function startRecording(kind) {
       if (secs >= REC_MAX[kind]) { toast('That’s the maximum length — saved.'); stopRecording(true); }
     }, 250);
   }).catch(function (err) {
-    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
-      toast('Your browser blocked the ' + (kind === 'audio' ? 'microphone' : 'camera') + '. Allow it in the address bar, or record with your phone’s recorder.', true);
-      return recordFallback(kind);
-    }
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) return openRecorderWindow(kind);
     toast('No ' + (kind === 'audio' ? 'microphone' : 'camera') + ' found on this device.', true);
   });
 }
@@ -548,16 +561,22 @@ function finishRecording() {
   $('#micBtn').disabled = $('#camBtn').disabled = false;
   var lv = $('#liveCam'); if (lv) lv.remove();
   if (!r.keep) return toast('Recording discarded');
-  var secs = (Date.now() - r.started) / 1000;
-  if (secs < 1 || !r.chunks.length) return toast('That was too short — try again.', true);
-  var type = (r.rec.mimeType || r.chunks[0].type || (r.kind === 'audio' ? 'audio/webm' : 'video/webm')).split(';')[0];
-  var ex = /mp4/.test(type) ? (r.kind === 'audio' ? 'm4a' : 'mp4') : /ogg/.test(type) ? 'ogg' : 'webm';
-  var n = FILES.filter(function (x) { return x.note === r.kind; }).length + 1;
-  var file = new File(r.chunks, (r.kind === 'audio' ? 'Voice note ' : 'Video note ') + n + '.' + ex, { type: type });
+  var type = (r.rec.mimeType || (r.chunks[0] && r.chunks[0].type) || (r.kind === 'audio' ? 'audio/webm' : 'video/webm'));
+  addRecording(r.chunks, type, r.kind, (Date.now() - r.started) / 1000);
+}
+
+/** A finished recording (from this page or the recorder window) becomes an attachment. */
+function addRecording(parts, type, kind, secs) {
+  if (secs < 1 || !parts.length) return toast('That was too short — try again.', true);
+  type = String(type || '').split(';')[0] || (kind === 'audio' ? 'audio/webm' : 'video/webm');
+  var ex = /mp4/.test(type) ? (kind === 'audio' ? 'm4a' : 'mp4') : /ogg/.test(type) ? 'ogg' : 'webm';
+  var n = FILES.filter(function (x) { return x.note === kind; }).length + 1;
+  var file = new File(parts, (kind === 'audio' ? 'Voice note ' : 'Video note ') + n + '.' + ex, { type: type });
   if (file.size > CFG.maxFileMB * 1048576) return toast('That recording is over ' + CFG.maxFileMB + ' MB — please record a shorter one.', true);
-  FILES.push({ file: file, progress: 0, state: 'ready', note: r.kind, secs: secs, url: URL.createObjectURL(file) });
+  if (FILES.length >= CFG.maxFiles) return toast('You can attach up to ' + CFG.maxFiles + ' files.', true);
+  FILES.push({ file: file, progress: 0, state: 'ready', note: kind, secs: secs, url: URL.createObjectURL(file) });
   renderFiles();
-  toast((r.kind === 'audio' ? 'Voice note' : 'Video') + ' added — it’s sent with your request');
+  toast((kind === 'audio' ? 'Voice note' : 'Video') + ' added — it’s sent with your request');
 }
 
 function showLivePreview(stream) {
@@ -567,22 +586,158 @@ function showLivePreview(stream) {
   $('#recBar').insertAdjacentElement('afterend', v);
 }
 
-/** No live recording here (old browser, or the page isn't allowed the mic): use the phone's own recorder. */
-function recordFallback(kind) {
-  var i = document.createElement('input');
-  i.type = 'file'; i.accept = kind === 'audio' ? 'audio/*' : 'video/*'; i.setAttribute('capture', kind === 'audio' ? '' : 'user');
-  i.onchange = function () {
-    var f = i.files && i.files[0]; if (!f) return;
-    if (f.size > CFG.maxFileMB * 1048576) return toast('That recording is over ' + CFG.maxFileMB + ' MB.', true);
-    var e = ext(f.name).toLowerCase();
-    if (CFG.extensions.indexOf(e) === -1) return toast('That recording format can’t be attached — try a different recorder app.', true);
-    var a = document.createElement(kind === 'audio' ? 'audio' : 'video');
-    var url = URL.createObjectURL(f);
-    a.preload = 'metadata'; a.src = url;
-    a.onloadedmetadata = function () { FILES.push({ file: f, progress: 0, state: 'ready', note: kind, secs: isFinite(a.duration) ? a.duration : 0, url: url }); renderFiles(); };
-    a.onerror = function () { FILES.push({ file: f, progress: 0, state: 'ready', note: kind, secs: 0, url: url }); renderFiles(); };
+/* ---------- recorder window (used when the portal's frame can't use the mic) ---------- */
+var POPREC = null;
+
+function openRecorderWindow(kind) {
+  var w = null;
+  try { w = window.open('', 'rosierRecorder', 'popup=yes,width=420,height=' + (kind === 'video' ? 640 : 480)); } catch (e) { w = null; }
+  if (!w) return toast('Your browser stopped the recorder from opening. Allow pop-ups for this page (icon at the right of the address bar), then tap ' + (kind === 'audio' ? 'Voice note' : 'Video') + ' again.', true);
+  var cs = getComputedStyle(document.documentElement);
+  var opts = {
+    kind: kind, max: REC_MAX[kind], types: kind === 'audio' ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'] : ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'],
+    accent: (cs.getPropertyValue('--accent') || '#a56312').trim(), bg: (cs.getPropertyValue('--bg') || '#f6f5f2').trim(), text: (cs.getPropertyValue('--text') || '#1f1d1a').trim()
   };
-  i.click();
+  POPREC = { kind: kind, win: w };
+  window.__rosierRec = {
+    done: function (buf, type, k, secs) {
+      var bytes = new Uint8Array(buf).slice(0);   // copy now: the recorder window is about to close
+      addRecording([bytes], type, k, secs);
+      popClosed();
+    },
+    cancel: function () { toast('Recording discarded'); popClosed(); }
+  };
+  var d = w.document;
+  d.open();
+  d.write('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + (kind === 'audio' ? 'Voice note' : 'Video note') + ' — Rosier</title></head><body class="ask"></body>' +
+    '<script>(' + recorderMain.toString() + ')(' + JSON.stringify(opts) + ');<\/script></html>');
+  d.close();
+  $('#micBtn').disabled = $('#camBtn').disabled = true;
+  $('#recLabel').textContent = 'Recording in the small window — tap ✓ there when you finish';
+  $('#recTime').textContent = '';
+  $('#recStop').classList.add('hidden');
+  $('#recBar').classList.remove('hidden');
+  POPREC.watch = setInterval(function () { if (!POPREC || POPREC.win.closed) popClosed(); }, 500);
+}
+
+function popClosed() {
+  if (!POPREC) return;
+  clearInterval(POPREC.watch);
+  try { if (!POPREC.win.closed) POPREC.win.close(); } catch (e) { }
+  POPREC = null;
+  $('#recBar').classList.add('hidden');
+  $('#recStop').classList.remove('hidden');
+  $('#micBtn').disabled = $('#camBtn').disabled = false;
+}
+
+/**
+ * Runs inside the recorder window (its source is written into it). Asks for the mic/camera
+ * straight away, records, and hands the recording back to the form on ✓.
+ */
+function recorderMain(o) {
+  var audio = o.kind === 'audio', dev = audio ? 'microphone' : 'camera and microphone';
+  var stream = null, rec = null, chunks = [], started = 0, timer = null, finishing = false;
+  document.head.insertAdjacentHTML('beforeend', '<style>' +
+    '*{box-sizing:border-box}html,body{height:100%;margin:0}' +
+    'body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:' + o.bg + ';color:' + o.text + ';display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:22px;text-align:center}' +
+    'h1{font-size:17px;margin:0;font-weight:600}' +
+    '#msg{max-width:340px;color:#5d5850;font-size:14px;margin:0}' +
+    '#big{width:116px;height:116px;border-radius:50%;background:#e53935;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 0 rgba(229,57,53,.45)}' +
+    '#big svg{width:48px;height:48px;color:#fff}' +
+    'body.rec #big{animation:pulse 1.4s infinite}body.ask #big,body.blocked #big{background:#c9c3b8}' +
+    '@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(229,57,53,.45)}70%{box-shadow:0 0 0 26px rgba(229,57,53,0)}100%{box-shadow:0 0 0 0 rgba(229,57,53,0)}}' +
+    '#time{font-size:30px;font-variant-numeric:tabular-nums;font-weight:600;letter-spacing:.5px}' +
+    '#prev{width:100%;max-width:360px;border-radius:14px;background:#000;transform:scaleX(-1);display:none}body.rec #prev.on{display:block}' +
+    '.row{display:flex;gap:14px;align-items:center}' +
+    'button{font:inherit;border:0;border-radius:99px;cursor:pointer;padding:12px 20px;font-weight:600}' +
+    '#cancel{background:#fff;border:1px solid #d6d1c6;color:' + o.text + '}' +
+    '#done{background:' + o.accent + ';color:#fff;width:64px;height:64px;padding:0;font-size:28px}' +
+    '#retry{background:' + o.accent + ';color:#fff}' +
+    'body:not(.rec) #done,body:not(.rec) #time,body:not(.blocked) #retry,body:not(.blocked) #help{display:none}' +
+    'body.rec #big.vid{display:none}' +
+    '#help{max-width:340px;text-align:left;background:#fff;border:1px solid #e7e4dd;border-radius:12px;padding:12px 14px;font-size:13px;color:#3a3631}#help ol{margin:6px 0 0;padding-left:18px}' +
+    '</style>');
+  var micSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></svg>';
+  var camSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3"/></svg>';
+  document.body.innerHTML =
+    '<h1>' + (audio ? 'Voice note' : 'Video note') + '</h1>' +
+    '<div id="big"' + (audio ? '' : ' class="vid"') + '>' + (audio ? micSvg : camSvg) + '</div>' +
+    '<video id="prev" muted autoplay playsinline' + (audio ? '' : ' class="on"') + '></video>' +
+    '<div id="time">0:00</div>' +
+    '<p id="msg"></p>' +
+    '<div id="help"><b>To allow it:</b><ol><li>Click the lock / tune icon at the left of the address bar (on a phone: ⋮ → Settings → Site settings).</li>' +
+    '<li>Set <b>' + (audio ? 'Microphone' : 'Camera and Microphone') + '</b> to <b>Allow</b>.</li><li>Tap <b>Try again</b>.</li></ol></div>' +
+    '<div class="row"><button id="cancel" type="button">✕ Cancel</button><button id="done" type="button" title="Done — add to my request">✓</button><button id="retry" type="button">Try again</button></div>';
+  var $ = function (id) { return document.getElementById(id); };
+  function state(s, msg) { document.body.className = s; $('msg').textContent = msg; }
+  function fmt(n) { n = Math.max(0, Math.round(n)); return Math.floor(n / 60) + ':' + ('0' + (n % 60)).slice(-2); }
+  function stopTracks() { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+  function pick() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    for (var i = 0; i < o.types.length; i++) if (MediaRecorder.isTypeSupported(o.types[i])) return o.types[i];
+    return '';
+  }
+  function start() {
+    state('ask', 'Your browser will ask to use your ' + dev + ' — tap “Allow”. Recording starts straight away.');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      return state('blocked', 'This browser can’t record. Please use the latest Chrome, Edge or Safari.');
+    }
+    var cons = audio ? { audio: { echoCancellation: true, noiseSuppression: true } } :
+      { audio: true, video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } };
+    navigator.mediaDevices.getUserMedia(cons).then(function (s) {
+      stream = s; chunks = [];
+      var type = pick();
+      rec = new MediaRecorder(s, Object.assign(type ? { mimeType: type } : {}, audio ? { audioBitsPerSecond: 48000 } : { videoBitsPerSecond: 800000, audioBitsPerSecond: 64000 }));
+      rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.start(1000);
+      started = Date.now();
+      if (!audio) { $('prev').srcObject = s; }
+      state('rec', audio ? 'Recording… speak now. Tap ✓ when you’re done.' : 'Recording… Tap ✓ when you’re done.');
+      timer = setInterval(function () {
+        var secs = (Date.now() - started) / 1000;
+        $('time').textContent = fmt(secs) + ' / ' + fmt(o.max);
+        if (secs >= o.max) finish();
+      }, 250);
+    }).catch(function (err) {
+      var n = err && err.name;
+      if (n === 'NotFoundError' || n === 'OverconstrainedError') return state('blocked', 'No ' + (audio ? 'microphone' : 'camera') + ' found on this device. Plug one in, then tap Try again.');
+      if (n === 'NotReadableError') return state('blocked', 'Another app is using your ' + (audio ? 'microphone' : 'camera') + '. Close it, then tap Try again.');
+      state('blocked', 'Your browser is blocking the ' + dev + '.');
+    });
+  }
+  function finish() {
+    if (finishing || !rec) return;
+    finishing = true;
+    clearInterval(timer);
+    var secs = (Date.now() - started) / 1000;
+    rec.onstop = function () {
+      stopTracks();
+      var type = rec.mimeType || (chunks[0] && chunks[0].type) || (audio ? 'audio/webm' : 'video/webm');
+      var blob = new Blob(chunks, { type: type });
+      state('ask', 'Adding it to your request…');
+      var fr = new FileReader();
+      fr.onload = function () {
+        try { window.opener.__rosierRec.done(fr.result, type, o.kind, secs); }
+        catch (e) { finishing = false; return state('blocked', 'The request form was closed, so the recording couldn’t be added. Open the form again and record there.'); }
+        window.close();
+      };
+      fr.readAsArrayBuffer(blob);
+    };
+    try { rec.state !== 'inactive' ? rec.stop() : rec.onstop(); } catch (e) { rec.onstop(); }
+  }
+  function cancel() {
+    clearInterval(timer);
+    if (rec) { rec.onstop = null; try { if (rec.state !== 'inactive') rec.stop(); } catch (e) { } }
+    stopTracks();
+    try { window.opener.__rosierRec.cancel(); } catch (e) { }
+    window.close();
+  }
+  $('done').onclick = finish;
+  $('cancel').onclick = cancel;
+  $('retry').onclick = start;
+  window.addEventListener('pagehide', stopTracks);
+  start();
 }
 
 function addFiles(list) {
