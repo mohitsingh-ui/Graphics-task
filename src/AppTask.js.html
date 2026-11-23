@@ -383,6 +383,43 @@ function folderField(id, value, root, options) {
     '<span class="hint">Pick a folder already used here or type a new one. Use / for sub-folders. Everything lands in one Drive link.</span></div>';
 }
 
+/** Campaign picker for the Assign / Divide windows: none, an existing campaign, or a new one. */
+function campaignField(id) {
+  var cur = TASK.campaign ? TASK.campaign.campaignId : '', sug = TASK.suggestedCampaign || '';
+  return '<div class="field"><label for="' + id + '">Campaign <span class="faint">(optional)</span></label>' +
+    '<select id="' + id + '"><option value="">No campaign — its own folder</option>' + (TASK.campaigns || []).map(function (c) {
+      return '<option value="' + h(c.campaignId) + '"' + (c.campaignId === cur ? ' selected' : '') + '>' + h(c.name) + '</option>';
+    }).join('') + '<option value="__new">+ New campaign…</option></select>' +
+    '<input type="text" id="' + id + 'N" class="hidden" maxlength="80" placeholder="New campaign name, e.g. Diwali Sale 2026" style="margin-top:8px">' +
+    '<span class="hint">All creatives of a campaign go into one Drive folder.' + (sug && !cur ? ' The requester said: <b>' + h(sug) + '</b> — <a href="#" data-usesug="' + id + '">use it</a>.' : '') + '</span></div>';
+}
+
+/** Wires the campaign picker; returns a getter → { campaignId } / { newCampaign } / {} (unchanged). */
+function wireCampaignField(root, id) {
+  var sel = $('#' + id, root), inp = $('#' + id + 'N', root), cur = TASK.campaign ? TASK.campaign.campaignId : '';
+  if (!sel) return function () { return {}; };
+  var reqId = TASK.task.requirementId;
+  var showRoot = function () {
+    var fr = $('.folder-root', root); if (!fr) return;
+    var name = sel.value === '__new' ? (inp.value.trim() || 'New campaign') : sel.value ? sel.options[sel.selectedIndex].text : reqId;
+    fr.innerHTML = icon('file') + ' ' + h(name) + ' /';
+  };
+  var sync = function () { inp.classList.toggle('hidden', sel.value !== '__new'); if (sel.value === '__new') inp.focus(); showRoot(); };
+  sel.onchange = sync;
+  inp.oninput = showRoot;
+  var use = $('[data-usesug="' + id + '"]', root);
+  if (use) use.onclick = function (e) {
+    e.preventDefault();
+    var sug = TASK.suggestedCampaign, match = (TASK.campaigns || []).filter(function (c) { return c.name.toLowerCase() === sug.toLowerCase(); })[0];
+    if (match) sel.value = match.campaignId; else { sel.value = '__new'; inp.value = sug; }
+    sync();
+  };
+  return function () {
+    if (sel.value === '__new') return { newCampaign: inp.value.trim() };
+    return sel.value === cur ? {} : { campaignId: sel.value };
+  };
+}
+
 /** Sizes for every creative, e.g. desktop + mobile. Each size is its own file; together they count as one creative. */
 function sizesField(id, value) {
   var v = Array.isArray(value) ? value.join('\n') : (value || '');
@@ -456,6 +493,7 @@ function assignModal() {
       '<div class="field"><label class="req">Due date</label><input type="date" id="add" value="' + h(t.dueDate) + '"></div>' +
       '<div class="field"><label>Due time</label><input type="time" id="adt" step="900" value="' + h(t.dueTime || '') + '"><span class="hint">Empty = end of day</span></div></div>' +
       '<div class="field"><label class="req">Priority</label><select id="apr">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div>' +
+      campaignField('acp') +
       folderField('afo', t.folderPath || t.creativeType || '', TASK.folderRoot, TASK.folderOptions) +
       sizesField('asz', t.sizeList) +
       pointsModeField('afp', t.fixedPoints) +
@@ -466,12 +504,15 @@ function assignModal() {
     actions: [{ label: 'Cancel' }, {
       label: t.assigneeEmail ? 'Reassign' : 'Assign task', cls: 'primary', onClick: function (close, m) {
         var input = { assigneeEmail: $('#asg', m).value, startDate: $('#asd', m).value, dueDate: $('#add', m).value, dueTime: $('#adt', m).value, priority: $('#apr', m).value, instructions: $('#ain', m).value, note: $('#ano', m).value, folderPath: $('#afo', m).value, bonusPoints: $('#abp', m).value, sizes: $('#asz', m).value, fixedPoints: getFp() };
+        Object.assign(input, getCamp());
+        if (input.newCampaign === '') return fieldErrors(m, 'Type a name for the new campaign.');
         if (!input.assigneeEmail || !input.dueDate) return fieldErrors(m, 'Pick a designer and a due date.');
         return api('api_assignTask', t.taskId, input).then(function () { close(); toast('Assigned'); reloadTask(); }).catch(function (e) { fieldErrors(m, errMsg(e)); });
       }
     }]
   });
   var getFp = wirePointsMode(am.el, 'afp');
+  var getCamp = wireCampaignField(am.el, 'acp');
   if ($('#toDivide', am.el)) $('#toDivide', am.el).onclick = function () { am.close(); divideModal(); };
 }
 
@@ -492,7 +533,7 @@ function divideModal() {
       '<div class="grid-3"><div class="field"><label class="req">Due date</label><input type="date" id="dvDate" value="' + h(t.dueDate) + '"></div>' +
       '<div class="field"><label>Due time</label><input type="time" id="dvTime" step="900" value="' + h(t.dueTime || '') + '"></div>' +
       '<div class="field"><label class="req">Priority</label><select id="dvPri">' + APP.boot.priorities.map(function (p) { return '<option' + (p === t.priority ? ' selected' : '') + '>' + h(p) + '</option>'; }).join('') + '</select></div></div>' +
-      sizesField('dvSz', t.sizeList) +
+      campaignField('dvCp') + sizesField('dvSz', t.sizeList) +
       '<div class="alert bad hidden" data-form-error></div>',
     actions: [{ label: 'Cancel' }, {
       label: 'Divide & assign', cls: 'primary', onClick: function (close, el) {
@@ -502,7 +543,9 @@ function divideModal() {
         var seen = {};
         if (parts.some(function (p) { if (seen[p.assigneeEmail]) return true; seen[p.assigneeEmail] = 1; return false; })) return fieldErrors(el, 'Each designer should appear only once.');
         if (!$('#dvDate', el).value) return fieldErrors(el, 'Pick a due date.');
-        return api('api_divideTask', t.taskId, { parts: parts, dueDate: $('#dvDate', el).value, dueTime: $('#dvTime', el).value, priority: $('#dvPri', el).value, sizes: $('#dvSz', el).value })
+        var camp = getDvCamp();
+        if (camp.newCampaign === '') return fieldErrors(el, 'Type a name for the new campaign.');
+        return api('api_divideTask', t.taskId, Object.assign({ parts: parts, dueDate: $('#dvDate', el).value, dueTime: $('#dvTime', el).value, priority: $('#dvPri', el).value, sizes: $('#dvSz', el).value }, camp))
           .then(function (r) { close(); toast('Divided into ' + r.taskIds.length + ' tasks and assigned'); loadNotifications(); reloadTask(); })
           .catch(function (e) { fieldErrors(el, errMsg(e)); });
       }
@@ -532,6 +575,7 @@ function divideModal() {
     var sum = rows.reduce(function (s, r) { return s + (Number(r.count) || 0); }, 0), need = Number(t.deliverablesRequired) || 0;
     $('#dvTotal', m.el).innerHTML = 'Total <b>' + sum + '</b> of ' + need + ' creative(s)' + (sum !== need ? ' <span style="color:var(--warn)">— doesn’t match the request</span>' : ' ✓');
   }
+  var getDvCamp = wireCampaignField(m.el, 'dvCp');
   $('#dvAdd', m.el).onclick = function () { sync(); if (rows.length < 10) { rows.push({ email: '', count: 1 }); draw(); } };
   draw();
 }

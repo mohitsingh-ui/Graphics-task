@@ -1866,6 +1866,38 @@ scenario('Designer reopens their own finished task to replace a file; no reopen 
   ok(call(LEADER, 'api_saveSettings', { designersCanReopen: true })); env.ctx.SETTINGS_MEMO_ = null;
 });
 
+scenario('Campaign chosen while assigning or dividing: existing, new, none; files follow', () => {
+  const mk = (n) => {
+    const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Ila', department: 'NDP', email: 'ila@example.org', brief: 'Oil packaging ' + n, preferredDate: future(5), quantity: 2 }));
+    return ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId);
+  };
+  const camp = ok(call(LEADER, 'api_saveCampaign', { name: 'Oil Relaunch' }));
+  // existing campaign
+  const t1 = mk(1);
+  ok(call(LEADER, 'api_assignTask', t1.taskId, { assigneeEmail: A, dueDate: future(4), priority: 'High', campaignId: camp.campaignId }));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t1.taskId)).campaign.campaignId, camp.campaignId);
+  // new campaign, created on the spot (same name again → same campaign)
+  const t2 = mk(2);
+  ok(call(LEADER, 'api_assignTask', t2.taskId, { assigneeEmail: A, dueDate: future(4), priority: 'High', newCampaign: 'Ghee Winter' }));
+  const g = ok(call(LEADER, 'api_listCampaigns')).filter(c => c.name === 'Ghee Winter');
+  assert.strictEqual(g.length, 1);
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t2.taskId)).campaign.name, 'Ghee Winter');
+  // reassigning without touching the campaign keeps it; '' takes it out
+  ok(call(LEADER, 'api_assignTask', t2.taskId, { assigneeEmail: B, dueDate: future(4), priority: 'High' }));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t2.taskId)).campaign.name, 'Ghee Winter');
+  ok(call(LEADER, 'api_assignTask', t2.taskId, { assigneeEmail: B, dueDate: future(4), priority: 'High', campaignId: '' }));
+  assert.strictEqual(ok(call(LEADER, 'api_getTask', t2.taskId)).campaign, null);
+  err(call(LEADER, 'api_assignTask', t2.taskId, { assigneeEmail: B, dueDate: future(4), priority: 'High', campaignId: 'CMP-NOPE' }), 'NOT_FOUND');
+  // divide straight into a campaign: every part is in it
+  const t3 = mk(3);
+  const parts = ok(call(LEADER, 'api_divideTask', t3.taskId, { parts: [{ assigneeEmail: A, count: 1 }, { assigneeEmail: B, count: 1 }], dueDate: future(4), priority: 'High', campaignId: camp.campaignId })).taskIds;
+  parts.forEach(id => assert.strictEqual(ok(call(LEADER, 'api_getTask', id)).campaign.campaignId, camp.campaignId));
+  // approved files land in the campaign folder
+  const v = upload(A, { kind: 'version', taskId: t1.taskId, title: 'Mustard 1L' }, 'm.png', png(200)).versionId;
+  ok(call(A, 'api_submitForApproval', t1.taskId, [v])); ok(call(LEADER, 'api_leaderDecision', v, 'approved', ''));
+  assert.strictEqual(ok(call(LEADER, 'api_finalFolder', camp.campaignId, false)).total, 1);
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

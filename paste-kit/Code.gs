@@ -1984,6 +1984,7 @@ function api_assignTask(taskId, input) {
     var note = str_(input.note, 1000, 'Note', false);
     return withLock_(function () {
       var t = requireTask_(u, taskId);
+      applyCampaignChoice_(u, t, input);
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
@@ -2334,6 +2335,7 @@ function api_divideTask(taskId, input) {
       var t = requireTask_(u, taskId);
       if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '.');
       if (taskDeliverables_(t.taskId).length) throw AppError_('INVALID_STATE', 'Creatives were already uploaded on this task, so it can’t be divided. Use “Add task” for extra work instead.');
+      applyCampaignChoice_(u, t, input);
       clean.forEach(function (p) {
         var m = userByEmail_(p.assignee);
         if (!m || !bool_(m.active)) throw AppError_('VALIDATION', p.assignee + ' is not an active team member.');
@@ -2685,6 +2687,20 @@ function api_shareWork(taskId, input) {
       return { taskIds: ids, kept: keep };
     });
   });
+}
+
+
+/**
+ * Campaign picked in the Assign / Divide window: input.campaignId (existing; '' = no campaign) or
+ * input.newCampaign (a name — created if new). Nothing given = leave it as it is. Caller holds the lock.
+ */
+function applyCampaignChoice_(u, t, input) {
+  var newName = str_(input.newCampaign, 80, 'Campaign name', false);
+  if (newName) return setTasksCampaign_(u, [t.taskId], '', newName);
+  if (input.campaignId === undefined || input.campaignId === null) return null;
+  var req = dbGet_('Requirements', t.requirementId) || {};
+  if ((req.campaignId || '') === String(input.campaignId)) return null;
+  return setTasksCampaign_(u, [t.taskId], String(input.campaignId), '');
 }
 
 /* ======================= Uploads.gs ======================= */
@@ -5703,36 +5719,42 @@ function api_setTasksCampaign(taskIds, campaignId, newName) {
     var u = requireLeader_();
     if (!Array.isArray(taskIds) || !taskIds.length) throw AppError_('VALIDATION', 'Pick at least one task.');
     if (taskIds.length > 500) throw AppError_('VALIDATION', 'Too many tasks at once.');
-    return withLock_(function () {
-      var c = null;
-      newName = str_(newName, 80, 'Campaign name', false);
-      if (newName) {
-        c = dbFind_('Campaigns', function (x) { return x.name.toLowerCase() === newName.toLowerCase(); })[0];
-        if (!c) c = dbInsert_('Campaigns', { campaignId: 'CMP-' + uuid_().slice(0, 8).toUpperCase(), name: newName, folderId: '', shared: '', active: true,
-          createdBy: u.email, createdAt: nowIso_(), updatedAt: nowIso_() });
-      } else if (campaignId) {
-        c = dbGet_('Campaigns', str_(campaignId, 40, 'Campaign', true));
-        if (!c) throw AppError_('NOT_FOUND', 'Campaign not found.');
-      }
-      var reqIds = {}, order = [];
-      taskIds.forEach(function (id) {
-        var t = dbGet_('Tasks', str_(id, 40, 'Task', true));
-        if (!t) throw AppError_('NOT_FOUND', 'Task ' + id + ' not found.');
-        if (!reqIds[t.requirementId]) { reqIds[t.requirementId] = 1; order.push(t.requirementId); }
-      });
-      var target = c ? c.campaignId : '', moved = 0, requests = 0;
-      order.forEach(function (rid) {
-        var req = dbGet_('Requirements', rid);
-        if (!req || (req.campaignId || '') === target) return;
-        dbUpdate_('Requirements', rid, { campaignId: target, updatedAt: nowIso_() });
-        var tasks = dbFind_('Tasks', function (t) { return t.requirementId === rid && t.status !== STATUS.CANCELLED; });
-        fileInto_(finalFolder_(dbGet_('Requirements', rid)), tasks);
-        tasks.forEach(function (t) { logActivity_(t.taskId, u, 'campaign', '', c ? c.name : '', c ? 'Added to campaign “' + c.name + '”' : 'Removed from campaign', 'team'); });
-        moved += tasks.length; requests++;
-      });
-      return { campaignId: target, campaignName: c ? c.name : '', tasks: moved, requests: requests };
-    });
+    return withLock_(function () { return setTasksCampaign_(u, taskIds, campaignId, newName); });
   });
+}
+
+/**
+ * Puts the requests of these tasks into a campaign (existing id, or a new one named newName; neither = out of
+ * any campaign) and moves approved files into its Drive folder. Caller holds the lock.
+ */
+function setTasksCampaign_(u, taskIds, campaignId, newName) {
+  var c = null;
+  newName = str_(newName, 80, 'Campaign name', false);
+  if (newName) {
+    c = dbFind_('Campaigns', function (x) { return x.name.toLowerCase() === newName.toLowerCase(); })[0];
+    if (!c) c = dbInsert_('Campaigns', { campaignId: 'CMP-' + uuid_().slice(0, 8).toUpperCase(), name: newName, folderId: '', shared: '', active: true,
+      createdBy: u.email, createdAt: nowIso_(), updatedAt: nowIso_() });
+  } else if (campaignId) {
+    c = dbGet_('Campaigns', str_(campaignId, 40, 'Campaign', true));
+    if (!c) throw AppError_('NOT_FOUND', 'Campaign not found.');
+  }
+  var reqIds = {}, order = [];
+  taskIds.forEach(function (id) {
+    var t = dbGet_('Tasks', str_(id, 40, 'Task', true));
+    if (!t) throw AppError_('NOT_FOUND', 'Task ' + id + ' not found.');
+    if (!reqIds[t.requirementId]) { reqIds[t.requirementId] = 1; order.push(t.requirementId); }
+  });
+  var target = c ? c.campaignId : '', moved = 0, requests = 0;
+  order.forEach(function (rid) {
+    var req = dbGet_('Requirements', rid);
+    if (!req || (req.campaignId || '') === target) return;
+    dbUpdate_('Requirements', rid, { campaignId: target, updatedAt: nowIso_() });
+    var tasks = dbFind_('Tasks', function (t) { return t.requirementId === rid && t.status !== STATUS.CANCELLED; });
+    fileInto_(finalFolder_(dbGet_('Requirements', rid)), tasks);
+    tasks.forEach(function (t) { logActivity_(t.taskId, u, 'campaign', '', c ? c.name : '', c ? 'Added to campaign “' + c.name + '”' : 'Removed from campaign', 'team'); });
+    moved += tasks.length; requests++;
+  });
+  return { campaignId: target, campaignName: c ? c.name : '', tasks: moved, requests: requests };
 }
 
 /** Folder choices for a request/campaign: folders already used there + the category list from Settings. */

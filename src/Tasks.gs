@@ -498,6 +498,7 @@ function api_assignTask(taskId, input) {
     var note = str_(input.note, 1000, 'Note', false);
     return withLock_(function () {
       var t = requireTask_(u, taskId);
+      applyCampaignChoice_(u, t, input);
       assignInternal_(u, t, { assignee: assignee, dueDate: dueDate, dueTime: dueTime, startDate: startDate, priority: priority,
         instructions: input.instructions !== undefined ? instructions : undefined, note: note,
         folderPath: input.folderPath !== undefined ? str_(input.folderPath, 250, 'Folder', false) : undefined,
@@ -848,6 +849,7 @@ function api_divideTask(taskId, input) {
       var t = requireTask_(u, taskId);
       if (CLOSED.indexOf(t.status) !== -1) throw AppError_('INVALID_STATE', 'This task is ' + t.status.toLowerCase() + '.');
       if (taskDeliverables_(t.taskId).length) throw AppError_('INVALID_STATE', 'Creatives were already uploaded on this task, so it can’t be divided. Use “Add task” for extra work instead.');
+      applyCampaignChoice_(u, t, input);
       clean.forEach(function (p) {
         var m = userByEmail_(p.assignee);
         if (!m || !bool_(m.active)) throw AppError_('VALIDATION', p.assignee + ' is not an active team member.');
@@ -1199,4 +1201,18 @@ function api_shareWork(taskId, input) {
       return { taskIds: ids, kept: keep };
     });
   });
+}
+
+
+/**
+ * Campaign picked in the Assign / Divide window: input.campaignId (existing; '' = no campaign) or
+ * input.newCampaign (a name — created if new). Nothing given = leave it as it is. Caller holds the lock.
+ */
+function applyCampaignChoice_(u, t, input) {
+  var newName = str_(input.newCampaign, 80, 'Campaign name', false);
+  if (newName) return setTasksCampaign_(u, [t.taskId], '', newName);
+  if (input.campaignId === undefined || input.campaignId === null) return null;
+  var req = dbGet_('Requirements', t.requirementId) || {};
+  if ((req.campaignId || '') === String(input.campaignId)) return null;
+  return setTasksCampaign_(u, [t.taskId], String(input.campaignId), '');
 }

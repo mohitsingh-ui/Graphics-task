@@ -1040,6 +1040,26 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.ok(await page.$('#aUpload'), 'can upload the new file right away');
     });
 
+    await step('Assign window: pick a campaign or create a new one', async () => {
+      const s = env.call('', 'api_submitRequirement', { requesterName: 'Ila', department: 'NDP', email: 'ila@example.org', brief: 'Oil and ghee packaging', preferredDate: future(5), quantity: 1, campaign: 'Urgent oil packaging' }).data;
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === s.requirementId).taskId;
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('#aAssign');
+      await page.click('#aAssign');
+      await page.waitForSelector('#acp');
+      await page.selectOption('#asg', A);
+      await page.fill('#add', future(4));
+      await page.selectOption('#acp', '__new');
+      await page.waitForSelector('#acpN:not(.hidden)');
+      await page.fill('#acpN', 'Oil Packaging 2026');
+      await page.locator('#acp').scrollIntoViewIfNeeded();
+      await shot('82-assign-with-campaign');
+      await page.click('.modal-f >> text=Assign task');
+      await page.waitForSelector('.toast');
+      await page.waitForFunction(() => { const s = document.querySelector('#campSel'); return s && s.options[s.selectedIndex].text === 'Oil Packaging 2026'; }, null, { timeout: 10000 });
+      assert.strictEqual(env.call(LEADER, 'api_getTask', tid).data.task.assigneeEmail, A);
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {
