@@ -33,7 +33,8 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
   env.call(LEADER, 'api_saveUser', { email: 'bilal@rosierfoods.com', name: 'Bilal Khan', role: 'designer' });
   env.call(LEADER, 'api_saveSettings', { publicUrl: 'https://script.google.com/macros/s/PUB/exec', emailRules: { req_review_mail: true } }); // the walkthrough uses the review emails
 
-  const browser = await pw.chromium.launch();
+  // Fake mic/camera so the voice & video note recorder can be tested.
+  const browser = await pw.chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const errors = [];
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -1083,6 +1084,50 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
       assert.ok(m && /Ghee Relaunch/.test(m.subject), 'requester gets the campaign link');
     });
 
+    await step('Request form: record a voice note and a video, send with no typed brief; team plays it', async () => {
+      const f = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      f.on('pageerror', e => errors.push('voice note: ' + e.message));
+      await f.goto(BASE + '/page');
+      await f.waitForSelector('#micBtn');
+      await f.fill('#requesterName', 'Ila Kaushal');
+      await f.fill('#email', 'ila.voice@example.org');
+      await f.selectOption('#department', 'Marketing');
+      await f.fill('#preferredDate', future(4));
+      // voice note: tap mic, talk, Done
+      await f.click('#micBtn');
+      await f.waitForSelector('#recBar:not(.hidden)');
+      await f.waitForTimeout(2200);
+      await shot('84-recording-voice', f);
+      await f.click('#recStop');
+      await f.waitForSelector('.note-row audio');
+      await f.waitForTimeout(3500);   // let the "added" message fade
+      // video: tap, record, Done
+      await f.click('#camBtn');
+      await f.waitForSelector('#liveCam');
+      await f.waitForTimeout(2200);
+      await f.click('#recStop');
+      await f.waitForFunction(() => document.querySelectorAll('.note-row').length === 2);
+      await shot('85-form-with-notes', f);
+      // a recording can be thrown away
+      await f.click('#micBtn'); await f.waitForTimeout(800); await f.click('#recCancel');
+      await f.waitForFunction(() => !document.querySelector('#recBar') || document.querySelector('#recBar').classList.contains('hidden'));
+      assert.strictEqual(await f.locator('.note-row').count(), 2);
+      await f.click('#submitBtn');
+      await f.waitForSelector('.ref-id', { timeout: 20000 });
+      const req = (await f.textContent('.ref-id')).trim();
+      await f.close();
+      const tid = env.call(LEADER, 'api_listTasks', {}).data.find(x => x.requirementId === req).taskId;
+      const att = env.call(LEADER, 'api_getTask', tid).data.attachments.map(a => a.fileName).sort();
+      assert.ok(att.some(n => /^Voice note 1\.(webm|m4a|ogg)$/.test(n)) && att.some(n => /^Video note 1\.(webm|mp4)$/.test(n)), att.join(','));
+      // team side: tap the note to play it
+      await page.goto(BASE + '/page?as=' + LEADER + '&r=task/' + tid);
+      await page.waitForSelector('[data-note]');
+      await shot('86-task-voice-notes');
+      await page.click('[data-note][data-audio="1"]');
+      await page.waitForSelector('.modal audio[src^="blob:"]', { timeout: 10000 });
+      await page.click('.modal-f >> text=Close');
+    });
+
     await step('Responsive: no horizontal overflow at tablet and phone widths', async () => {
       for (const [w, hgt, tag] of [[820, 1180, 'tablet'], [390, 844, 'mobile']]) {
         for (const [as, extra, name] of [[LEADER, '', 'leader'], [A, '', 'designer'], ['', '', 'form']]) {
@@ -1092,7 +1137,9 @@ const future = d => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
           await p.waitForSelector(as ? '.kpis' : '#f');
           await p.waitForTimeout(200);
           const overflow = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-          assert.ok(overflow <= 1, name + ' @' + w + 'px overflows by ' + overflow + 'px');
+          let culprit = '';
+          if (overflow > 1) culprit = await p.evaluate(() => { const W = window.innerWidth; let worst = null; document.querySelectorAll('body *').forEach(e => { const r = e.getBoundingClientRect(); if (r.right > W + 1 && (!worst || r.width < worst.w)) { let c = [], x = e; while (x && x !== document.body) { c.push(x.tagName + '.' + String(x.className).split(' ')[0] + '(' + Math.round(x.getBoundingClientRect().width) + ')'); x = x.parentElement; } worst = { w: r.width, d: c.join(' < ') + ' :: ' + (e.parentElement.textContent || '').slice(0, 80) }; } }); return worst ? worst.d : ''; });
+          assert.ok(overflow <= 1, name + ' @' + w + 'px overflows by ' + overflow + 'px ' + culprit);
           await shot('18-' + name + '-' + tag, p);
           await p.close();
         }

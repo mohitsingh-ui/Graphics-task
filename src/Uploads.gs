@@ -22,6 +22,7 @@ var MIME_BY_EXT = {
   pdf: 'application/pdf', psd: 'image/vnd.adobe.photoshop', ai: 'application/postscript', eps: 'application/postscript',
   indd: 'application/x-indesign', tif: 'image/tiff', tiff: 'image/tiff', mp4: 'video/mp4', mov: 'video/quicktime',
   zip: 'application/zip', txt: 'text/plain',
+  webm: 'video/webm', m4a: 'audio/mp4', ogg: 'audio/ogg', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -35,7 +36,8 @@ var SIGNATURES = {
   pdf: [[0x25, 0x50, 0x44, 0x46]],
   webp: [[0x52, 0x49, 0x46, 0x46]],
   psd: [[0x38, 0x42, 0x50, 0x53]],
-  zip: [[0x50, 0x4B]], docx: [[0x50, 0x4B]], pptx: [[0x50, 0x4B]], xlsx: [[0x50, 0x4B]]
+  zip: [[0x50, 0x4B]], docx: [[0x50, 0x4B]], pptx: [[0x50, 0x4B]], xlsx: [[0x50, 0x4B]],
+  webm: [[0x1A, 0x45, 0xDF, 0xA3]], ogg: [[0x4F, 0x67, 0x67, 0x53]], wav: [[0x52, 0x49, 0x46, 0x46]]
 };
 
 function uploadCache_() { return CacheService.getScriptCache(); }
@@ -52,6 +54,7 @@ function loadUpload_(id) {
 function validateFile_(fileName, size, extensions, maxMB) {
   var name = safeFileName_(fileName);
   var ext = extOf_(name);
+  extensions = (extensions || []).concat(MEDIA_NOTE_EXTS);   // recorded voice / video notes are always fine
   if (!ext || extensions.indexOf(ext) === -1) throw AppError_('VALIDATION', '"' + name + '" isn’t an allowed file type. Allowed: ' + extensions.join(', ') + '.');
   size = Number(size);
   if (!isFinite(size) || size <= 0) throw AppError_('VALIDATION', '"' + name + '" is empty.');

@@ -1898,6 +1898,30 @@ scenario('Campaign chosen while assigning or dividing: existing, new, none; file
   assert.strictEqual(ok(call(LEADER, 'api_finalFolder', camp.campaignId, false)).total, 1);
 });
 
+scenario('Voice / video notes on the request form: a note can replace the typed brief; formats checked; team can play it', () => {
+  const webm = n => { const b = crypto.randomBytes(n); b[0] = 0x1A; b[1] = 0x45; b[2] = 0xDF; b[3] = 0xA3; return b; };
+  // no brief and no note → refused; no brief + a voice note → fine
+  err(call('', 'api_submitRequirement', { requesterName: 'Ila', department: 'NDP', email: 'ila@example.org', brief: '', preferredDate: future(4), quantity: 1 }), 'VALIDATION');
+  const sub = ok(call('', 'api_submitRequirement', { requesterName: 'Ila', department: 'NDP', email: 'ila@example.org', brief: '', preferredDate: future(4), quantity: 1, mediaNotes: 2 }));
+  // even if the leader's saved file list doesn't include audio/video, notes are accepted
+  ok(call(LEADER, 'api_saveSettings', { publicExtensions: ['png', 'jpg', 'pdf'] })); env.ctx.SETTINGS_MEMO_ = null;
+  const v1 = upload('', { kind: 'reference', ticket: sub.uploadTicket }, 'Voice note 1.webm', webm(4000));
+  const mp4 = crypto.randomBytes(5000); mp4.write('ftypisom', 4);
+  upload('', { kind: 'reference', ticket: sub.uploadTicket }, 'Video note 1.mp4', mp4);
+  // a file pretending to be a recording is refused
+  const bad = ok(call('', 'api_startUpload', { kind: 'reference', ticket: sub.uploadTicket, fileName: 'Voice note 2.webm', size: 2000 }));
+  err(call('', 'api_uploadChunk', bad.uploadId, 0, crypto.randomBytes(2000).toString('base64')));
+  ok(call('', 'api_finalizeRequirement', sub.uploadTicket));
+  const tid = ok(call(LEADER, 'api_listTasks', {})).find(x => x.requirementId === sub.requirementId).taskId;
+  const d = ok(call(LEADER, 'api_getTask', tid));
+  assert.ok(/voice \/ video note/.test(d.task.brief), 'brief says to listen to the note');
+  const notes = d.attachments.filter(a => /note/i.test(a.fileName));
+  assert.strictEqual(notes.length, 2);
+  const f = ok(call(LEADER, 'api_getAsset', 'attachment', notes.find(a => /webm$/.test(a.fileName)).attachmentId, 'original'));
+  assert.strictEqual(f.mimeType, 'video/webm'); assert.ok(f.base64.length > 100);
+  ok(call(LEADER, 'api_saveSettings', { publicExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'pptx', 'xlsx', 'txt', 'zip'] })); env.ctx.SETTINGS_MEMO_ = null;
+});
+
 scenario('After an update, a page that only reads data creates new tables itself (no setup() needed)', () => {
   const ss = state.spreadsheets[state.props.SPREADSHEET_ID];
   const sheets = ss.sheets || ss.api && null;

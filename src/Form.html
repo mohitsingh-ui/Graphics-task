@@ -25,6 +25,16 @@
   .attach { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }
   .attach .links { min-height: 44px; font-size: 13px; }
   .attach-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .rec-btn svg { color: #c0392b; }
+  .rec-bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-radius: 99px; background: #fdecea; color: #7d1f16; font-variant-numeric: tabular-nums; }
+  .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #e53935; animation: recblink 1s infinite; flex: none; }
+  @keyframes recblink { 50% { opacity: .25; } }
+  #liveCam { width: 100%; max-width: 360px; border-radius: 12px; background: #000; transform: scaleX(-1); }
+  .note-row { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); }
+  .note-top { display: flex; align-items: center; gap: 8px; }
+  .note-top svg { width: 14px; height: 14px; vertical-align: -2px; color: #c0392b; }
+  .note-row audio { width: 100%; height: 38px; }
+  .note-row video { width: 100%; max-width: 320px; max-height: 220px; border-radius: 8px; background: #000; }
   .attach-bar .faint { font-size: 12px; }
   .send-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; background: var(--surface-2); border-top: 1px solid var(--line); flex-wrap: wrap; }
   .hp { position: absolute; left: -5000px; }
@@ -450,7 +460,11 @@ function renderForm() {
 
     '<div class="attach drop-hint" id="drop">' +
     '<textarea class="links" id="referenceUrls" name="referenceUrls" rows="2" placeholder="Reference links (optional) — one per line"></textarea>' +
-    '<div class="attach-bar"><button type="button" class="btn sm" id="attachBtn">' + icon('upload') + ' Attach files</button>' +
+    '<div class="rec-bar hidden" id="recBar"><span class="rec-dot"></span><span id="recTime">0:00</span><span class="grow faint small" id="recLabel">Recording voice note…</span>' +
+      '<button type="button" class="btn ghost sm" id="recCancel">Cancel</button><button type="button" class="btn primary sm" id="recStop">' + icon('check') + ' Done</button></div>' +
+    '<div class="attach-bar"><button type="button" class="btn sm rec-btn" id="micBtn" title="Record a voice note">' + icon('mic') + ' Voice note</button>' +
+    '<button type="button" class="btn sm rec-btn" id="camBtn" title="Record a short video">' + icon('video') + ' Video</button>' +
+    '<button type="button" class="btn sm" id="attachBtn">' + icon('upload') + ' Attach files</button>' +
     '<span class="faint">Optional · up to ' + CFG.maxFiles + ' files, ' + CFG.maxFileMB + ' MB each · or drop them here</span></div>' +
     '<input type="file" id="fileIn" multiple class="hidden"><div id="fileList" class="stack" style="gap:6px"></div></div>' +
 
@@ -461,12 +475,114 @@ function renderForm() {
   if (BOOT.email) { $('#requesterName').value = BOOT.name || ''; $('#email').value = BOOT.email; }
   var inp = $('#fileIn'), mail = $('#mail');
   $('#attachBtn').onclick = function () { inp.click(); };
+  $('#micBtn').onclick = function () { startRecording('audio'); };
+  $('#camBtn').onclick = function () { startRecording('video'); };
+  $('#recStop').onclick = function () { stopRecording(true); };
+  $('#recCancel').onclick = function () { stopRecording(false); };
   inp.onchange = function () { addFiles(inp.files); inp.value = ''; };
   ['dragenter', 'dragover'].forEach(function (ev) { mail.addEventListener(ev, function (e) { e.preventDefault(); mail.classList.add('dragging'); }); });
   ['dragleave', 'drop'].forEach(function (ev) { mail.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || !mail.contains(e.relatedTarget)) mail.classList.remove('dragging'); }); });
   mail.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
   $('#f').onsubmit = submit;
   $('#campaignId').onchange = function () { var n = this.value === '__new'; $('#campaignNew').classList.toggle('hidden', !n); if (n) $('#campaignNew').focus(); };
+}
+
+/* ---------- voice / video notes (WhatsApp-style): tap, talk, Done ---------- */
+var REC = null;
+var REC_MAX = { audio: 300, video: 120 };   // seconds: 5 min voice, 2 min video (keeps the file small)
+
+function mediaNoteCount() { return FILES.filter(function (x) { return x.note; }).length; }
+function fmtSecs(n) { n = Math.max(0, Math.round(n || 0)); return Math.floor(n / 60) + ':' + ('0' + (n % 60)).slice(-2); }
+
+function pickRecType(kind) {
+  var list = kind === 'audio' ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+    : ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  for (var i = 0; i < list.length; i++) if (MediaRecorder.isTypeSupported(list[i])) return list[i];
+  return '';
+}
+
+function startRecording(kind) {
+  if (REC) return;
+  if (FILES.length >= CFG.maxFiles) return toast('You can attach up to ' + CFG.maxFiles + ' files.', true);
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) return recordFallback(kind);
+  var cons = kind === 'audio' ? { audio: { echoCancellation: true, noiseSuppression: true } } :
+    { audio: true, video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } };
+  navigator.mediaDevices.getUserMedia(cons).then(function (stream) {
+    var type = pickRecType(kind), chunks = [];
+    var rec = new MediaRecorder(stream, Object.assign(type ? { mimeType: type } : {}, kind === 'audio' ? { audioBitsPerSecond: 48000 } : { videoBitsPerSecond: 800000, audioBitsPerSecond: 64000 }));
+    REC = { kind: kind, rec: rec, stream: stream, chunks: chunks, started: Date.now(), keep: true };
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = function () { finishRecording(); };
+    rec.start(1000);
+    $('#recLabel').textContent = kind === 'audio' ? 'Recording voice note… speak now' : 'Recording video…';
+    $('#recBar').classList.remove('hidden');
+    $('#micBtn').disabled = $('#camBtn').disabled = true;
+    if (kind === 'video') showLivePreview(stream);
+    REC.timer = setInterval(function () {
+      var secs = (Date.now() - REC.started) / 1000;
+      $('#recTime').textContent = fmtSecs(secs) + ' / ' + fmtSecs(REC_MAX[kind]);
+      if (secs >= REC_MAX[kind]) { toast('That’s the maximum length — saved.'); stopRecording(true); }
+    }, 250);
+  }).catch(function (err) {
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+      toast('Your browser blocked the ' + (kind === 'audio' ? 'microphone' : 'camera') + '. Allow it in the address bar, or record with your phone’s recorder.', true);
+      return recordFallback(kind);
+    }
+    toast('No ' + (kind === 'audio' ? 'microphone' : 'camera') + ' found on this device.', true);
+  });
+}
+
+function stopRecording(keep) {
+  if (!REC) return;
+  REC.keep = keep;
+  clearInterval(REC.timer);
+  try { if (REC.rec.state !== 'inactive') REC.rec.stop(); else finishRecording(); } catch (e) { finishRecording(); }
+}
+
+function finishRecording() {
+  var r = REC; if (!r) return;
+  REC = null;
+  r.stream.getTracks().forEach(function (t) { t.stop(); });
+  $('#recBar').classList.add('hidden');
+  $('#micBtn').disabled = $('#camBtn').disabled = false;
+  var lv = $('#liveCam'); if (lv) lv.remove();
+  if (!r.keep) return toast('Recording discarded');
+  var secs = (Date.now() - r.started) / 1000;
+  if (secs < 1 || !r.chunks.length) return toast('That was too short — try again.', true);
+  var type = (r.rec.mimeType || r.chunks[0].type || (r.kind === 'audio' ? 'audio/webm' : 'video/webm')).split(';')[0];
+  var ex = /mp4/.test(type) ? (r.kind === 'audio' ? 'm4a' : 'mp4') : /ogg/.test(type) ? 'ogg' : 'webm';
+  var n = FILES.filter(function (x) { return x.note === r.kind; }).length + 1;
+  var file = new File(r.chunks, (r.kind === 'audio' ? 'Voice note ' : 'Video note ') + n + '.' + ex, { type: type });
+  if (file.size > CFG.maxFileMB * 1048576) return toast('That recording is over ' + CFG.maxFileMB + ' MB — please record a shorter one.', true);
+  FILES.push({ file: file, progress: 0, state: 'ready', note: r.kind, secs: secs, url: URL.createObjectURL(file) });
+  renderFiles();
+  toast((r.kind === 'audio' ? 'Voice note' : 'Video') + ' added — it’s sent with your request');
+}
+
+function showLivePreview(stream) {
+  var v = document.createElement('video');
+  v.id = 'liveCam'; v.muted = true; v.autoplay = true; v.setAttribute('playsinline', '');
+  v.srcObject = stream;
+  $('#recBar').insertAdjacentElement('afterend', v);
+}
+
+/** No live recording here (old browser, or the page isn't allowed the mic): use the phone's own recorder. */
+function recordFallback(kind) {
+  var i = document.createElement('input');
+  i.type = 'file'; i.accept = kind === 'audio' ? 'audio/*' : 'video/*'; i.setAttribute('capture', kind === 'audio' ? '' : 'user');
+  i.onchange = function () {
+    var f = i.files && i.files[0]; if (!f) return;
+    if (f.size > CFG.maxFileMB * 1048576) return toast('That recording is over ' + CFG.maxFileMB + ' MB.', true);
+    var e = ext(f.name).toLowerCase();
+    if (CFG.extensions.indexOf(e) === -1) return toast('That recording format can’t be attached — try a different recorder app.', true);
+    var a = document.createElement(kind === 'audio' ? 'audio' : 'video');
+    var url = URL.createObjectURL(f);
+    a.preload = 'metadata'; a.src = url;
+    a.onloadedmetadata = function () { FILES.push({ file: f, progress: 0, state: 'ready', note: kind, secs: isFinite(a.duration) ? a.duration : 0, url: url }); renderFiles(); };
+    a.onerror = function () { FILES.push({ file: f, progress: 0, state: 'ready', note: kind, secs: 0, url: url }); renderFiles(); };
+  };
+  i.click();
 }
 
 function addFiles(list) {
@@ -483,6 +599,12 @@ function addFiles(list) {
 
 function renderFiles() {
   $('#fileList').innerHTML = FILES.map(function (x, i) {
+    if (x.note) return '<div class="note-row"><div class="note-top"><span class="grow small">' + (x.note === 'audio' ? icon('mic') + ' <b>Voice note</b>' : icon('video') + ' <b>Video</b>') +
+        ' · ' + fmtSecs(x.secs) + ' <span class="faint">· ' + fileSize(x.file.size) + '</span></span>' +
+      (x.state === 'ready' ? '<button type="button" class="btn ghost sm" data-rm="' + i + '">Delete</button>' :
+        x.state === 'done' ? '<span class="badge s-approved">Sent</span>' :
+        x.state === 'error' ? '<span class="badge s-changes-requested">Failed</span>' : '<span style="width:90px">' + progressBar(x.progress * 100) + '</span>') + '</div>' +
+      (x.note === 'audio' ? '<audio controls preload="metadata" src="' + x.url + '"></audio>' : '<video controls playsinline preload="metadata" src="' + x.url + '"></video>') + '</div>';
     return '<div class="file-row"><span class="thumb" style="width:30px;height:30px">' + ext(x.file.name) + '</span>' +
       '<span class="grow ellipsis">' + h(x.file.name) + ' <span class="faint">· ' + fileSize(x.file.size) + '</span></span>' +
       (x.state === 'ready' ? '<button type="button" class="btn ghost sm" data-rm="' + i + '">Remove</button>' :
@@ -496,6 +618,7 @@ function collect() {
   var d = {};
   $all('#f [name]').forEach(function (el) { d[el.name] = el.value.trim(); });
   if (d.campaignId === '__new') d.campaignId = ''; else d.campaign = '';
+  d.mediaNotes = mediaNoteCount();
   return d;
 }
 
@@ -517,7 +640,7 @@ function validate(d) {
   else if (d.preferredTime && new Date(d.preferredDate + 'T' + d.preferredTime) < new Date()) bad('deadline', 'That time has already passed.');
   var q = Number(d.quantity);
   if (!q || q < 1 || q > 50 || Math.floor(q) !== q) bad('quantity', 'Between 1 and 50.');
-  if (!d.brief) bad('brief', 'Tell us what you need.');
+  if (!d.brief && !mediaNoteCount()) bad('brief', 'Tell us what you need — type it, or record a voice note.');
   return ok;
 }
 

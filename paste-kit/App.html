@@ -422,6 +422,12 @@ tr.click { transition: background .1s; }
 #pfThemes .theme-sw { width: 100%; margin: 0; }
 .hist-ic.k-fixed { background: var(--accent-soft); color: var(--accent-ink); }
 .pts-mode .seg { display: inline-flex; width: auto; align-self: flex-start; }
+.note-list { display: flex; flex-direction: column; gap: 6px; }
+.note-chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 99px; padding: 6px 14px 6px 6px; cursor: pointer; font: inherit; color: inherit; max-width: 100%; text-align: left; }
+.note-chip:hover { border-color: var(--accent); }
+.note-chip svg { width: 15px; height: 15px; flex: none; }
+.note-play { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.note-play svg { width: 13px; height: 13px; fill: currentColor; }
 </style>
 
 <?!= themeCss_() ?>
@@ -486,7 +492,7 @@ tr.click { transition: background .1s; }
   .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .cmp .preview-box { min-height: 300px; }
   .scrim { display: none; }
-  @media (max-width: 1100px) { .detail, .two-col { grid-template-columns: 1fr; } }
+  @media (max-width: 1100px) { .detail, .two-col { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 860px) {
     .shell { grid-template-columns: 1fr; }
     .side { position: fixed; left: 0; top: 0; bottom: 0; width: 260px; transform: translateX(-100%); transition: transform .2s; box-shadow: var(--shadow-lg); }
@@ -622,6 +628,9 @@ var ICONS = {
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
   image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21',
   chat: 'M21 12a8 8 0 0 1-11.7 7.1L4 20l1-4.6A8 8 0 1 1 21 12z',
+  mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3M8 21h8',
+  video: 'M3 7h12v10H3zM15 10l6-3v10l-6-3',
+  play: 'M7 4l13 8-13 8z',
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   clip: 'M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L10 17.8a1.7 1.7 0 0 1-2.4-2.4L15 8',
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3',
@@ -2049,6 +2058,7 @@ function drawTask(el) {
     this.disabled = true;
     api('api_campaignFromSuggestion', t.taskId).then(function (x) { toast('Added to campaign “' + x.name + '”'); reloadTask(); }).catch(function (e) { toast(errMsg(e), true); });
   };
+  $all('[data-note]', el).forEach(function (b) { b.onclick = function () { playNote(b.getAttribute('data-note'), !!b.getAttribute('data-audio'), b.textContent.trim()); }; });
   if ($('#zipTask')) $('#zipTask').onclick = function () { zipDownload(t.taskId, true, this); };
   if ($('#zipReq')) $('#zipReq').onclick = function () { zipDownload(t.requirementId, false, this); };
   if ($('#driveReq')) $('#driveReq').onclick = function () { driveFolderModal(t.requirementId); };
@@ -2136,10 +2146,15 @@ function briefCard(d) {
       return '<div class="ellipsis"><a href="' + h(u) + '" target="_blank" rel="noopener noreferrer">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h(u) + '</a></div>';
     }).join('') + '</div>' : '') +
     '<div class="brief-block"><div class="row between"><div class="section-title" style="margin:0">Reference files</div>' + (APP.role === 'leader' ? '<button class="btn ghost sm" id="refUpload">' + icon('plus') + ' Add</button>' : '') + '</div>' +
-    (d.attachments.length ? '<div class="ref-grid" style="margin-top:8px">' + d.attachments.map(function (a) {
+    (d.attachments.filter(isMediaNote).length ? '<div class="note-list" style="margin-top:8px">' + d.attachments.filter(isMediaNote).map(function (a) {
+      var audio = isAudioNote(a);
+      return '<button type="button" class="note-chip" data-note="' + h(a.attachmentId) + '" data-audio="' + (audio ? 1 : '') + '">' +
+        '<span class="note-play">' + icon('play') + '</span>' + icon(audio ? 'mic' : 'video') + '<span class="ellipsis">' + h(a.fileName) + '</span></button>';
+    }).join('') + '</div>' : '') +
+    (d.attachments.filter(function (a) { return !isMediaNote(a); }).length ? '<div class="ref-grid" style="margin-top:8px">' + d.attachments.filter(function (a) { return !isMediaNote(a); }).map(function (a) {
       return '<div title="' + h(a.fileName) + '"><div class="thumb" data-kind="attachment" data-thumb="' + h(a.attachmentId) + '" data-name="' + h(a.fileName) + '">' + ext(a.fileName) + '</div>' +
         '<div class="small ellipsis" style="width:84px">' + h(a.fileName) + '</div></div>';
-    }).join('') + '</div>' : '<p class="faint small" style="margin-top:6px">No files attached.</p>') + '</div>' +
+    }).join('') + '</div>' : '') + (d.attachments.length ? '' : '<p class="faint small" style="margin-top:6px">No files attached.</p>') + '</div>' +
     (d.brandGuidelinesUrl ? '<div class="brief-block"><a href="' + h(d.brandGuidelinesUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Brand guidelines</a></div>' : '') +
     '</div></div>';
 }
@@ -2779,6 +2794,25 @@ function uploadRefs(files) {
 }
 
 /** Upload modal. If deliverableId is given, it uploads a new version of that creative. */
+/* ---------- voice / video notes from the request form ---------- */
+var NOTE_EXTS = ['webm', 'm4a', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'mov'];
+function isMediaNote(a) { return NOTE_EXTS.indexOf(ext(a.fileName).toLowerCase()) !== -1; }
+function isAudioNote(a) { var e = ext(a.fileName).toLowerCase(); return /^voice note/i.test(a.fileName) || ['m4a', 'ogg', 'mp3', 'wav', 'aac'].indexOf(e) !== -1; }
+
+/** Plays a voice / video note right here (files up to 20 MB). */
+function playNote(id, audio, name) {
+  var m = modal({ title: name || (audio ? 'Voice note' : 'Video note'), body: '<div class="loading-page" style="padding:16px"><span class="spinner"></span> Loading…</div>', actions: [{ label: 'Close' }] });
+  api('api_getAsset', 'attachment', id, 'original').then(function (f) {
+    var bin = atob(f.base64), arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var type = /^voice note/i.test(f.fileName) && /webm/.test(f.mimeType) ? 'audio/webm' : f.mimeType;
+    var url = URL.createObjectURL(new Blob([arr], { type: type }));
+    $('.modal-b', m.el).innerHTML = (audio ? '<audio controls autoplay style="width:100%" src="' + url + '"></audio>' :
+      '<video controls autoplay playsinline style="width:100%;max-height:70vh;border-radius:10px;background:#000" src="' + url + '"></video>') +
+      '<div class="row" style="margin-top:10px"><a class="btn sm" download="' + h(f.fileName) + '" href="' + url + '">' + icon('download') + ' Download</a></div>';
+  }).catch(function (e) { $('.modal-b', m.el).innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>'; });
+}
+
 function uploadModal(deliverableId, opts) {
   opts = opts || {};
   var t = TASK.task;

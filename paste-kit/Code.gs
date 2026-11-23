@@ -139,6 +139,7 @@ var DEFAULT_SETTINGS = {
   maxPublicFiles: 10,
   allowedExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'psd', 'ai', 'eps', 'indd', 'tif',
     'tiff', 'mp4', 'mov', 'gif', 'zip', 'docx', 'pptx', 'xlsx', 'txt'],
+  // Voice / video notes recorded on the form (always accepted, whatever the lists above say).
   publicExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'pptx', 'xlsx', 'txt', 'zip'],
   // Folder names inside each request's shared Drive folder (one per kind of creative).
   creativeCategories: ['Meta ads', 'Website banners', 'Collection page banners', 'Listing images', 'Social media posts', 'Packaging', 'Print', 'Other'],
@@ -267,6 +268,10 @@ var LIMITS = {
   TEXT_LONG: 8000,
   UPLOAD_TTL_SEC: 21600
 };
+
+
+/** Voice and video notes recorded in the browser (WhatsApp-style) — always accepted as reference files. */
+var MEDIA_NOTE_EXTS = ['webm', 'm4a', 'mp4', 'ogg', 'mp3', 'wav', 'aac'];
 
 /* ======================= Util.gs ======================= */
 /**
@@ -1319,7 +1324,7 @@ function api_getFormConfig() {
       departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
       maxFiles: s.maxPublicFiles,
       maxFileMB: s.maxPublicUploadMB,
-      extensions: s.publicExtensions,
+      extensions: s.publicExtensions.concat(MEDIA_NOTE_EXTS.filter(function (e) { return s.publicExtensions.indexOf(e) === -1; })),
       chunkBytes: LIMITS.CHUNK_BYTES,
       campaigns: dbFind_('Campaigns', function (c) { return bool_(c.active); }).map(function (c) { return { campaignId: c.campaignId, name: c.name }; })
     };
@@ -1342,13 +1347,17 @@ function api_submitRequirement(payload) {
 
     // The short form asks only: who, department, requirement, deadline, how many, references.
     // Older detailed fields are still accepted (and can be filled in by the leader later).
-    var requirementText = str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', true);
+    // A voice or video note can stand in for the written brief.
+    var hasNote = Number(payload.mediaNotes) > 0;
+    var requirementText = str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', !hasNote) ||
+      'See the voice / video note attached — it explains what’s needed.';
     var r = {
       requesterName: str_(payload.requesterName, 100, 'Your name', true),
       department: str_(payload.department, 100, 'Department', true),
       email: email_(payload.email, 'Email', !!(s.requireRequesterDomain && s.allowedDomain)),
       phone: str_(payload.phone, 20, 'Contact number', false),
-      title: str_(payload.title, 150, 'Requirement title', false) || titleFrom_(requirementText),
+      title: str_(payload.title, 150, 'Requirement title', false) || (hasNote && !str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', false) ?
+        'Voice note request — ' + str_(payload.department, 80, 'Department', false) : titleFrom_(requirementText)),
       creativeType: str_(payload.creativeType, 50, 'Type of creative', false),
       purpose: str_(payload.purpose, 1000, 'Purpose', false),
       brief: requirementText,
@@ -2728,6 +2737,7 @@ var MIME_BY_EXT = {
   pdf: 'application/pdf', psd: 'image/vnd.adobe.photoshop', ai: 'application/postscript', eps: 'application/postscript',
   indd: 'application/x-indesign', tif: 'image/tiff', tiff: 'image/tiff', mp4: 'video/mp4', mov: 'video/quicktime',
   zip: 'application/zip', txt: 'text/plain',
+  webm: 'video/webm', m4a: 'audio/mp4', ogg: 'audio/ogg', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -2741,7 +2751,8 @@ var SIGNATURES = {
   pdf: [[0x25, 0x50, 0x44, 0x46]],
   webp: [[0x52, 0x49, 0x46, 0x46]],
   psd: [[0x38, 0x42, 0x50, 0x53]],
-  zip: [[0x50, 0x4B]], docx: [[0x50, 0x4B]], pptx: [[0x50, 0x4B]], xlsx: [[0x50, 0x4B]]
+  zip: [[0x50, 0x4B]], docx: [[0x50, 0x4B]], pptx: [[0x50, 0x4B]], xlsx: [[0x50, 0x4B]],
+  webm: [[0x1A, 0x45, 0xDF, 0xA3]], ogg: [[0x4F, 0x67, 0x67, 0x53]], wav: [[0x52, 0x49, 0x46, 0x46]]
 };
 
 function uploadCache_() { return CacheService.getScriptCache(); }
@@ -2758,6 +2769,7 @@ function loadUpload_(id) {
 function validateFile_(fileName, size, extensions, maxMB) {
   var name = safeFileName_(fileName);
   var ext = extOf_(name);
+  extensions = (extensions || []).concat(MEDIA_NOTE_EXTS);   // recorded voice / video notes are always fine
   if (!ext || extensions.indexOf(ext) === -1) throw AppError_('VALIDATION', '"' + name + '" isn’t an allowed file type. Allowed: ' + extensions.join(', ') + '.');
   size = Number(size);
   if (!isFinite(size) || size <= 0) throw AppError_('VALIDATION', '"' + name + '" is empty.');

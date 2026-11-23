@@ -137,6 +137,7 @@ var DEFAULT_SETTINGS = {
   maxPublicFiles: 10,
   allowedExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'psd', 'ai', 'eps', 'indd', 'tif',
     'tiff', 'mp4', 'mov', 'gif', 'zip', 'docx', 'pptx', 'xlsx', 'txt'],
+  // Voice / video notes recorded on the form (always accepted, whatever the lists above say).
   publicExtensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'pptx', 'xlsx', 'txt', 'zip'],
   // Folder names inside each request's shared Drive folder (one per kind of creative).
   creativeCategories: ['Meta ads', 'Website banners', 'Collection page banners', 'Listing images', 'Social media posts', 'Packaging', 'Print', 'Other'],
@@ -265,3 +266,7 @@ var LIMITS = {
   TEXT_LONG: 8000,
   UPLOAD_TTL_SEC: 21600
 };
+
+
+/** Voice and video notes recorded in the browser (WhatsApp-style) — always accepted as reference files. */
+var MEDIA_NOTE_EXTS = ['webm', 'm4a', 'mp4', 'ogg', 'mp3', 'wav', 'aac'];

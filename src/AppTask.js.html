@@ -99,6 +99,7 @@ function drawTask(el) {
     this.disabled = true;
     api('api_campaignFromSuggestion', t.taskId).then(function (x) { toast('Added to campaign “' + x.name + '”'); reloadTask(); }).catch(function (e) { toast(errMsg(e), true); });
   };
+  $all('[data-note]', el).forEach(function (b) { b.onclick = function () { playNote(b.getAttribute('data-note'), !!b.getAttribute('data-audio'), b.textContent.trim()); }; });
   if ($('#zipTask')) $('#zipTask').onclick = function () { zipDownload(t.taskId, true, this); };
   if ($('#zipReq')) $('#zipReq').onclick = function () { zipDownload(t.requirementId, false, this); };
   if ($('#driveReq')) $('#driveReq').onclick = function () { driveFolderModal(t.requirementId); };
@@ -186,10 +187,15 @@ function briefCard(d) {
       return '<div class="ellipsis"><a href="' + h(u) + '" target="_blank" rel="noopener noreferrer">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' ' + h(u) + '</a></div>';
     }).join('') + '</div>' : '') +
     '<div class="brief-block"><div class="row between"><div class="section-title" style="margin:0">Reference files</div>' + (APP.role === 'leader' ? '<button class="btn ghost sm" id="refUpload">' + icon('plus') + ' Add</button>' : '') + '</div>' +
-    (d.attachments.length ? '<div class="ref-grid" style="margin-top:8px">' + d.attachments.map(function (a) {
+    (d.attachments.filter(isMediaNote).length ? '<div class="note-list" style="margin-top:8px">' + d.attachments.filter(isMediaNote).map(function (a) {
+      var audio = isAudioNote(a);
+      return '<button type="button" class="note-chip" data-note="' + h(a.attachmentId) + '" data-audio="' + (audio ? 1 : '') + '">' +
+        '<span class="note-play">' + icon('play') + '</span>' + icon(audio ? 'mic' : 'video') + '<span class="ellipsis">' + h(a.fileName) + '</span></button>';
+    }).join('') + '</div>' : '') +
+    (d.attachments.filter(function (a) { return !isMediaNote(a); }).length ? '<div class="ref-grid" style="margin-top:8px">' + d.attachments.filter(function (a) { return !isMediaNote(a); }).map(function (a) {
       return '<div title="' + h(a.fileName) + '"><div class="thumb" data-kind="attachment" data-thumb="' + h(a.attachmentId) + '" data-name="' + h(a.fileName) + '">' + ext(a.fileName) + '</div>' +
         '<div class="small ellipsis" style="width:84px">' + h(a.fileName) + '</div></div>';
-    }).join('') + '</div>' : '<p class="faint small" style="margin-top:6px">No files attached.</p>') + '</div>' +
+    }).join('') + '</div>' : '') + (d.attachments.length ? '' : '<p class="faint small" style="margin-top:6px">No files attached.</p>') + '</div>' +
     (d.brandGuidelinesUrl ? '<div class="brief-block"><a href="' + h(d.brandGuidelinesUrl) + '" target="_blank" rel="noopener">' + icon('external').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"') + ' Brand guidelines</a></div>' : '') +
     '</div></div>';
 }
@@ -829,6 +835,25 @@ function uploadRefs(files) {
 }
 
 /** Upload modal. If deliverableId is given, it uploads a new version of that creative. */
+/* ---------- voice / video notes from the request form ---------- */
+var NOTE_EXTS = ['webm', 'm4a', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'mov'];
+function isMediaNote(a) { return NOTE_EXTS.indexOf(ext(a.fileName).toLowerCase()) !== -1; }
+function isAudioNote(a) { var e = ext(a.fileName).toLowerCase(); return /^voice note/i.test(a.fileName) || ['m4a', 'ogg', 'mp3', 'wav', 'aac'].indexOf(e) !== -1; }
+
+/** Plays a voice / video note right here (files up to 20 MB). */
+function playNote(id, audio, name) {
+  var m = modal({ title: name || (audio ? 'Voice note' : 'Video note'), body: '<div class="loading-page" style="padding:16px"><span class="spinner"></span> Loading…</div>', actions: [{ label: 'Close' }] });
+  api('api_getAsset', 'attachment', id, 'original').then(function (f) {
+    var bin = atob(f.base64), arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var type = /^voice note/i.test(f.fileName) && /webm/.test(f.mimeType) ? 'audio/webm' : f.mimeType;
+    var url = URL.createObjectURL(new Blob([arr], { type: type }));
+    $('.modal-b', m.el).innerHTML = (audio ? '<audio controls autoplay style="width:100%" src="' + url + '"></audio>' :
+      '<video controls autoplay playsinline style="width:100%;max-height:70vh;border-radius:10px;background:#000" src="' + url + '"></video>') +
+      '<div class="row" style="margin-top:10px"><a class="btn sm" download="' + h(f.fileName) + '" href="' + url + '">' + icon('download') + ' Download</a></div>';
+  }).catch(function (e) { $('.modal-b', m.el).innerHTML = '<div class="alert bad">' + h(errMsg(e)) + '</div>'; });
+}
+
 function uploadModal(deliverableId, opts) {
   opts = opts || {};
   var t = TASK.task;

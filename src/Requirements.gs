@@ -17,7 +17,7 @@ function api_getFormConfig() {
       departments: dbFind_('Departments', function (d) { return bool_(d.active); }).map(function (d) { return d.name; }),
       maxFiles: s.maxPublicFiles,
       maxFileMB: s.maxPublicUploadMB,
-      extensions: s.publicExtensions,
+      extensions: s.publicExtensions.concat(MEDIA_NOTE_EXTS.filter(function (e) { return s.publicExtensions.indexOf(e) === -1; })),
       chunkBytes: LIMITS.CHUNK_BYTES,
       campaigns: dbFind_('Campaigns', function (c) { return bool_(c.active); }).map(function (c) { return { campaignId: c.campaignId, name: c.name }; })
     };
@@ -40,13 +40,17 @@ function api_submitRequirement(payload) {
 
     // The short form asks only: who, department, requirement, deadline, how many, references.
     // Older detailed fields are still accepted (and can be filled in by the leader later).
-    var requirementText = str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', true);
+    // A voice or video note can stand in for the written brief.
+    var hasNote = Number(payload.mediaNotes) > 0;
+    var requirementText = str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', !hasNote) ||
+      'See the voice / video note attached — it explains what’s needed.';
     var r = {
       requesterName: str_(payload.requesterName, 100, 'Your name', true),
       department: str_(payload.department, 100, 'Department', true),
       email: email_(payload.email, 'Email', !!(s.requireRequesterDomain && s.allowedDomain)),
       phone: str_(payload.phone, 20, 'Contact number', false),
-      title: str_(payload.title, 150, 'Requirement title', false) || titleFrom_(requirementText),
+      title: str_(payload.title, 150, 'Requirement title', false) || (hasNote && !str_(payload.brief || payload.requirement, LIMITS.TEXT_LONG, 'Requirement', false) ?
+        'Voice note request — ' + str_(payload.department, 80, 'Department', false) : titleFrom_(requirementText)),
       creativeType: str_(payload.creativeType, 50, 'Type of creative', false),
       purpose: str_(payload.purpose, 1000, 'Purpose', false),
       brief: requirementText,
